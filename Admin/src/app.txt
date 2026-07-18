@@ -1,0 +1,48 @@
+import React, { useMemo, useState } from "react";
+import Header from "./components/Header";
+import Footer from "./components/Footer";
+import PageHome from "./pages/Homepage";
+import PageLogin from "./pages/Authentication";
+import PageDetail from "./pages/DoctorDetail";
+import PageBooking from "./pages/Booking";
+import PagePayment from "./pages/Payment";
+import PageSubmit from "./pages/SubmitBooking";
+import PageUser from "./pages/User";
+import PageHistory from "./pages/History";
+import PageReview from "./pages/Review";
+import { Routes, Route } from "react-router-dom";
+
+
+function App() {
+
+  const pages = {
+    home: <PageHome />,
+    login: <PageLogin />,
+    detail: <PageDetail />,
+    booking: <PageBooking />,
+    payment: <PagePayment />,
+    submit: <PageSubmit />,
+    user: <PageUser />,
+    history: <PageHistory />,
+    review: <PageReview />,
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-50 text-slate-800">
+      <Header />
+      <Routes>
+        <Route path="/" element={<PageHome />} />
+        <Route path="/doctor/:id" element={<PageDetail />} />
+        <Route path="/booking/:id" element={<PageBooking />} />
+        <Route path="/payment" element={<PagePayment />} />
+        <Route path="/submit" element={<PageSubmit />} />
+        <Route path="/user" element={<PageUser />} />
+        <Route path="/history" element={<PageHistory />} />
+        <Route path="/review" element={<PageReview />} />
+      </Routes>
+      <Footer />
+    </div>
+  );
+}
+
+export default App;

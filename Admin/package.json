@@ -1,0 +1,86 @@
+{
+  "name": "ban-trai-cay",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "@babel/plugin-proposal-private-property-in-object": "^7.21.0",
+    "@fortawesome/fontawesome-svg-core": "^6.4.0",
+    "@fortawesome/free-brands-svg-icons": "^6.4.0",
+    "@fortawesome/free-regular-svg-icons": "^6.4.0",
+    "@fortawesome/free-solid-svg-icons": "^6.4.0",
+    "@fortawesome/react-fontawesome": "^0.2.0",
+    "@phosphor-icons/react": "^2.1.10",
+    "@tailwindcss/postcss": "^4.1.14",
+    "@testing-library/jest-dom": "^5.16.5",
+    "@testing-library/react": "^13.4.0",
+    "@testing-library/user-event": "^13.5.0",
+    "@tippyjs/react": "^4.2.6",
+    "@tremor/react": "^3.18.7",
+    "axios": "^1.16.1",
+    "babel-plugin-module-resolver": "^5.0.0",
+    "bcrypt": "^5.1.1",
+    "bcryptjs": "^3.0.2",
+    "bootstrap": "^5.2.3",
+    "clsx": "^1.2.1",
+    "concurrently": "^8.0.1",
+    "cors": "^2.8.5",
+    "customize-cra": "^1.0.0",
+    "express": "^4.21.2",
+    "jquery": "^3.6.4",
+    "json-server": "^0.17.3",
+    "jsonwebtoken": "^9.0.2",
+    "lucide-react": "^1.16.0",
+    "method-override": "^3.0.0",
+    "mongoose": "^7.8.6",
+    "nodemon": "^2.0.22",
+    "popper.js": "^1.16.1",
+    "react": "^18.2.0",
+    "react-app-rewired": "^2.2.1",
+    "react-dom": "^18.2.0",
+    "react-router-dom": "^6.11.0",
+    "react-scripts": "5.0.1",
+    "recharts": "^3.8.1",
+    "sass": "^1.62.1",
+    "socket.io": "^4.6.1",
+    "socket.io-client": "^4.8.3",
+    "tippy.js": "^6.3.7",
+    "web-vitals": "^2.1.4",
+    "zustand": "^5.0.13"
+  },
+  "scripts": {
+    "start": "react-app-rewired start",
+    "build": "react-app-rewired build",
+    "test": "react-app-rewired test",
+    "eject": "react-app-rewired eject",
+    "exp": "nodemon src/express/express.js",
+    "socket": "nodemon src/server/server.js",
+    "db": "json-server --watch ./src/api/data.json --port 8888",
+    "dev": "concurrently \"npm run start \" \"npm run db \" \"npm run exp \"",
+    "devv": "concurrently \"npm run start \" \"npm run socket \""
+  },
+  "eslintConfig": {
+    "extends": [
+      "react-app",
+      "react-app/jest"
+    ]
+  },
+  "browserslist": {
+    "production": [
+      ">0.2%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 1 chrome version",
+      "last 1 firefox version",
+      "last 1 safari version"
+    ]
+  },
+  "devDependencies": {
+    "@types/bootstrap": "^5.2.6",
+    "@types/jquery": "^3.5.16",
+    "autoprefixer": "^10.4.21",
+    "postcss": "^8.5.6",
+    "tailwindcss": "^3.4.0"
+  }
+}
