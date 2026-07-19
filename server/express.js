@@ -31,7 +31,7 @@ const allowedOrigins = [
     "http://localhost:5173",
     "http://localhost:3000",
     "https://career-eight-lilac.vercel.app",        // admin
-    "https://career-mu-sage.vercel.app/"            // khách
+    "https://career-mu-sage.vercel.app"            // khách
 ];
 
 app.use(cors({
