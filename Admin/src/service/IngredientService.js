@@ -1,7 +1,6 @@
-import { getData, postData, putData } from "../utils/callAPI";
+import { getData, postData, putData, deleteData } from "../utils/callAPI";
 
 // Lấy đúng những field mà controller destructure trong create / update
-// (tránh gửi _id, __v, createdAt, ... dư thừa lên server)
 const toPayload = (ingredient) => ({
     ingredientName: ingredient.ingredientName,
     quantity: ingredient.quantity,
@@ -14,41 +13,51 @@ const toPayload = (ingredient) => ({
     needContinuousRestock: ingredient.needContinuousRestock,
 });
 
+// handleResponse() trong callAPI.js không bao giờ reject —
+// luôn resolve về { success, data, status, message }.
+// unwrap() ở đây chịu trách nhiệm biến "success: false" thành
+// một Promise bị reject thật sự, để Promise.allSettled ở
+// useIngredientZustand hoạt động đúng như đã viết.
+const unwrap = (res) => {
+    if (!res.success) {
+        const err = new Error(res.message || "Request thất bại");
+        err.status = res.status;
+        err.data = res.data;
+        throw err;
+    }
+    return res.data;
+};
+
 export default class IngredientService {
 
-    // GET /api/ingredients  →  controller.getAll
-    // Trả về mảng đã sort theo displayOrder (server lo)
+    // GET /api/ingredients
     static async getAllIngredients() {
-        return getData({ url: "/ingredients" }).then(res => res.data);
+        const res = await getData({ url: "/ingredients" });
+        return unwrap(res);
     }
 
-    // GET /api/ingredients/:id  →  controller.getOrderById  (param: orderId)
-    // Note: controller dùng req.params.orderId nên route phải đăng ký /:orderId
-    // Nếu route bạn đăng ký là /:id thì đổi lại URL cho khớp
+    // GET /api/ingredients/:id
     static async getIngredientById(id) {
-        return getData({ url: `/ingredients/${id}` }).then(res => res.data);
+        const res = await getData({ url: `/ingredients/${id}` });
+        return unwrap(res);
     }
 
-    // POST /api/ingredients  →  controller.create
-    // Body: { ingredientName, quantity, smallUnit, largeUnit,
-    //         pricePerLargeUnit, expiryDays, displayOrder, note,
-    //         needContinuousRestock }
-    // Trả về ingredient vừa được tạo (có _id từ MongoDB)
+    // POST /api/ingredients
     static async createIngredient(ingredient) {
-        return postData({ url: "/ingredients", data: toPayload(ingredient) })
+        const res = await postData({ url: "/ingredients", data: toPayload(ingredient) });
+        return unwrap(res);
     }
 
-    // PUT /api/ingredients/:id  →  controller.update  (param: id)
-    // Body: tương tự create
-    // Trả về ingredient đã được cập nhật (option { new: true })
+    // PUT /api/ingredients/:id
     static async updateIngredient(ingredient) {
         const id = ingredient._id ?? ingredient.id;
-        return putData({ url: `/ingredients/${id}`, data: toPayload(ingredient) })
+        const res = await putData({ url: `/ingredients/${id}`, data: toPayload(ingredient) });
+        return unwrap(res);
     }
 
-    // DELETE /api/ingredients/:id  →  controller.delete  (param: id)
-    // Trả về { message: "Ingredient deleted successfully" }
+    // DELETE /api/ingredients/:id
     static async deleteIngredient(id) {
-        return getData({ url: `/ingredients/${id}` }, { method: "DELETE" }).then(res => res.data);
+        const res = await deleteData({ url: `/ingredients/${id}` });
+        return unwrap(res);
     }
 }

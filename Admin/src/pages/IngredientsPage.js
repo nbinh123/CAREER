@@ -84,7 +84,7 @@ export default function IngredientsPage() {
         setImportError(null);
 
         try {
-            await importJSON(`${API_URL}/api/ingredients`, file);
+            await importJSON(`${API_URL}/api/ingredients`, file, "ingredients");
             await getIngredients(); // tải lại danh sách mới nhất từ server
         } catch (err) {
             setImportError(

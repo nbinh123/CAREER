@@ -1,26 +1,16 @@
-const mongoose = require("mongoose")
-
-require('dotenv').config();
-const link = "mongodb://127.0.0.1:27017";
+const mongoose = require("mongoose");
+require("dotenv").config();
 
 async function connect() {
-
-    // connect tới database blog
     try {
-        await mongoose.connect(`${link}`,{
-            dbName : "Quan_an",
-            useNewUrlParser: true,
-            useUnifiedTopology: true,
-            
+        await mongoose.connect(process.env.MONGODB_URI, {
+            dbName: process.env.DB_NAME,
         });
-        console.log("Connect project Successfully")
-    } catch (error) {
-        console.log("Connect project Failure!")
+
+        console.log("✅ Connected to MongoDB");
+    } catch (err) {
+        console.error("❌ MongoDB connection failed:", err);
     }
-    
-    
-    // connect tới database collection
-    
 }
 
 module.exports = { connect };

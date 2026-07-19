@@ -1,6 +1,6 @@
 import axios from "axios";
 
-async function importJSON(apiUrl, file) {
+async function importJSON(apiUrl, file, key = "data") {
     const text = await file.text();
     const data = JSON.parse(text);
 
@@ -8,7 +8,7 @@ async function importJSON(apiUrl, file) {
         throw new Error("File JSON phải là một mảng dữ liệu");
     }
 
-    const res = await axios.post(`${apiUrl}/import`, { ingredients: data });
+    const res = await axios.post(`${apiUrl}/import`, { [key]: data });
     return res.data;
 }
 

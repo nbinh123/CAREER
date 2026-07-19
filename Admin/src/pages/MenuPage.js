@@ -493,7 +493,7 @@ export default function MenuPage() {
     setImportError(null);
 
     try {
-      await importJSON(`${API_URL}/api/foods`, file);
+      await importJSON(`${API_URL}/api/foods`, file, "foods");
       await getFoods(); // tải lại danh sách mới nhất
     } catch (err) {
       setImportError(

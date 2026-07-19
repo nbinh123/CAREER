@@ -125,8 +125,21 @@ export default function Chart07({
     const customTicks = Array.from({ length: tickCount + 1 }, (_, i) => bottomTick + i * step);
 
     // % từ đỉnh biểu đồ nơi đường hòa vốn nằm (cho linearGradient SVG)
-    const beFrac = totalRange === 0 ? 0.5 : (be - bottomTick) / totalRange;
-    const beStop = Math.max(0, Math.min(100, (1 - beFrac) * 100)).toFixed(2);
+    // ── % vị trí đường hòa vốn trong CHÍNH bounding box của line đã vẽ ──
+    // (SVG dùng gradientUnits="objectBoundingBox" mặc định, nên phải tính
+    //  theo min/max thực tế của path, KHÔNG phải theo domain trục Y)
+    const dataMin = validProfits.length ? Math.min(...validProfits) : 0;
+    const dataMax = validProfits.length ? Math.max(...validProfits) : 0;
+
+    let beStop;
+    if (dataMax <= be) {
+        beStop = 100; // Chưa từng chạm hòa vốn -> toàn bộ đường màu đỏ
+    } else if (dataMin >= be) {
+        beStop = 0;   // Luôn ở trên hòa vốn -> toàn bộ đường màu xanh
+    } else {
+        const beFrac = (be - dataMin) / (dataMax - dataMin);
+        beStop = ((1 - beFrac) * 100).toFixed(2);
+    }
 
     return (
         <div

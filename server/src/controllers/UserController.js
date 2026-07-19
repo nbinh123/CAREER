@@ -606,12 +606,25 @@ class UserController {
 
     seedAdmin = async (req, res) => {
         try {
-            // Kiểm tra đã tồn tại chưa
+            const {
+                SEED_ADMIN_FULLNAME,
+                SEED_ADMIN_USERNAME,
+                SEED_ADMIN_PHONE,
+                SEED_ADMIN_CITIZEN_ID,
+            } = process.env;
+
+            if (!SEED_ADMIN_PHONE || !SEED_ADMIN_CITIZEN_ID) {
+                return res.status(500).json({
+                    success: false,
+                    message: "Thiếu cấu hình SEED_ADMIN_* trong biến môi trường",
+                });
+            }
+
             const existing = await User.findOne({
                 $or: [
-                    { username: "nvnb" },
-                    { phone: "0905897713" },
-                    { citizenId: "048206008619" },
+                    { username: SEED_ADMIN_USERNAME },
+                    { phone: SEED_ADMIN_PHONE },
+                    { citizenId: SEED_ADMIN_CITIZEN_ID },
                 ],
             });
 
@@ -628,12 +641,11 @@ class UserController {
                 });
             }
 
-            // Tạo admin mới
             const admin = new User({
-                fullName: "Nguyen Van Nguyen Binh",
-                username: "nvnb",
-                phone: "0905897713",
-                citizenId: "048206008619",
+                fullName: SEED_ADMIN_FULLNAME,
+                username: SEED_ADMIN_USERNAME,
+                phone: SEED_ADMIN_PHONE,
+                citizenId: SEED_ADMIN_CITIZEN_ID,
                 role: "admin",
                 avatar: "",
                 mustChangePassword: true,
@@ -643,8 +655,6 @@ class UserController {
                 totalWorkedTime: 0,
                 unpaidSalaryAmount: 0,
                 unpaidWorkTime: 0,
-                // password sẽ tự động = 6 số cuối CCCD ("008619")
-                // và được hash bởi pre-save hook
             });
 
             await admin.save();
@@ -657,10 +667,10 @@ class UserController {
                     fullName: admin.fullName,
                     username: admin.username,
                     phone: admin.phone,
-                    citizenId: admin.citizenId,
                     role: admin.role,
-                    defaultPassword: admin.citizenId.slice(-6), // "008619"
                     mustChangePassword: admin.mustChangePassword,
+                    // Không trả defaultPassword qua response —
+                    // bạn đã biết giá trị này (6 số cuối CCCD trong .env của bạn)
                 },
             });
         } catch (error) {

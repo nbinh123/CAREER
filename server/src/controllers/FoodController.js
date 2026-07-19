@@ -1,6 +1,7 @@
 // controllers/FoodController.js
 const Food = require("../models/FoodModel");
 const Ingredient = require("../models/IngredientModel");
+const mongoose = require("mongoose");
 const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
@@ -416,7 +417,7 @@ class FoodController {
 
     importFoods = async (req, res) => {
         try {
-            const { foods } = req.body;
+            const foods = Array.isArray(req.body) ? req.body : req.body.foods;
 
             if (!Array.isArray(foods) || foods.length === 0) {
                 return res.status(400).json({
