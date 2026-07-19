@@ -3,8 +3,8 @@ import React, { createContext, useContext, useState, useCallback, useMemo } from
 const GlobalContext = createContext(null);
 
 export const RESTAURANT = {
-  name: "Quán Ba Miền",
-  tagline: "Hương vị ba miền, gọi món ngay tại bàn",
+  name: "Quán Nguyên Bình",
+  tagline: "Nguyên Bình nấu ăn ngon nhất thế giới",
 };
 
 export function GlobalProvider({ children }) {
