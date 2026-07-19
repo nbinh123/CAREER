@@ -652,7 +652,6 @@ function RoleBadge({ role }) {
    INFO MODAL
 ════════════════════════════════════════════════════════════ */
 function InfoModal({ staff, onClose }) {
-  const [c1, c2] = avatarColor(staff._id);
   return (
     <div className="sm-overlay" onClick={onClose}>
       <div className="sm-modal sm-info-modal" onClick={(e) => e.stopPropagation()}>

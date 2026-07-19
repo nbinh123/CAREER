@@ -28,23 +28,6 @@ function pct(value, decimals = 1) {
     return (value ?? 0).toFixed(decimals) + "%";
 }
 
-// ─── Stat Card ────────────────────────────────────────────────────────────────
-
-function StatCard({ icon: Icon, iconBg, label, value, sub }) {
-    return (
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5 flex items-start gap-4">
-            <div className={`${iconBg} p-3 rounded-xl flex-shrink-0`}>
-                <Icon size={20} className="text-white" />
-            </div>
-            <div className="min-w-0">
-                <p className="text-xs text-gray-400 mb-0.5">{label}</p>
-                <p className="text-xl font-bold text-gray-900 truncate">{value}</p>
-                {sub && <p className="text-xs text-gray-400 mt-0.5">{sub}</p>}
-            </div>
-        </div>
-    );
-}
-
 // ─── CashFlow ─────────────────────────────────────────────────────────────────
 
 export default function CashFlow() {

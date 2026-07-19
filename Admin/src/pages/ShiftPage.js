@@ -5,8 +5,8 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import {
     Clock, LogOut, Play, CheckCircle2, AlertTriangle,
-    Timer, Wallet, CalendarDays, User, TrendingUp,
-    ChevronRight, X, Briefcase, Zap, Coffee,
+    Timer, Wallet, CalendarDays, TrendingUp,
+    ChevronRight, X, Briefcase
 } from "lucide-react";
 import useAuthZustand from "../zustand/useAuthZustand";
 
@@ -487,7 +487,6 @@ function ProgressRing({ elapsed, maxMs = 8 * 3_600_000 }) {
 function EndShiftModal({ elapsed, hourlySalary, onConfirm, onCancel, loading }) {
     const minutesWorked = Math.floor(elapsed / 60_000);
     const earnings = estimateEarnings(elapsed, hourlySalary);
-    const hasTime = minutesWorked > 0;
 
     return (
         <div className="sp-overlay" onClick={onCancel}>

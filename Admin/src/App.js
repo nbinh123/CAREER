@@ -43,8 +43,11 @@ export default function App() {
   const [page, setPage] = useState("/");
   const [mobileOpen, setMobileOpen] = useState(false);
 
-  const { getFoods } = useFoodZustand();
-  const { getIngredients } = useIngredientZustand();
+  // const { getFoods } = useFoodZustand();
+  // const { getIngredients } = useIngredientZustand();
+  const getFoods = useFoodZustand((state) => state.getFoods);
+  const getIngredients = useIngredientZustand((state) => state.getIngredients);
+  
 
   // ── AUTH STATE ─────────────────────────────────────────
   // Thay bằng useAuthZustand() nếu bạn có store riêng
@@ -53,11 +56,13 @@ export default function App() {
   const isLoggedIn = !!currentUser;
   // ──────────────────────────────────────────────────────
 
-  async function fetchData() {
-    await getFoods();
-    await getIngredients();
-  }
-  useEffect(() => { fetchData(); }, []);
+  useEffect(() => {
+    async function fetchData() {
+      await getFoods();
+      await getIngredients();
+    }
+    fetchData();
+  }, [getFoods, getIngredients]);
 
   return (
     <AppCtx.Provider value={{}}>

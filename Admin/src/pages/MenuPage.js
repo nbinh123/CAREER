@@ -9,7 +9,6 @@ import {
 } from "lucide-react";
 import fmtVND from "../utils/fmtVND";
 import useFoodZustand from "../zustand/useFoodZustand";
-import FoodService from "../service/FoodService";
 import IngredientService from "../service/IngredientService";
 
 import exportJSON from "../utils/exportJSON"
@@ -280,7 +279,7 @@ function IngredientPicker({ selectedIngredients, onChange }) {
                   }
                   <div className="flex-1 min-w-0">
                     <p className="font-medium text-gray-800 truncate">{ing.ingredientName}</p>
-                    <p className="text-xs text-gray-400">{fmtVND(ing.pricePerLargeUnit || 222)}/ {ing.quantity} {ing.smallUnit}{ing.largeUnit != "x" ? ("/ 1" + ing.largeUnit) : ""}</p>
+                    <p className="text-xs text-gray-400">{fmtVND(ing.pricePerLargeUnit || 222)}/ {ing.quantity} {ing.smallUnit}{ing.largeUnit !== "x" ? ("/ 1" + ing.largeUnit) : ""}</p>
                   </div>
                 </button>
               ))}

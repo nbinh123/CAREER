@@ -21,22 +21,6 @@ import { fmtK, TIP } from "./helpers/mathHelpers";
  */
 export default function Chart02({ data = {}, tf = "week", onTf }) {
     const chart = data?.days || [];
-    // 1. Tìm doanh thu lớn nhất, dự phòng giá trị 0 nếu data trống
-    const maxRevenue = chart && chart.length > 0
-        ? Math.max(...chart.map(item => item.revenue || 0))
-        : 0;
-    const high = 1.5;
-    // 2. Đặt tick cao nhất = maxRevenue * 2 (nếu max = 0 thì gán tạm 1000 để chart không bị lỗi)
-    const topTick = maxRevenue > 0 ? maxRevenue * high : 1000;
-
-    // 3. Tạo mảng chia đều 5 mốc (0, 25%, 50%, 75%, 100%)
-    const customTicks = [
-        0,
-        topTick * 0.25,
-        topTick * 0.5,
-        topTick * 0.75,
-        topTick
-    ];
 
     return (
         <ChartCard>

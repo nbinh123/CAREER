@@ -75,7 +75,6 @@ const NAV = [
 export default function Sidebar({ page, setPage, mobileOpen, setMobileOpen, isShow }) {
 
   const {
-    isAuthenticated,
     currentUser,
   } = useAuthZustand();
 

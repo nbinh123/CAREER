@@ -26,20 +26,25 @@ const EMPTY_ING = {
 };
 
 export default function IngredientsPage() {
-    const {
-        ingredients,
-        pendingChanges,
-        isLoading,
-        isSaving,
-        saveError,
-        getIngredients,
-        addIngredientLocal,
-        editIngredientLocal,
-        deleteIngredientLocal,
-        saveAllChanges,
-        discardChanges,
-        clearSaveError,
-    } = useIngredientZustand();
+    // ─── Selectors Zustand ─────────────────────────────────
+    // Mỗi field/action được lấy riêng bằng selector, thay vì
+    // destructure toàn bộ store. Nhờ vậy component chỉ re-render
+    // khi field mà nó thực sự dùng thay đổi, không phải mỗi khi
+    // BẤT KỲ field nào trong store đổi (vd isSaving đổi thì
+    // các phần chỉ dùng ingredients sẽ không bị render lại).
+    const ingredients = useIngredientZustand((s) => s.ingredients);
+    const pendingChanges = useIngredientZustand((s) => s.pendingChanges);
+    const isLoading = useIngredientZustand((s) => s.isLoading);
+    const isSaving = useIngredientZustand((s) => s.isSaving);
+    const saveError = useIngredientZustand((s) => s.saveError);
+    const getIngredients = useIngredientZustand((s) => s.getIngredients);
+    const addIngredientLocal = useIngredientZustand((s) => s.addIngredientLocal);
+    const editIngredientLocal = useIngredientZustand((s) => s.editIngredientLocal);
+    const deleteIngredientLocal = useIngredientZustand((s) => s.deleteIngredientLocal);
+    const saveAllChanges = useIngredientZustand((s) => s.saveAllChanges);
+    const discardChanges = useIngredientZustand((s) => s.discardChanges);
+    const clearSaveError = useIngredientZustand((s) => s.clearSaveError);
+
     const fileInputRef = useRef(null);
     const [isImporting, setIsImporting] = useState(false);
     const [importError, setImportError] = useState(null);
@@ -53,8 +58,11 @@ export default function IngredientsPage() {
 
     // Fetch dữ liệu lần đầu
     useEffect(() => {
-        getIngredients();
-    }, []);
+        function fetchData() {
+            getIngredients();
+        }
+        fetchData();
+    }, [getIngredients]);
 
     // ─── Thống kê pending ─────────────────────────────────
     const pendingCount =

@@ -6,8 +6,6 @@ import StatusBadge from "../components/StatusBadge";
 import { Bell, Check, CheckCircle2, ChefHat, Flame, Lock, Search, Wifi, WifiOff, X } from "lucide-react";
 import fmtVND from "../utils/fmtVND";
 import fmtDate from "../utils/fmtDate";
-import useFoodZustand from "../zustand/useFoodZustand";
-import useAuthZustand from "../zustand/useAuthZustand";
 import { API_URL } from "../config/api";
 import axios from "axios"
 
@@ -28,7 +26,6 @@ const mkEmptyTable = (id) => ({
 
 // ─── Component ────────────────────────────────────────────────────────────────
 export default function OrdersPage() {
-    const { foods } = useFoodZustand();
     // const { currentUser, logout } = useAuthZustand();   // { _id, name, role: "admin" | "staff" }
 
     // ── State ─────────────────────────────────────────────────────────────────
@@ -58,7 +55,7 @@ export default function OrdersPage() {
         if (orders.length === 0) {
             getOrders();
         }
-    }, []);
+    }, [orders]);
 
     // ─── Toast helper ──────────────────────────────────────────────────────────
     const showToast = useCallback((type, msg) => {
@@ -108,24 +105,6 @@ export default function OrdersPage() {
     const subtotal = activeTable?.items.reduce((s, i) => s + i.unitPrice * i.quantity, 0) ?? 0;
     const pendingSubtotal = activeTable?.pendingItems.reduce((s, i) => s + i.unitPrice * i.quantity, 0) ?? 0;
     const occupiedCount = tables.filter((t) => t.status === "occupied").length;
-    const totalCost =
-        activeTable?.items.reduce((sum, item) => {
-
-            const food =
-                foods.find(
-                    (f) =>
-                        (f._id || f.id) === item.foodId
-                );
-
-            const costPrice =
-                Number(food?.costPrice || 0);
-
-            return (
-                sum +
-                costPrice * item.quantity
-            );
-
-        }, 0) ?? 0;
 
     // ─── Xác nhận món đang chờ & gửi bếp ────────────────────────────────────────
     const togglePending = useCallback((foodId) => {

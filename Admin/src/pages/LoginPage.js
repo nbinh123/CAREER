@@ -1,7 +1,7 @@
 // pages/LoginPage.js
 import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { Phone, Lock, Eye, EyeOff, Leaf, ArrowRight, AlertCircle } from "lucide-react";
+import { Phone, Lock, Eye, EyeOff, ArrowRight, AlertCircle } from "lucide-react";
 import useAuthZustand from "../zustand/useAuthZustand";
 
 /* ─── tiny CSS-in-JS helper ──────────────────────────────── */
@@ -263,26 +263,7 @@ export default function LoginPage() {
 
   const {
     login,
-    isLoading,
   } = useAuthZustand();
-  // const currentUser =
-  //   useAuthZustand(
-  //     (state) => state.currentUser
-  //   );
-  // console.log(currentUser._id)
-  const handleLogin = async () => {
-
-    const response = await login({
-      phone,
-      password,
-    });
-    console.log(response.success)
-    if (response.success) {
-      alert("Đăng nhập thành công");
-    } else {
-      alert(response.message);
-    }
-  };
   const navigate = useNavigate();
 
   const [showPwd, setShowPwd] = useState(false);

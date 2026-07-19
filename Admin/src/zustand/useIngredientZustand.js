@@ -3,7 +3,6 @@ import IngredientService from "../service/IngredientService";
 
 // Prefix phân biệt item tạo mới chưa lưu lên DB
 const TEMP_PREFIX = "__temp__";
-const isTempId = (id) => String(id).startsWith(TEMP_PREFIX);
 const makeTempId = () => `${TEMP_PREFIX}${Date.now()}_${Math.random()}`;
 
 const EMPTY_PENDING = { added: [], updated: [], deleted: [] };

@@ -2,10 +2,9 @@
 import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import {
-    Phone, Lock, Eye, EyeOff, User, CreditCard,
+    Phone, User, CreditCard,
     ArrowRight, AlertCircle, UserCog, CheckCircle2,
 } from "lucide-react";
-import { postData } from "../utils/callAPI";
 import useAuthZustand from "../zustand/useAuthZustand";
 import axios from "axios";
 import { API_URL } from "../config/api";
