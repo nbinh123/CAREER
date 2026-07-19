@@ -29,7 +29,8 @@ app.use(helmet());
 
 const allowedOrigins = [
     "http://localhost:5173",
-    "http://localhost:3000"
+    "http://localhost:3000",
+    "https://career-jpj1z08sq-alanstormer222-7780s-projects.vercel.app"
 ];
 
 app.use(cors({

@@ -47,7 +47,7 @@ export default function App() {
   // const { getIngredients } = useIngredientZustand();
   const getFoods = useFoodZustand((state) => state.getFoods);
   const getIngredients = useIngredientZustand((state) => state.getIngredients);
-  
+
 
   // ── AUTH STATE ─────────────────────────────────────────
   // Thay bằng useAuthZustand() nếu bạn có store riêng
@@ -236,8 +236,14 @@ export default function App() {
                     >
                       <KitchenPage />
                     </ProtectedRoute>} />
-                  {isWorking && <Route path="/orders" element={<OrdersPage />} />}
-                  {isWorking && <Route path="/shift" element={<ShiftPage />} />}
+                  <Route path="/orders" element={
+                    <ProtectedRoute isAdmin={false}>
+                      <OrdersPage />
+                    </ProtectedRoute>}/>
+                  <Route path="/shift" element={
+                    <ProtectedRoute isAdmin={false}>
+                      <ShiftPage />
+                    </ProtectedRoute>}/>
                 </Route>
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>
