@@ -3,7 +3,7 @@ import { io } from "socket.io-client";
 import Button from "../components/Button";
 import Modal from "../components/Modal";
 import StatusBadge from "../components/StatusBadge";
-import { Bell, Check, CheckCircle2, ChefHat, Flame, Lock, Search, Wifi, WifiOff, X } from "lucide-react";
+import { Bell, Check, CheckCircle2, ChefHat, Flame, Lock, MessageCircle, Search, Send, Wifi, WifiOff, X } from "lucide-react";
 import fmtVND from "../utils/fmtVND";
 import fmtDate from "../utils/fmtDate";
 import { API_URL } from "../config/api";
@@ -13,6 +13,7 @@ import axios from "axios"
 const TABLE_COUNT = 12;
 const SOCKET_URL = `${API_URL}`;   // đổi nếu server khác host/port
 const ORDERS_API_URL = `${API_URL}/api/orders`;
+const CHAT_TOOLTIP_DURATION = 8000; // tooltip tự ẩn sau 8s nếu admin không bấm vào
 
 const mkEmptyTable = (id) => ({
     id,
@@ -22,6 +23,7 @@ const mkEmptyTable = (id) => ({
     items: [],
     pendingItems: [],
     active: false, // mặc định khoá gọi món cho tới khi admin bật, khớp default ở DB
+    messages: [],
 });
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -49,7 +51,20 @@ export default function OrdersPage() {
     const [minAmount, setMinAmount] = useState("");
     const [maxAmount, setMaxAmount] = useState("");
 
+    // ── Chat theo bàn ────────────────────────────────────────────────────────
+    const [chatOpenTableId, setChatOpenTableId] = useState(null);
+    const [chatDraft, setChatDraft] = useState("");
+    const [tooltips, setTooltips] = useState({}); // { [tableId]: message } — tin nhắn mới nhất chưa xem
+
     const socketRef = useRef(null);
+    const chatScrollRef = useRef(null);
+    const chatInputRef = useRef(null);
+    const tooltipTimers = useRef({});
+    const chatOpenTableIdRef = useRef(null); // để đọc trong socket handler mà không tạo lại effect
+
+    useEffect(() => {
+        chatOpenTableIdRef.current = chatOpenTableId;
+    }, [chatOpenTableId]);
 
     useEffect(() => {
         if (orders.length === 0) {
@@ -79,7 +94,7 @@ export default function OrdersPage() {
 
         socket.on("disconnect", () => setConnected(false));
 
-        // Nhận toàn bộ state bàn từ server (đã gồm cả pendingItems và active)
+        // Nhận toàn bộ state bàn từ server (đã gồm cả pendingItems, active, messages)
         socket.on("tables_state", (serverTables) => {
             setTables(serverTables.map((t) => ({
                 ...t,
@@ -87,11 +102,37 @@ export default function OrdersPage() {
                 since: t.since ? new Date(t.since) : null,
                 items: t.items || [],
                 pendingItems: t.pendingItems || [],
+                messages: t.messages || [],
             })));
+        });
+
+        // Tin nhắn mới (chat) — chỉ quan tâm tin từ khách để hiện tooltip/tín hiệu.
+        // Nếu admin đang mở đúng hộp thoại của bàn đó thì coi như đã đọc luôn,
+        // không cần hiện tooltip.
+        socket.on("chat_message", (payload) => {
+            const { tableId, message } = payload || {};
+            if (!message || message.from !== "guest") return;
+
+            if (chatOpenTableIdRef.current === tableId) {
+                socket.emit("mark_chat_read", { tableId });
+                return;
+            }
+
+            setTooltips((prev) => ({ ...prev, [tableId]: message }));
+            clearTimeout(tooltipTimers.current[tableId]);
+            tooltipTimers.current[tableId] = setTimeout(() => {
+                setTooltips((prev) => {
+                    if (prev[tableId]?.id !== message.id) return prev;
+                    const next = { ...prev };
+                    delete next[tableId];
+                    return next;
+                });
+            }, CHAT_TOOLTIP_DURATION);
         });
 
         return () => {
             socket.disconnect();
+            Object.values(tooltipTimers.current).forEach(clearTimeout);
         };
     }, []);
 
@@ -100,11 +141,25 @@ export default function OrdersPage() {
         setSelectedPending(new Set());
     }, [selectedId]);
 
+    // Mở hộp thoại chat → cuộn xuống cuối + focus ô nhập
+    useEffect(() => {
+        if (chatOpenTableId == null) return;
+        if (chatScrollRef.current) chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
+        const t = setTimeout(() => chatInputRef.current?.focus(), 50);
+        return () => clearTimeout(t);
+    }, [chatOpenTableId]);
+
     // ─── Derived values ────────────────────────────────────────────────────────
     const activeTable = selectedId != null ? tables.find((t) => t.id === selectedId) : null;
+    const chatTable = chatOpenTableId != null ? tables.find((t) => t.id === chatOpenTableId) : null;
     const subtotal = activeTable?.items.reduce((s, i) => s + i.unitPrice * i.quantity, 0) ?? 0;
     const pendingSubtotal = activeTable?.pendingItems.reduce((s, i) => s + i.unitPrice * i.quantity, 0) ?? 0;
     const occupiedCount = tables.filter((t) => t.status === "occupied").length;
+
+    // Tự cuộn xuống mỗi khi có tin nhắn mới trong bàn đang mở chat
+    useEffect(() => {
+        if (chatScrollRef.current) chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
+    }, [chatTable?.messages?.length]);
 
     // ─── Xác nhận món đang chờ & gửi bếp ────────────────────────────────────────
     const togglePending = useCallback((foodId) => {
@@ -135,13 +190,35 @@ export default function OrdersPage() {
     }, [activeTable, showToast]);
 
     // ─── Bật/tắt cho phép khách gọi món tại 1 bàn ──────────────────────────────
-    // Đây là công tắc riêng biệt với status "occupied/empty" — dùng để
-    // khoá/mở trang OrderPage.jsx phía khách theo từng bàn. Đồng bộ realtime
-    // 2 chiều qua socket "toggle_table_active".
     const handleToggleActive = useCallback((table) => {
         if (!socketRef.current) return;
         socketRef.current.emit("toggle_table_active", { tableId: table.id, active: !table.active });
     }, []);
+
+    // ─── Chat theo bàn ─────────────────────────────────────────────────────────
+    const openChat = useCallback((tableId) => {
+        setChatOpenTableId(tableId);
+        setTooltips((prev) => {
+            if (!(tableId in prev)) return prev;
+            const next = { ...prev };
+            delete next[tableId];
+            return next;
+        });
+        clearTimeout(tooltipTimers.current[tableId]);
+        socketRef.current?.emit("mark_chat_read", { tableId });
+    }, []);
+
+    const closeChat = useCallback(() => {
+        setChatOpenTableId(null);
+        setChatDraft("");
+    }, []);
+
+    const sendChatReply = useCallback(() => {
+        const value = chatDraft.trim();
+        if (!value || chatOpenTableId == null || !socketRef.current) return;
+        socketRef.current.emit("send_admin_chat_message", { tableId: chatOpenTableId, text: value });
+        setChatDraft("");
+    }, [chatDraft, chatOpenTableId]);
 
     // ─── Lấy lịch sử đơn ───────────────────────────────────────────────────────
     function getOrders() {
@@ -158,9 +235,6 @@ export default function OrdersPage() {
         if (!activeTable || !activeTable.items.length) return;
         setCheckoutLoading(true);
 
-        // Gộp lại theo foodId trước khi gửi — vì cùng 1 món có thể tồn tại
-        // thành 2 dòng riêng (vd 1 dòng "cooking" + 1 dòng "ready") sau khi
-        // đi qua bước xác nhận nhiều lần.
         const mergedForOrder = new Map();
         activeTable.items.forEach((i) => {
             const key = String(i.foodId);
@@ -318,6 +392,8 @@ export default function OrdersPage() {
                                 const tSub = t.items.reduce((s, i) => s + i.unitPrice * i.quantity, 0);
                                 const isSelected = t.id === selectedId;
                                 const hasPending = t.pendingItems?.length > 0;
+                                const hasUnreadChat = (t.messages || []).some((m) => m.from === "guest" && !m.read);
+                                const tooltipMsg = tooltips[t.id];
                                 return (
                                     <div key={t.id} className="relative group">
                                         <button
@@ -351,9 +427,7 @@ export default function OrdersPage() {
                                             )}
                                         </button>
 
-                                        {/* Toggle bật/tắt cho khách gọi món tại bàn này.
-                                            Desktop (>= sm): ẩn mặc định, hiện khi hover vào card (group-hover).
-                                            Mobile (< sm): luôn hiện sẵn dạng slider để chạm trực tiếp. */}
+                                        {/* Toggle bật/tắt cho khách gọi món tại bàn này. */}
                                         <label
                                             onClick={(e) => e.stopPropagation()}
                                             title={t.active ? "Đang mở gọi món — nhấn để khoá" : "Đang khoá — nhấn để mở gọi món"}
@@ -371,6 +445,38 @@ export default function OrdersPage() {
                                                 <div className="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform peer-checked:translate-x-4" />
                                             </div>
                                         </label>
+
+                                        {/* Icon chat — mỗi bàn đều có, góc dưới-phải. Badge đỏ nhấp nháy
+                                            khi có tin nhắn từ khách chưa đọc. */}
+                                        <button
+                                            onClick={(e) => { e.stopPropagation(); openChat(t.id); }}
+                                            title="Nhắn tin với bàn này"
+                                            aria-label={`Chat với ${t.name}`}
+                                            className="absolute bottom-1.5 right-1.5 z-10 w-7 h-7 rounded-full bg-white border border-gray-200 shadow-sm
+                                                flex items-center justify-center text-gray-500 hover:text-green-600 hover:border-green-300 transition-colors"
+                                        >
+                                            <MessageCircle size={14} />
+                                            {hasUnreadChat && (
+                                                <span className="absolute -top-1 -right-1 flex h-3.5 w-3.5">
+                                                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75" />
+                                                    <span className="relative inline-flex rounded-full h-3.5 w-3.5 bg-red-500 border-2 border-white" />
+                                                </span>
+                                            )}
+                                        </button>
+
+                                        {/* Tooltip tin nhắn mới từ khách — bấm vào để mở hộp thoại reply ngay */}
+                                        {tooltipMsg && (
+                                            <button
+                                                onClick={(e) => { e.stopPropagation(); openChat(t.id); }}
+                                                className="absolute bottom-full right-0 mb-2 z-30 w-44 text-left bg-white border border-green-200
+                                                    rounded-xl shadow-lg px-3 py-2 animate-fade-in"
+                                            >
+                                                <p className="text-[10px] font-bold text-green-600 mb-0.5 flex items-center gap-1">
+                                                    <MessageCircle size={10} /> {t.name} nhắn tin
+                                                </p>
+                                                <p className="text-xs text-gray-700 line-clamp-2">{tooltipMsg.text}</p>
+                                            </button>
+                                        )}
                                     </div>
                                 );
                             })}
@@ -381,8 +487,9 @@ export default function OrdersPage() {
                             <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded border-2 border-gray-200 bg-white inline-block" />Trống</span>
                             <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded border-2 border-orange-200 bg-orange-50 inline-block" />Có khách</span>
                             <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded border-2 border-green-500 bg-green-50 inline-block" />Đang chọn</span>
-                            <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-red-500 inline-block" />Có món chờ xác nhận</span>
+                            <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-red-500 inline-block" />Có món chờ xác nhận / tin nhắn chưa đọc</span>
                             <span className="flex items-center gap-1.5"><Lock size={11} className="text-gray-400" />Chưa mở gọi món — hover/chạm góc trái bàn để bật</span>
+                            <span className="flex items-center gap-1.5"><MessageCircle size={11} className="text-gray-400" />Chat với bàn — góc phải dưới mỗi bàn</span>
                         </div>
                     </div>
 
@@ -710,6 +817,48 @@ export default function OrdersPage() {
                             </Button>
                         </div>
                     </>
+                )}
+            </Modal>
+
+            {/* ── Modal chat theo bàn ── */}
+            <Modal open={chatOpenTableId != null} onClose={closeChat} title={`Chat — ${chatTable?.name || ""}`}>
+                {chatTable && (
+                    <div className="flex flex-col" style={{ height: 420 }}>
+                        <div ref={chatScrollRef} className="flex-1 overflow-y-auto space-y-2 pr-1 mb-3">
+                            {(!chatTable.messages || chatTable.messages.length === 0) ? (
+                                <p className="text-gray-400 text-xs text-center py-10">Chưa có tin nhắn nào với {chatTable.name}</p>
+                            ) : (
+                                chatTable.messages.map((m, idx) => (
+                                    <div key={m.id || idx} className={`flex ${m.from === "admin" ? "justify-end" : "justify-start"}`}>
+                                        <div className={`max-w-[75%] rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed
+                                            ${m.from === "admin" ? "bg-green-500 text-white rounded-br-md" : "bg-gray-100 text-gray-700 rounded-bl-md"}`}>
+                                            <p>{m.text}</p>
+                                            <p className={`text-[10px] mt-1 ${m.from === "admin" ? "text-green-100" : "text-gray-400"}`}>
+                                                {fmtDate(m.at instanceof Date ? m.at.toISOString() : m.at)}
+                                            </p>
+                                        </div>
+                                    </div>
+                                ))
+                            )}
+                        </div>
+                        <div className="flex items-center gap-2 pt-3 border-t border-gray-100">
+                            <input
+                                ref={chatInputRef}
+                                value={chatDraft}
+                                onChange={(e) => setChatDraft(e.target.value)}
+                                onKeyDown={(e) => e.key === "Enter" && sendChatReply()}
+                                placeholder="Nhập tin nhắn trả lời..."
+                                className="flex-1 border border-gray-200 rounded-full px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-300"
+                            />
+                            <button
+                                onClick={sendChatReply}
+                                disabled={!chatDraft.trim()}
+                                aria-label="Gửi"
+                                className="w-10 h-10 flex-shrink-0 flex items-center justify-center rounded-full bg-green-500 text-white disabled:opacity-40 disabled:cursor-not-allowed active:bg-green-600">
+                                <Send size={16} />
+                            </button>
+                        </div>
+                    </div>
                 )}
             </Modal>
         </div>

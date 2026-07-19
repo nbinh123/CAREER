@@ -87,9 +87,20 @@ const tableSchema = new Schema(
             ],
             default: [],
         },
+        messages: {
+            type: [
+                {
+                    from: { type: String, enum: ["guest", "admin"], required: true },
+                    text: { type: String, required: true },
+                    at: { type: Date, default: Date.now },
+                    read: { type: Boolean, default: false }, // chỉ có ý nghĩa với from: "guest"
+                },
+            ],
+            default: [],
+        },
         active: { type: Boolean, default: false }
     },
-    
+
     { timestamps: true }
 );
 

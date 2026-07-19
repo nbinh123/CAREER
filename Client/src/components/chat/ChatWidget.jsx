@@ -5,7 +5,7 @@ import { useCart } from "../../context/CartContext";
 import ChatBubble from "./ChatBubble";
 
 export default function ChatWidget() {
-  const { onChatMessage, sendChatMessage, connected } = useSocket();
+  const { onChatMessage, onChatReset, sendChatMessage, connected } = useSocket();
   // Nút chat giờ hiện mặc định ở MỌI trang (không chỉ riêng trang chờ cũ),
   // nên phải né thanh "Xem đơn của bạn" (CartFloatingButton) - thanh đó chỉ
   // xuất hiện ở trang gọi món khi giỏ hàng có món, và nằm cùng khoảng cách
@@ -18,9 +18,15 @@ export default function ChatWidget() {
   const scrollRef = useRef(null);
 
   useEffect(() => {
-    const unsub = onChatMessage((msg) => setMessages((prev) => [...prev, msg]));
-    return unsub;
-  }, [onChatMessage]);
+    const unsubMessage = onChatMessage((msg) => setMessages((prev) => [...prev, msg]));
+    // Admin thanh toán bàn → lịch sử chat bị xoá ở server → dọn sạch khung
+    // chat hiện tại, tránh khách tiếp theo ngồi vào bàn thấy hội thoại cũ.
+    const unsubReset = onChatReset(() => setMessages([]));
+    return () => {
+      unsubMessage();
+      unsubReset();
+    };
+  }, [onChatMessage, onChatReset]);
 
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
