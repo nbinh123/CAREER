@@ -489,6 +489,30 @@ function initSocket(server) {
                 console.error("[socket] mark_chat_read lỗi:", err.message);
             }
         });
+        // ── 14. Admin xoá toàn bộ lịch sử chat của 1 bàn ───────────────────
+        socket.on("clear_chat_messages", async ({ tableId }) => {
+            console.log("[server] nhận clear_chat_messages, tableId =", tableId, typeof tableId);
+            try {
+                if (tableId == null) return;
+
+                const updated = await Table.findOneAndUpdate(
+                    { number: tableId },
+                    { messages: [] },
+                    { new: true }
+                );
+                if (!updated) return;
+
+                const clientTable = toClientTable(updated);
+                const idx = tableCache.findIndex((t) => t.id === tableId);
+                if (idx === -1) tableCache.push(clientTable);
+                else tableCache[idx] = clientTable;
+
+                io.to(`table:${tableId}`).emit("tables_state", [clientTable]);
+                io.to("admin_room").emit("tables_state", tableCache);
+            } catch (err) {
+                console.error("[socket] clear_chat_messages lỗi:", err.message);
+            }
+        });
 
         socket.on("disconnect", () => { });
     });

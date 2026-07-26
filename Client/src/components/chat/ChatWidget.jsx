@@ -90,7 +90,7 @@ export default function ChatWidget() {
             ))}
           </div>
 
-          <div className="flex items-center gap-2 px-3 py-3 dashed-divider safe-bottom">
+          <div className="flex items-center gap-2 px-3 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] dashed-divider">
             <input
               value={text}
               onChange={(e) => setText(e.target.value)}

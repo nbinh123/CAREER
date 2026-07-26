@@ -1,14 +1,15 @@
 import React, { useState, useMemo, useEffect } from "react";
-import { RotateCcw } from "lucide-react";
+import { RotateCcw, X, Minus, Plus } from "lucide-react";
 import CategoryTabs from "../components/menu/CategoryTabs";
 import MenuItemCard from "../components/menu/MenuItemCard";
-import MenuItemDetailModal from "../components/menu/MenuItemDetailModal";
+import FoodThumbnail from "../components/menu/FoodThumbnail";
 import CartFloatingButton from "../components/cart/CartFloatingButton";
 import CartDrawer from "../components/cart/CartDrawer";
 import Loading from "../components/common/Loading";
 import Button from "../components/common/Button";
 import { useFoods } from "../hooks/useFoods";
 import { getBestSellerIds } from "../utils/bestSellers";
+import { formatCurrency } from "../utils/formatCurrency";
 import { useCart } from "../context/CartContext";
 import { useGlobal } from "../context/GlobalContext";
 
@@ -35,10 +36,27 @@ function getCategoryKey(item) {
 export default function OrderPage() {
   const [activeCategory, setActiveCategory] = useState(null);
   const [selectedItem, setSelectedItem] = useState(null);
+  const [qty, setQty] = useState(1);
   const [cartOpen, setCartOpen] = useState(false);
   const { addItem } = useCart();
   const { showToast } = useGlobal();
   const { foods, loading, error, refetch } = useFoods();
+
+  // Reset số lượng mỗi khi mở món khác (kể cả đóng modal, item về null)
+  useEffect(() => {
+    setQty(1);
+  }, [selectedItem]);
+
+  // Khoá scroll nền khi modal chi tiết món đang mở (trước đây do Modal.jsx lo)
+  useEffect(() => {
+    if (!selectedItem) return;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = "";
+    };
+  }, [selectedItem]);
+
+  const unavailable = selectedItem ? !selectedItem.isAvailable : false;
 
   // Danh mục suy ra từ chính dữ liệu món ăn, giữ nguyên tên hiển thị trong DB
   const categories = useMemo(() => {
@@ -120,14 +138,99 @@ export default function OrderPage() {
         )}
       </div>
 
-      <MenuItemDetailModal
-        item={selectedItem}
-        onClose={() => setSelectedItem(null)}
-        onAdd={(item, qty) => {
-          addItem(item, qty);
-          showToast(`Đã thêm ${item.foodName}`);
-        }}
-      />
+      {/* Modal chi tiết món — hard-code trực tiếp ở đây (không dùng lại
+          MenuItemDetailModal.jsx) để dễ chỉnh sửa tại một nơi duy nhất. */}
+      {selectedItem && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center px-4 py-8">
+          <div
+            className="absolute inset-0 bg-ink/50 animate-fade-in"
+            onClick={() => setSelectedItem(null)}
+          />
+
+          <div
+            className="relative z-10 w-full max-w-md bg-paper rounded-ticket shadow-ticket max-h-[88vh] flex flex-col animate-fade-in"
+            role="dialog"
+            aria-modal="true"
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between px-6 pt-6 pb-4 perforated-top">
+              <h3 className="font-display font-semibold text-lg text-ink">
+                {selectedItem.foodName}
+              </h3>
+
+              <button
+                onClick={() => setSelectedItem(null)}
+                aria-label="Đóng"
+                className="p-1.5 rounded-full text-steel hover:bg-ink/5 transition"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="flex-1 overflow-y-auto px-6 pb-6">
+              <FoodThumbnail
+                src={selectedItem.imageUrl}
+                alt={selectedItem.foodName}
+                className="w-full h-44 rounded-2xl mb-5"
+              />
+
+              <p className="text-steel text-sm leading-relaxed mb-5">
+                {selectedItem.description}
+              </p>
+
+              <div className="flex items-center justify-between mt-6">
+                <span className="ticket-num text-xl font-semibold text-chili-dark">
+                  {formatCurrency(selectedItem.originalPrice)}
+                </span>
+
+                {!unavailable && (
+                  <div className="flex items-center gap-3 bg-paper-dim rounded-full px-2 py-1.5">
+                    <button
+                      onClick={() => setQty((q) => Math.max(1, q - 1))}
+                      className="w-9 h-9 rounded-full bg-paper flex items-center justify-center hover:bg-gray-100 transition"
+                      aria-label="Giảm số lượng"
+                    >
+                      <Minus size={16} />
+                    </button>
+
+                    <span className="ticket-num w-8 text-center font-semibold text-base">
+                      {qty}
+                    </span>
+
+                    <button
+                      onClick={() => setQty((q) => q + 1)}
+                      className="w-9 h-9 rounded-full bg-ink text-paper flex items-center justify-center hover:bg-ink-soft transition"
+                      aria-label="Tăng số lượng"
+                    >
+                      <Plus size={16} />
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Footer — pb dùng max() để không bị .safe-bottom đè về 0px */}
+            <div className="px-6 pt-4 pb-[max(1.5rem,env(safe-area-inset-bottom))] dashed-divider">
+              <Button
+                fullWidth
+                disabled={unavailable}
+                onClick={() => {
+                  addItem(selectedItem, qty);
+                  showToast(`Đã thêm ${selectedItem.foodName}`);
+                  setSelectedItem(null);
+                }}
+              >
+                {unavailable
+                  ? "Món hiện đang hết hàng"
+                  : `Thêm vào giỏ · ${formatCurrency(
+                      selectedItem.originalPrice * qty
+                    )}`}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <CartFloatingButton onOpen={() => setCartOpen(true)} />
       <CartDrawer open={cartOpen} onClose={() => setCartOpen(false)} />

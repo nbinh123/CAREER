@@ -208,6 +208,15 @@ body { font-family: var(--font); background: var(--bg); color: var(--text-1); }
 .upload-zone-text { font-size:13px; color:var(--text-3); font-weight:500; }
 .upload-preview { max-height:120px; border-radius:8px; object-fit:cover; box-shadow:var(--shadow); }
 
+/* ── Ingredient search-select ── */
+.ing-search { position:relative; }
+.ing-search-list { position:absolute; top:calc(100% + 4px); left:0; right:0; background:var(--card); border:1.5px solid var(--border); border-radius:9px; box-shadow:var(--shadow-md); max-height:220px; overflow-y:auto; z-index:20; }
+.ing-search-item { display:flex; justify-content:space-between; align-items:center; gap:10px; padding:9px 13px; cursor:pointer; font-size:13.5px; color:var(--text-1); transition:background .12s; }
+.ing-search-item:hover, .ing-search-item.active { background:#F1F5F9; }
+.ing-search-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.ing-search-meta { font-size:11.5px; color:var(--text-3); font-family:var(--mono); white-space:nowrap; }
+.ing-search-empty { padding:12px 13px; font-size:13px; color:var(--text-3); text-align:center; }
+
 /* ── Reason radio ── */
 .reason-list { display:flex; flex-direction:column; gap:6px; }
 .reason-item { display:flex; align-items:center; gap:10px; padding:10px 13px; border-radius:9px; border:1.5px solid var(--border); cursor:pointer; transition:all .15s; }
@@ -357,6 +366,75 @@ function TransactionTable({ rows, loading, onViewImage }) {
     );
 }
 
+// Ô chọn nguyên liệu có tìm kiếm — gõ tên để lọc danh sách thay vì cuộn
+// dropdown dài. Gõ lại sau khi đã chọn sẽ bỏ chọn cũ (form.ingredientId về
+// '') để tránh lệch giữa chữ hiển thị và nguyên liệu thực sự đang được chọn.
+function IngredientSearchSelect({ ingredients, value, onSelect, placeholder }) {
+    const [query, setQuery] = useState('');
+    const [open, setOpen] = useState(false);
+    const wrapRef = useRef(null);
+
+    useEffect(() => {
+        const sel = ingredients.find((i) => i._id === value);
+        setQuery(sel ? sel.ingredientName : '');
+    }, [value, ingredients]);
+
+    useEffect(() => {
+        const onClickOutside = (e) => {
+            if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false);
+        };
+        document.addEventListener('mousedown', onClickOutside);
+        return () => document.removeEventListener('mousedown', onClickOutside);
+    }, []);
+
+    const filtered = query.trim()
+        ? ingredients.filter((i) => i.ingredientName.toLowerCase().includes(query.trim().toLowerCase()))
+        : ingredients;
+
+    const handlePick = (item) => {
+        onSelect(item._id);
+        setQuery(item.ingredientName);
+        setOpen(false);
+    };
+
+    const handleInput = (e) => {
+        const v = e.target.value;
+        setQuery(v);
+        setOpen(true);
+        if (value) onSelect('');
+    };
+
+    return (
+        <div className="ing-search" ref={wrapRef}>
+            <input
+                className="form-input"
+                placeholder={placeholder}
+                value={query}
+                onChange={handleInput}
+                onFocus={() => setOpen(true)}
+                autoComplete="off"
+            />
+            {open && (
+                <div className="ing-search-list">
+                    {filtered.length === 0 && (
+                        <div className="ing-search-empty">Không tìm thấy nguyên liệu</div>
+                    )}
+                    {filtered.map((i) => (
+                        <div
+                            key={i._id}
+                            className={`ing-search-item${i._id === value ? ' active' : ''}`}
+                            onMouseDown={(e) => { e.preventDefault(); handlePick(i); }}
+                        >
+                            <span className="ing-search-name">{i.ingredientName}</span>
+                            <span className="ing-search-meta">{fmt.num(i.quantity)} {i.smallUnit}</span>
+                        </div>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+}
+
 function ImportModal({ open, onClose, onSuccess, ingredients }) {
     const [form, setForm] = useState({ ingredientId: '', quantity: '', note: '' });
     const [file, setFile] = useState(null);
@@ -367,7 +445,6 @@ function ImportModal({ open, onClose, onSuccess, ingredients }) {
 
     const ing = ingredients.find((i) => i._id === form.ingredientId);
 
-    console.log(form.ingredientId);
     // amount = (quantity / smallUnitPerLargeUnit) * pricePerLargeUnit
     // Nếu schema có smallUnitPerLargeUnit thì dùng: (qty / ing.smallUnitPerLargeUnit) * ing.pricePerLargeUnit
     // Tạm tính theo pricePerLargeUnit trực tiếp — điều chỉnh công thức theo schema thực tế
@@ -425,16 +502,12 @@ function ImportModal({ open, onClose, onSuccess, ingredients }) {
 
                     <div className="form-group">
                         <label className="form-label">Nguyên liệu <span className="required">*</span></label>
-                        <select
-                            className="form-input form-select"
+                        <IngredientSearchSelect
+                            ingredients={ingredients}
                             value={form.ingredientId}
-                            onChange={(e) => setForm({ ...form, ingredientId: e.target.value })}
-                        >
-                            <option value="">— Chọn nguyên liệu —</option>
-                            {ingredients.map((i) => (
-                                <option key={i._id} value={i._id}>{i.ingredientName} ({i.smallUnit})</option>
-                            ))}
-                        </select>
+                            onSelect={(id) => setForm({ ...form, ingredientId: id })}
+                            placeholder="Gõ tên nguyên liệu cần nhập..."
+                        />
                     </div>
 
                     {ing && (

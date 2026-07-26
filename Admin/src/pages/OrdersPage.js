@@ -3,7 +3,7 @@ import { io } from "socket.io-client";
 import Button from "../components/Button";
 import Modal from "../components/Modal";
 import StatusBadge from "../components/StatusBadge";
-import { Bell, Check, CheckCircle2, ChefHat, Flame, Lock, MessageCircle, Search, Send, Wifi, WifiOff, X } from "lucide-react";
+import { Bell, Check, CheckCircle2, ChefHat, Flame, Lock, MessageCircle, Search, Send, Trash2, Wifi, WifiOff, X } from "lucide-react";
 import fmtVND from "../utils/fmtVND";
 import fmtDate from "../utils/fmtDate";
 import { API_URL } from "../config/api";
@@ -62,6 +62,7 @@ export default function OrdersPage() {
     const chatInputRef = useRef(null);
     const tooltipTimers = useRef({});
     const chatOpenTableIdRef = useRef(null); // để đọc trong socket handler mà không tạo lại effect
+    const [clearChatConfirmOpen, setClearChatConfirmOpen] = useState(false);
 
     useEffect(() => {
         chatOpenTableIdRef.current = chatOpenTableId;
@@ -220,6 +221,7 @@ export default function OrdersPage() {
     const closeChat = useCallback(() => {
         setChatOpenTableId(null);
         setChatDraft("");
+        setClearChatConfirmOpen(false);
     }, []);
 
     const sendChatReply = useCallback(() => {
@@ -228,6 +230,13 @@ export default function OrdersPage() {
         socketRef.current.emit("send_admin_chat_message", { tableId: chatOpenTableId, text: value });
         setChatDraft("");
     }, [chatDraft, chatOpenTableId]);
+
+    const clearChatHistory = useCallback(() => {
+        console.log("[clearChatHistory] called", { chatOpenTableId, hasSocket: !!socketRef.current });
+        if (chatOpenTableId == null || !socketRef.current) return;
+        socketRef.current.emit("clear_chat_messages", { tableId: chatOpenTableId });
+        setClearChatConfirmOpen(false);
+    }, [chatOpenTableId]);
 
     // ─── Lấy lịch sử đơn ───────────────────────────────────────────────────────
     function getOrders() {
@@ -544,11 +553,11 @@ export default function OrdersPage() {
                                     <div key={t.id} className="relative group">
                                         <button
                                             onClick={() => setSelectedId(t.id === selectedId ? null : t.id)}
-                                            className={`w-full relative rounded-2xl p-4 text-center transition-all border-2
-                                                ${isSelected ? "border-green-500 bg-green-50"
+                                            className={`w-full h-full relative rounded-2xl p-4 text-center transition-all border-2
+        ${isSelected ? "border-green-500 bg-green-50"
                                                     : t.status === "occupied" ? "border-orange-200 bg-orange-50 hover:border-orange-300"
                                                         : "border-gray-100 bg-white hover:border-green-200 hover:bg-green-50"}
-                                                ${!t.active ? "opacity-60" : ""}`}>
+        ${!t.active ? "opacity-60" : ""}`}>
                                             {hasPending && (
                                                 <span className="absolute -top-1.5 -right-1.5 flex h-4 w-4">
                                                     <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75" />
@@ -609,9 +618,9 @@ export default function OrdersPage() {
                                                     checked={t.chatEnabled !== false}
                                                     onChange={() => handleToggleChat(t)}
                                                 />
-                                                <div className="w-7 h-4 bg-gray-300 rounded-full peer-checked:bg-blue-500 transition-colors relative shadow-sm">
+                                                {/* <div className="w-7 h-4 bg-gray-300 rounded-full peer-checked:bg-blue-500 transition-colors relative shadow-sm">
                                                     <div className="absolute top-0.5 left-0.5 w-3 h-3 bg-white rounded-full shadow transition-transform peer-checked:translate-x-3" />
-                                                </div>
+                                                </div> */}
                                             </label>
 
                                             <button
@@ -884,6 +893,19 @@ export default function OrdersPage() {
             <Modal open={chatOpenTableId != null} onClose={closeChat} title={`Chat — ${chatTable?.name || ""}`}>
                 {chatTable && (
                     <div className="flex flex-col" style={{ height: 420 }}>
+                        {/* Thanh hành động — nút xoá lịch sử */}
+                        {chatTable.messages?.length > 0 && (
+                            <div className="flex justify-end mb-2">
+                                <button
+
+                                    onClick={() => { console.log("[open confirm modal] clicked"); setClearChatConfirmOpen(true) }}
+                                    className="flex items-center gap-1 text-xs font-semibold text-gray-400 hover:text-red-500 transition-colors"
+                                >
+                                    <Trash2 size={13} /> Xoá lịch sử
+                                </button>
+                            </div>
+                        )}
+
                         <div ref={chatScrollRef} className="flex-1 overflow-y-auto space-y-2 pr-1 mb-3">
                             {(!chatTable.messages || chatTable.messages.length === 0) ? (
                                 <p className="text-gray-400 text-xs text-center py-10">Chưa có tin nhắn nào với {chatTable.name}</p>
@@ -891,7 +913,7 @@ export default function OrdersPage() {
                                 chatTable.messages.map((m, idx) => (
                                     <div key={m.id || idx} className={`flex ${m.from === "admin" ? "justify-end" : "justify-start"}`}>
                                         <div className={`max-w-[75%] rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed
-                                            ${m.from === "admin" ? "bg-green-500 text-white rounded-br-md" : "bg-gray-100 text-gray-700 rounded-bl-md"}`}>
+                                ${m.from === "admin" ? "bg-green-500 text-white rounded-br-md" : "bg-gray-100 text-gray-700 rounded-bl-md"}`}>
                                             <p>{m.text}</p>
                                             <p className={`text-[10px] mt-1 ${m.from === "admin" ? "text-green-100" : "text-gray-400"}`}>
                                                 {fmtDate(m.at instanceof Date ? m.at.toISOString() : m.at)}
@@ -920,6 +942,23 @@ export default function OrdersPage() {
                         </div>
                     </div>
                 )}
+            </Modal>
+
+            {/* ── Modal xác nhận xoá lịch sử chat ── */}
+            <Modal open={clearChatConfirmOpen} onClose={() => setClearChatConfirmOpen(false)} title="Xoá lịch sử tin nhắn?">
+                <div className="space-y-4">
+                    <p className="text-sm text-gray-600">
+                        Toàn bộ tin nhắn giữa admin và <span className="font-semibold text-gray-800">{chatTable?.name}</span> sẽ bị xoá vĩnh viễn. Bạn có chắc chắn không?
+                    </p>
+                    <div className="flex gap-2">
+                        <Button variant="outline" className="flex-1 justify-center" onClick={() => setClearChatConfirmOpen(false)}>
+                            Huỷ
+                        </Button>
+                        <Button className="flex-1 justify-center bg-red-500 hover:bg-red-600" onClick={clearChatHistory}>
+                            <Trash2 size={15} />Xoá
+                        </Button>
+                    </div>
+                </div>
             </Modal>
         </div>
     );
