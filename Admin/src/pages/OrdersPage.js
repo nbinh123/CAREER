@@ -23,6 +23,7 @@ const mkEmptyTable = (id) => ({
     items: [],
     pendingItems: [],
     active: false, // mặc định khoá gọi món cho tới khi admin bật, khớp default ở DB
+    chatEnabled: true, // mặc định mở tin nhắn, khớp default ở DB
     messages: [],
 });
 
@@ -94,11 +95,12 @@ export default function OrdersPage() {
 
         socket.on("disconnect", () => setConnected(false));
 
-        // Nhận toàn bộ state bàn từ server (đã gồm cả pendingItems, active, messages)
+        // Nhận toàn bộ state bàn từ server (đã gồm cả pendingItems, active, chatEnabled, messages)
         socket.on("tables_state", (serverTables) => {
             setTables(serverTables.map((t) => ({
                 ...t,
                 active: t.active ?? false,
+                chatEnabled: t.chatEnabled !== false,
                 since: t.since ? new Date(t.since) : null,
                 items: t.items || [],
                 pendingItems: t.pendingItems || [],
@@ -193,6 +195,13 @@ export default function OrdersPage() {
     const handleToggleActive = useCallback((table) => {
         if (!socketRef.current) return;
         socketRef.current.emit("toggle_table_active", { tableId: table.id, active: !table.active });
+    }, []);
+
+    // ─── Bật/tắt cho phép khách gửi tin nhắn tại 1 bàn ─────────────────────────
+    const handleToggleChat = useCallback((table) => {
+        if (!socketRef.current) return;
+        const currentlyEnabled = table.chatEnabled !== false;
+        socketRef.current.emit("toggle_table_chat", { tableId: table.id, chatEnabled: !currentlyEnabled });
     }, []);
 
     // ─── Chat theo bàn ─────────────────────────────────────────────────────────
@@ -344,15 +353,153 @@ export default function OrdersPage() {
         maxAmount
     ]);
 
+    // ─── Nội dung chi tiết bàn — tách riêng để tái dùng cho cả panel desktop
+    // (bên phải, lg+) và Modal trên mobile, tránh lặp code 2 nơi. ─────────────
+    const renderTableDetailBody = () => {
+        if (!activeTable) return null;
+        return (
+            <>
+                <div className="flex-1 p-3 overflow-y-auto space-y-4">
+                    {activeTable.since && (
+                        <p className="text-xs text-gray-400">
+                            {fmtDate(activeTable.since instanceof Date
+                                ? activeTable.since.toISOString()
+                                : activeTable.since)}
+                        </p>
+                    )}
+
+                    {/* Món chờ xác nhận */}
+                    {activeTable.pendingItems.length > 0 && (
+                        <div className="rounded-xl border-2 border-red-200 bg-red-50 p-3">
+                            <div className="flex items-center justify-between mb-2">
+                                <p className="text-xs font-bold text-red-600 uppercase tracking-wide flex items-center gap-1.5">
+                                    <Bell size={13} /> Khách vừa gọi — cần xác nhận
+                                </p>
+                                <button onClick={toggleSelectAllPending} className="text-[11px] font-semibold text-red-500 hover:underline">
+                                    {selectedPending.size === activeTable.pendingItems.length ? "Bỏ chọn tất cả" : "Chọn tất cả"}
+                                </button>
+                            </div>
+                            <div className="space-y-1.5">
+                                {activeTable.pendingItems.map((item) => (
+                                    <label key={item.foodId} className="flex items-center gap-2.5 bg-white rounded-lg p-2 cursor-pointer">
+                                        <input type="checkbox"
+                                            checked={selectedPending.has(String(item.foodId))}
+                                            onChange={() => togglePending(item.foodId)}
+                                            className="w-4 h-4 accent-red-500" />
+                                        <span className="text-lg">{item.emoji}</span>
+                                        <div className="flex-1 min-w-0">
+                                            <p className="text-xs font-bold text-gray-700 truncate">{item.foodName}</p>
+                                            <p className="text-xs text-gray-400">{fmtVND(item.unitPrice)} × {item.quantity}</p>
+                                        </div>
+                                    </label>
+                                ))}
+                            </div>
+                            <button
+                                className="w-full flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-sm font-bold text-white bg-red-500 hover:bg-red-600 transition-all disabled:opacity-40 disabled:cursor-not-allowed mt-3"
+                                disabled={selectedPending.size === 0 || confirmLoading}
+                                onClick={() => confirmItems(Array.from(selectedPending))}>
+                                <Check size={14} /> Xác nhận đã chọn ({selectedPending.size}) & gửi bếp
+                            </button>
+                            {activeTable.pendingItems.length > 1 && (
+                                <button
+                                    onClick={() => confirmItems(activeTable.pendingItems.map((i) => String(i.foodId)))}
+                                    disabled={confirmLoading}
+                                    className="w-full text-center text-xs font-semibold text-red-500 hover:underline mt-2">
+                                    Xác nhận tất cả ({activeTable.pendingItems.length} món)
+                                </button>
+                            )}
+                        </div>
+                    )}
+
+                    {/* Món đã xác nhận */}
+                    {activeTable.items.length === 0 && activeTable.pendingItems.length === 0 ? (
+                        <div className="text-center text-gray-400 py-10">
+                            <ChefHat size={32} className="mx-auto mb-2 opacity-25" />
+                            <p className="text-sm">Chưa có món nào</p>
+                            <p className="text-xs mt-1">Khách gọi món sẽ hiện tại đây</p>
+                        </div>
+                    ) : activeTable.items.length > 0 && (
+                        <div>
+                            <p className="text-xs text-gray-400 font-bold uppercase tracking-wide mb-2">Đã xác nhận</p>
+                            <div className="space-y-2">
+                                {activeTable.items.map((item, idx) => (
+                                    <div key={`${item.foodId}-${item.status}-${idx}`} className="flex items-center gap-2.5 bg-gray-50 rounded-xl p-2.5">
+                                        <span className="text-xl">{item.emoji}</span>
+                                        <div className="flex-1 min-w-0">
+                                            <p className="text-xs font-bold text-gray-700 truncate">{item.foodName}</p>
+                                            <p className="text-xs text-gray-400">{fmtVND(item.unitPrice)} × {item.quantity}</p>
+                                        </div>
+                                        {item.status === "ready" ? (
+                                            <span className="flex items-center gap-1 text-[11px] font-bold text-green-600 bg-green-100 px-2 py-1 rounded-full whitespace-nowrap">
+                                                <CheckCircle2 size={12} /> Sẵn sàng
+                                            </span>
+                                        ) : (
+                                            <span className="flex items-center gap-1 text-[11px] font-bold text-orange-600 bg-orange-100 px-2 py-1 rounded-full whitespace-nowrap">
+                                                <Flame size={12} /> Đang nấu
+                                            </span>
+                                        )}
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                </div>
+
+                {/* Tổng & Thanh toán */}
+                <div className="p-4 border-t border-gray-100 bg-green-50/50 rounded-b-2xl">
+                    <div className="flex justify-between items-center mb-1">
+                        <span className="text-sm font-bold text-gray-700">Tổng cộng</span>
+                        <span className="text-xl font-black text-green-600">{fmtVND(subtotal)}</span>
+                    </div>
+                    {pendingSubtotal > 0 && (
+                        <p className="text-xs text-red-500 text-right mb-2">+ {fmtVND(pendingSubtotal)} đang chờ xác nhận</p>
+                    )}
+                    <Button className="w-full justify-center"
+                        disabled={!activeTable.items.length || activeTable.pendingItems.length > 0}
+                        onClick={() => setCheckoutOpen(true)}>
+                        <Check size={15} />Thanh toán
+                    </Button>
+                    {activeTable.pendingItems.length > 0 && (
+                        <p className="text-[11px] text-center text-gray-400 mt-1.5">Xác nhận hết món đang chờ trước khi thanh toán</p>
+                    )}
+                </div>
+            </>
+        );
+    };
+
     // ─── Render ────────────────────────────────────────────────────────────────
     return (
         <div className="space-y-5">
 
-            {/* Toast */}
+            {/* Toast (kết quả thao tác) — góc trên-phải */}
             {toast && (
                 <div className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-xl shadow-lg text-sm font-semibold text-white transition-all
                     ${toast.type === "success" ? "bg-green-500" : "bg-red-500"}`}>
                     {toast.msg}
+                </div>
+            )}
+
+            {/* Thông báo tin nhắn mới từ khách — góc trên-trái, xếp chồng theo bàn.
+                Responsive: full-width (trừ lề) trên mobile, thu về khung cố định
+                trên màn hình lớn. Đặt bên trái để không đè lên toast phía trên. */}
+            {Object.keys(tooltips).length > 0 && (
+                <div className="fixed top-4 left-4 right-4 sm:right-auto sm:w-72 z-40 flex flex-col gap-2">
+                    {Object.entries(tooltips).map(([tableIdKey, msg]) => {
+                        const tableId = Number(tableIdKey);
+                        const t = tables.find((tb) => tb.id === tableId);
+                        return (
+                            <button
+                                key={tableIdKey}
+                                onClick={() => openChat(tableId)}
+                                className="text-left bg-white border border-green-200 rounded-xl shadow-lg px-3.5 py-2.5 animate-fade-in"
+                            >
+                                <p className="text-[11px] font-bold text-green-600 mb-0.5 flex items-center gap-1">
+                                    <MessageCircle size={11} /> {t?.name || `Bàn ${tableId}`} nhắn tin
+                                </p>
+                                <p className="text-xs text-gray-700 line-clamp-2">{msg.text}</p>
+                            </button>
+                        );
+                    })}
                 </div>
             )}
 
@@ -393,7 +540,6 @@ export default function OrdersPage() {
                                 const isSelected = t.id === selectedId;
                                 const hasPending = t.pendingItems?.length > 0;
                                 const hasUnreadChat = (t.messages || []).some((m) => m.from === "guest" && !m.read);
-                                const tooltipMsg = tooltips[t.id];
                                 return (
                                     <div key={t.id} className="relative group">
                                         <button
@@ -446,37 +592,44 @@ export default function OrdersPage() {
                                             </div>
                                         </label>
 
-                                        {/* Icon chat — mỗi bàn đều có, góc dưới-phải. Badge đỏ nhấp nháy
-                                            khi có tin nhắn từ khách chưa đọc. */}
-                                        <button
-                                            onClick={(e) => { e.stopPropagation(); openChat(t.id); }}
-                                            title="Nhắn tin với bàn này"
-                                            aria-label={`Chat với ${t.name}`}
-                                            className="absolute bottom-1.5 right-1.5 z-10 w-7 h-7 rounded-full bg-white border border-gray-200 shadow-sm
-                                                flex items-center justify-center text-gray-500 hover:text-green-600 hover:border-green-300 transition-colors"
-                                        >
-                                            <MessageCircle size={14} />
-                                            {hasUnreadChat && (
-                                                <span className="absolute -top-1 -right-1 flex h-3.5 w-3.5">
-                                                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75" />
-                                                    <span className="relative inline-flex rounded-full h-3.5 w-3.5 bg-red-500 border-2 border-white" />
-                                                </span>
-                                            )}
-                                        </button>
+                                        {/* Cụm nút góc dưới-phải: toggle bật/tắt tin nhắn + icon mở chat.
+                                            Toggle luôn hiện trên mobile (chạm được ngay), chỉ ẩn/hiện theo
+                                            hover trên màn hình lớn — cùng kiểu với toggle "mở gọi món". */}
+                                        <div className="absolute bottom-1.5 right-1.5 z-10 flex items-center gap-1">
+                                            <label
+                                                onClick={(e) => e.stopPropagation()}
+                                                title={t.chatEnabled !== false ? "Đang mở tin nhắn — nhấn để tắt" : "Đang tắt tin nhắn — nhấn để mở"}
+                                                className="inline-flex items-center cursor-pointer
+                                                    opacity-100 sm:opacity-0 sm:group-hover:opacity-100 sm:focus-within:opacity-100
+                                                    transition-opacity duration-150"
+                                            >
+                                                <input
+                                                    type="checkbox"
+                                                    className="sr-only peer"
+                                                    checked={t.chatEnabled !== false}
+                                                    onChange={() => handleToggleChat(t)}
+                                                />
+                                                <div className="w-7 h-4 bg-gray-300 rounded-full peer-checked:bg-blue-500 transition-colors relative shadow-sm">
+                                                    <div className="absolute top-0.5 left-0.5 w-3 h-3 bg-white rounded-full shadow transition-transform peer-checked:translate-x-3" />
+                                                </div>
+                                            </label>
 
-                                        {/* Tooltip tin nhắn mới từ khách — bấm vào để mở hộp thoại reply ngay */}
-                                        {tooltipMsg && (
                                             <button
                                                 onClick={(e) => { e.stopPropagation(); openChat(t.id); }}
-                                                className="absolute bottom-full right-0 mb-2 z-30 w-44 text-left bg-white border border-green-200
-                                                    rounded-xl shadow-lg px-3 py-2 animate-fade-in"
+                                                title="Nhắn tin với bàn này"
+                                                aria-label={`Chat với ${t.name}`}
+                                                className="relative w-7 h-7 rounded-full bg-white border border-gray-200 shadow-sm
+                                                    flex items-center justify-center text-gray-500 hover:text-green-600 hover:border-green-300 transition-colors"
                                             >
-                                                <p className="text-[10px] font-bold text-green-600 mb-0.5 flex items-center gap-1">
-                                                    <MessageCircle size={10} /> {t.name} nhắn tin
-                                                </p>
-                                                <p className="text-xs text-gray-700 line-clamp-2">{tooltipMsg.text}</p>
+                                                <MessageCircle size={14} className={t.chatEnabled === false ? "opacity-40" : ""} />
+                                                {hasUnreadChat && (
+                                                    <span className="absolute -top-1 -right-1 flex h-3.5 w-3.5">
+                                                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75" />
+                                                        <span className="relative inline-flex rounded-full h-3.5 w-3.5 bg-red-500 border-2 border-white" />
+                                                    </span>
+                                                )}
                                             </button>
-                                        )}
+                                        </div>
                                     </div>
                                 );
                             })}
@@ -489,129 +642,23 @@ export default function OrdersPage() {
                             <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded border-2 border-green-500 bg-green-50 inline-block" />Đang chọn</span>
                             <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-red-500 inline-block" />Có món chờ xác nhận / tin nhắn chưa đọc</span>
                             <span className="flex items-center gap-1.5"><Lock size={11} className="text-gray-400" />Chưa mở gọi món — hover/chạm góc trái bàn để bật</span>
-                            <span className="flex items-center gap-1.5"><MessageCircle size={11} className="text-gray-400" />Chat với bàn — góc phải dưới mỗi bàn</span>
+                            <span className="flex items-center gap-1.5"><MessageCircle size={11} className="text-gray-400" />Chat với bàn — góc phải dưới, có toggle bật/tắt cạnh icon</span>
                         </div>
                     </div>
 
-                    {/* Chi tiết bàn được chọn */}
-                    <div className="bg-white rounded-2xl border border-gray-100 flex flex-col" style={{ minHeight: 480 }}>
+                    {/* Chi tiết bàn được chọn — panel cố định, chỉ hiện từ lg trở lên.
+                        Dưới lg xem qua Modal (bên dưới). */}
+                    <div className="hidden lg:flex bg-white rounded-2xl border border-gray-100 flex-col" style={{ minHeight: 480 }}>
                         {activeTable ? (
                             <>
-                                {/* Header bàn */}
                                 <div className="px-4 py-3.5 border-b border-gray-100 flex items-center justify-between">
-                                    <div>
-                                        <h3 className="font-bold text-gray-800">{activeTable.name}</h3>
-                                        {activeTable.since && (
-                                            <p className="text-xs text-gray-400">
-                                                {fmtDate(activeTable.since instanceof Date
-                                                    ? activeTable.since.toISOString()
-                                                    : activeTable.since)}
-                                            </p>
-                                        )}
-                                    </div>
+                                    <h3 className="font-bold text-gray-800">{activeTable.name}</h3>
                                     <button onClick={() => setSelectedId(null)}
                                         className="text-gray-400 hover:text-gray-600 w-7 h-7 rounded-lg hover:bg-gray-100 flex items-center justify-center">
                                         <X size={16} />
                                     </button>
                                 </div>
-
-                                <div className="flex-1 p-3 overflow-y-auto space-y-4">
-
-                                    {/* Món chờ xác nhận */}
-                                    {activeTable.pendingItems.length > 0 && (
-                                        <div className="rounded-xl border-2 border-red-200 bg-red-50 p-3">
-                                            <div className="flex items-center justify-between mb-2">
-                                                <p className="text-xs font-bold text-red-600 uppercase tracking-wide flex items-center gap-1.5">
-                                                    <Bell size={13} /> Khách vừa gọi — cần xác nhận
-                                                </p>
-                                                <button onClick={toggleSelectAllPending} className="text-[11px] font-semibold text-red-500 hover:underline">
-                                                    {selectedPending.size === activeTable.pendingItems.length ? "Bỏ chọn tất cả" : "Chọn tất cả"}
-                                                </button>
-                                            </div>
-                                            <div className="space-y-1.5">
-                                                {activeTable.pendingItems.map((item) => (
-                                                    <label key={item.foodId} className="flex items-center gap-2.5 bg-white rounded-lg p-2 cursor-pointer">
-                                                        <input type="checkbox"
-                                                            checked={selectedPending.has(String(item.foodId))}
-                                                            onChange={() => togglePending(item.foodId)}
-                                                            className="w-4 h-4 accent-red-500" />
-                                                        <span className="text-lg">{item.emoji}</span>
-                                                        <div className="flex-1 min-w-0">
-                                                            <p className="text-xs font-bold text-gray-700 truncate">{item.foodName}</p>
-                                                            <p className="text-xs text-gray-400">{fmtVND(item.unitPrice)} × {item.quantity}</p>
-                                                        </div>
-                                                    </label>
-                                                ))}
-                                            </div>
-                                            <button
-                                                className="w-full flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-sm font-bold text-white bg-red-500 hover:bg-red-600 transition-all disabled:opacity-40 disabled:cursor-not-allowed mt-3"
-                                                disabled={selectedPending.size === 0 || confirmLoading}
-                                                onClick={() => confirmItems(Array.from(selectedPending))}>
-                                                <Check size={14} /> Xác nhận đã chọn ({selectedPending.size}) & gửi bếp
-                                            </button>
-                                            {activeTable.pendingItems.length > 1 && (
-                                                <button
-                                                    onClick={() => confirmItems(activeTable.pendingItems.map((i) => String(i.foodId)))}
-                                                    disabled={confirmLoading}
-                                                    className="w-full text-center text-xs font-semibold text-red-500 hover:underline mt-2">
-                                                    Xác nhận tất cả ({activeTable.pendingItems.length} món)
-                                                </button>
-                                            )}
-                                        </div>
-                                    )}
-
-                                    {/* Món đã xác nhận */}
-                                    {activeTable.items.length === 0 && activeTable.pendingItems.length === 0 ? (
-                                        <div className="text-center text-gray-400 py-10">
-                                            <ChefHat size={32} className="mx-auto mb-2 opacity-25" />
-                                            <p className="text-sm">Chưa có món nào</p>
-                                            <p className="text-xs mt-1">Khách gọi món sẽ hiện tại đây</p>
-                                        </div>
-                                    ) : activeTable.items.length > 0 && (
-                                        <div>
-                                            <p className="text-xs text-gray-400 font-bold uppercase tracking-wide mb-2">Đã xác nhận</p>
-                                            <div className="space-y-2">
-                                                {activeTable.items.map((item, idx) => (
-                                                    <div key={`${item.foodId}-${item.status}-${idx}`} className="flex items-center gap-2.5 bg-gray-50 rounded-xl p-2.5">
-                                                        <span className="text-xl">{item.emoji}</span>
-                                                        <div className="flex-1 min-w-0">
-                                                            <p className="text-xs font-bold text-gray-700 truncate">{item.foodName}</p>
-                                                            <p className="text-xs text-gray-400">{fmtVND(item.unitPrice)} × {item.quantity}</p>
-                                                        </div>
-                                                        {item.status === "ready" ? (
-                                                            <span className="flex items-center gap-1 text-[11px] font-bold text-green-600 bg-green-100 px-2 py-1 rounded-full whitespace-nowrap">
-                                                                <CheckCircle2 size={12} /> Sẵn sàng
-                                                            </span>
-                                                        ) : (
-                                                            <span className="flex items-center gap-1 text-[11px] font-bold text-orange-600 bg-orange-100 px-2 py-1 rounded-full whitespace-nowrap">
-                                                                <Flame size={12} /> Đang nấu
-                                                            </span>
-                                                        )}
-                                                    </div>
-                                                ))}
-                                            </div>
-                                        </div>
-                                    )}
-                                </div>
-
-                                {/* Tổng & Thanh toán */}
-                                <div className="p-4 border-t border-gray-100 bg-green-50/50 rounded-b-2xl">
-                                    <div className="flex justify-between items-center mb-1">
-                                        <span className="text-sm font-bold text-gray-700">Tổng cộng</span>
-                                        <span className="text-xl font-black text-green-600">{fmtVND(subtotal)}</span>
-                                    </div>
-                                    {pendingSubtotal > 0 && (
-                                        <p className="text-xs text-red-500 text-right mb-2">+ {fmtVND(pendingSubtotal)} đang chờ xác nhận</p>
-                                    )}
-                                    <Button className="w-full justify-center"
-                                        disabled={!activeTable.items.length || activeTable.pendingItems.length > 0}
-                                        onClick={() => setCheckoutOpen(true)}>
-                                        <Check size={15} />Thanh toán
-                                    </Button>
-                                    {activeTable.pendingItems.length > 0 && (
-                                        <p className="text-[11px] text-center text-gray-400 mt-1.5">Xác nhận hết món đang chờ trước khi thanh toán</p>
-                                    )}
-                                </div>
+                                {renderTableDetailBody()}
                             </>
                         ) : (
                             <div className="flex-1 flex items-center justify-center p-8 text-center">
@@ -769,6 +816,19 @@ export default function OrdersPage() {
                     </div>
                 </div>
             )}
+
+            {/* ── Modal chi tiết bàn — chỉ dùng dưới lg (mobile/tablet), thay cho
+                panel cố định bên phải. Cùng nội dung với panel desktop qua
+                renderTableDetailBody() để không lặp code. ── */}
+            <div className="lg:hidden">
+                <Modal open={!!activeTable} onClose={() => setSelectedId(null)} title={activeTable?.name || ""}>
+                    {activeTable && (
+                        <div className="flex flex-col" style={{ maxHeight: "75vh" }}>
+                            {renderTableDetailBody()}
+                        </div>
+                    )}
+                </Modal>
+            </div>
 
             {/* ── Modal thanh toán ── */}
             <Modal open={checkoutOpen} onClose={() => setCheckoutOpen(false)} title={`Thanh toán — ${activeTable?.name}`}>

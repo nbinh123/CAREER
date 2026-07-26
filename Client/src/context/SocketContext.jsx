@@ -165,7 +165,6 @@ export function SocketProvider({ children }) {
     chatResetListeners.current.add(cb);
     return () => chatResetListeners.current.delete(cb);
   }, []);
-
   const value = useMemo(
     () => ({
       connected,
@@ -175,6 +174,13 @@ export function SocketProvider({ children }) {
       // hay chưa, và nếu tồn tại thì có đang active hay không.
       tableKnown: stateReceived && tableState !== null,
       tableActive: !!tableState?.active,
+      // Admin bật/tắt bằng toggle cạnh icon chat ở OrdersPage.jsx (góc
+      // dưới-phải mỗi bàn). Mặc định true khi tableState chưa về (đang
+      // loading) hoặc field chưa từng được set trong DB — chỉ false khi
+      // server xác nhận rõ admin đã tắt. ChatWidget dựa vào đây để tự ẩn
+      // nút chat, đồng thời server cũng tự chặn ở "send_chat_message" nên
+      // không thể lách qua bằng cách gọi socket trực tiếp.
+      chatEnabled: tableState?.chatEnabled !== false,
       sendOrder,
       sendChatMessage,
       onChatMessage,

@@ -25,6 +25,7 @@ export default function MenuItemDetailModal({ item, onClose, onAdd }) {
       open={!!item}
       onClose={onClose}
       title={item.foodName}
+      footerClassName="pb-7 pt-3"
       footer={
         <Button
           fullWidth
@@ -41,15 +42,18 @@ export default function MenuItemDetailModal({ item, onClose, onAdd }) {
       <FoodThumbnail src={item.imageUrl} alt={item.foodName} className="w-full h-44 rounded-2xl mb-4" />
       <p className="text-steel text-sm leading-relaxed mb-3">{item.description}</p>
 
-      {/* note: ghi chú của NHÀ HÀNG dành cho khách (VD dị ứng / mức độ cay...), lấy từ Food schema */}
-      {item.note && (
+      {/* ⚠️ Tạm ẩn theo yêu cầu - không muốn khách thấy ghi chú của nhà hàng
+          và danh sách thành phần chính ở màn order. Bật lại bằng cách khôi
+          phục 2 block dưới đây (note: ghi chú NHÀ HÀNG dành cho khách, lấy
+          từ Food schema; ingredients: danh sách nguyên liệu chính). */}
+      {false && item.note && (
         <div className="flex items-start gap-2 bg-turmeric-light rounded-xl px-3 py-2.5 mb-4">
           <Info size={14} className="text-turmeric-dark mt-0.5 flex-shrink-0" />
           <p className="text-xs text-ink leading-relaxed">{item.note}</p>
         </div>
       )}
 
-      {item.ingredients?.length > 0 && (
+      {false && item.ingredients?.length > 0 && (
         <div className="mb-4">
           <p className="text-xs font-display font-medium text-steel mb-1.5">Thành phần chính</p>
           <div className="flex flex-wrap gap-1.5">

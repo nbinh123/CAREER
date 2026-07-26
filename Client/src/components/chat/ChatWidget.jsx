@@ -5,7 +5,7 @@ import { useCart } from "../../context/CartContext";
 import ChatBubble from "./ChatBubble";
 
 export default function ChatWidget() {
-  const { onChatMessage, onChatReset, sendChatMessage, connected } = useSocket();
+  const { onChatMessage, onChatReset, sendChatMessage, connected, chatEnabled } = useSocket();
   // Nút chat giờ hiện mặc định ở MỌI trang (không chỉ riêng trang chờ cũ),
   // nên phải né thanh "Xem đơn của bạn" (CartFloatingButton) - thanh đó chỉ
   // xuất hiện ở trang gọi món khi giỏ hàng có món, và nằm cùng khoảng cách
@@ -41,6 +41,11 @@ export default function ChatWidget() {
 
   const unreadFromAdmin = !open && messages.some((m) => m.from === "admin");
   const triggerBottom = totalCount > 0 ? "calc(8.5rem + env(safe-area-inset-bottom))" : "calc(4.5rem + env(safe-area-inset-bottom))";
+
+  // Admin đã tắt tin nhắn cho bàn này → ẩn hẳn widget, khách không thấy nút
+  // chat nữa. Nếu context chưa cung cấp field chatEnabled, giá trị sẽ là
+  // undefined và widget hiển thị như trước (không thay đổi hành vi cũ).
+  if (chatEnabled === false) return null;
 
   return (
     <>

@@ -98,7 +98,8 @@ const tableSchema = new Schema(
             ],
             default: [],
         },
-        active: { type: Boolean, default: false }
+        active: { type: Boolean, default: false },
+        chatEnabled: { type: Boolean, default: true }
     },
 
     { timestamps: true }

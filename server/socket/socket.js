@@ -18,6 +18,8 @@ let tableCache = [];
 // items[].status = "cooking" (đã xác nhận, đang chờ bếp nấu) | "ready" (bếp nấu xong).
 // active = admin đã "mở" cho khách gọi món ở bàn này hay chưa. Trang
 // OrderPage.jsx phía khách chỉ hiển thị thực đơn khi active === true.
+// chatEnabled = admin đã "mở" cho khách gửi tin nhắn ở bàn này hay chưa.
+// Mặc định true (chưa từng set trong DB thì vẫn coi là đang mở).
 // messages = lịch sử chat theo bàn, dùng chung cho cả widget của khách lẫn
 // hộp thoại chat của admin.
 const toClientTable = (t) => ({
@@ -28,6 +30,7 @@ const toClientTable = (t) => ({
     items: t.items || [],
     pendingItems: t.pendingItems || [],
     active: !!t.active,
+    chatEnabled: t.chatEnabled !== false,
     messages: (t.messages || []).map((m) => ({
         id: m._id ? String(m._id) : undefined,
         from: m.from,
@@ -50,6 +53,7 @@ async function ensureTablesSeeded() {
         items: [],
         pendingItems: [],
         active: false, // mặc định khoá, admin phải chủ động bật cho khách gọi món
+        chatEnabled: true, // mặc định mở, admin có thể tắt nếu cần
         messages: [],
     }));
 
@@ -164,8 +168,9 @@ function initSocket(server) {
         });
 
         // ── 5. Thanh toán thành công → xoá giỏ, reset bàn về empty ────────
-        // Lưu ý: reset KHÔNG đụng tới "active" và "messages" — lịch sử chat
-        // vẫn giữ nguyên qua các lượt khách, chỉ đơn hàng mới bị xoá.
+        // Lưu ý: reset KHÔNG đụng tới "active"/"chatEnabled" và "messages" —
+        // các thiết lập bật/tắt vẫn giữ nguyên qua các lượt khách, chỉ đơn
+        // hàng mới bị xoá.
         socket.on("checkout_table", async ({ tableId }) => {
             try {
                 const updated = await Table.findOneAndUpdate(
@@ -392,6 +397,33 @@ function initSocket(server) {
             }
         });
 
+        // ── 9b. Admin bật/tắt cho phép khách gửi tin nhắn tại 1 bàn ────────
+        // Không xoá messages cũ, chỉ chặn khách gửi thêm khi chatEnabled=false
+        // (phần chặn gửi ở phía client — widget khách nên ẩn/khoá khi nhận
+        // được chatEnabled=false qua "tables_state").
+        socket.on("toggle_table_chat", async ({ tableId, chatEnabled }) => {
+            try {
+                if (tableId == null || typeof chatEnabled !== "boolean") return;
+
+                const updated = await Table.findOneAndUpdate(
+                    { number: tableId },
+                    { chatEnabled },
+                    { new: true }
+                );
+                if (!updated) return;
+
+                const clientTable = toClientTable(updated);
+                const idx = tableCache.findIndex((t) => t.id === tableId);
+                if (idx === -1) tableCache.push(clientTable);
+                else tableCache[idx] = clientTable;
+
+                io.to(`table:${tableId}`).emit("tables_state", [clientTable]);
+                io.to("admin_room").emit("tables_state", tableCache);
+            } catch (err) {
+                console.error("[socket] toggle_table_chat lỗi:", err.message);
+            }
+        });
+
         // ── 10. Client yêu cầu đồng bộ lại (reconnect, refresh…) ───────────
         socket.on("request_tables", ({ tableId } = {}) => {
             if (tableId) {
@@ -403,11 +435,13 @@ function initSocket(server) {
         });
 
         // ── 11. Khách gửi tin nhắn chat cho admin ──────────────────────────
-        // Bắn thêm "chat_message" (ngoài "tables_state") để phía admin hiện
-        // tooltip + tín hiệu trên icon ngay lập tức mà không cần so sánh lại
-        // toàn bộ danh sách bàn.
+        // Chặn ngay từ server nếu bàn đang bị tắt tin nhắn, tránh khách vẫn
+        // gửi được qua request thủ công dù UI đã ẩn nút chat.
         socket.on("send_chat_message", async ({ tableId, text }) => {
             try {
+                const table = tableCache.find((t) => t.id === Number(tableId));
+                if (table && table.chatEnabled === false) return;
+
                 const savedMessage = await persistChatMessage(io, tableId, "guest", text);
                 if (!savedMessage) return;
 

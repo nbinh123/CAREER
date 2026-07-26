@@ -1,7 +1,14 @@
 import React, { useEffect } from "react";
 import { X } from "lucide-react";
 
-export default function Modal({ open, onClose, title, children, footer }) {
+export default function Modal({
+  open,
+  onClose,
+  title,
+  children,
+  footer,
+  footerClassName = "px-5 pb-5 pt-3",
+}) {
   useEffect(() => {
     if (!open) return;
     document.body.style.overflow = "hidden";
@@ -31,7 +38,7 @@ export default function Modal({ open, onClose, title, children, footer }) {
           </button>
         </div>
         <div className="px-5 pb-5 overflow-y-auto flex-1">{children}</div>
-        {footer && <div className="px-5 pb-5 pt-3 dashed-divider safe-bottom">{footer}</div>}
+        {footer && <div className={`${footerClassName} dashed-divider safe-bottom`}>{footer}</div>}
       </div>
     </div>
   );
