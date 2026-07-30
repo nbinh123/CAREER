@@ -184,10 +184,14 @@ export default function App() {
             <main className="flex-1 overflow-y-auto p-4 sm:p-6 pb-20 lg:pb-6">
               <Routes>
                 <Route element={<MainLayout />}>
-                  {isWorking && <Route path="/" element={<HomePage />} />}
                   <Route path="/403" element={<Page403 />} />
                   <Route path="/login" element={<LoginPage />} />
-
+                  <Route path="/" element={
+                    <ProtectedRoute
+                      isAdmin={false}
+                    >
+                      <HomePage />
+                    </ProtectedRoute>} />
                   <Route path="/ingredients" element={
                     <ProtectedRoute
                       isAdmin={true}
@@ -239,11 +243,11 @@ export default function App() {
                   <Route path="/orders" element={
                     <ProtectedRoute isAdmin={false}>
                       <OrdersPage />
-                    </ProtectedRoute>}/>
+                    </ProtectedRoute>} />
                   <Route path="/shift" element={
                     <ProtectedRoute isAdmin={false}>
                       <ShiftPage />
-                    </ProtectedRoute>}/>
+                    </ProtectedRoute>} />
                 </Route>
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>

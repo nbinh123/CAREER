@@ -20,6 +20,10 @@ let tableCache = [];
 // OrderPage.jsx phía khách chỉ hiển thị thực đơn khi active === true.
 // chatEnabled = admin đã "mở" cho khách gửi tin nhắn ở bàn này hay chưa.
 // Mặc định true (chưa từng set trong DB thì vẫn coi là đang mở).
+// guestName/guestPhone = tên + SĐT khách nhập ở GuestInfoPage.jsx (phía
+// khách) trước khi vào thực đơn — admin thấy trong hộp thoại chat, dạng
+// "Bàn 1 - Bình - 0123456789". null nếu khách chưa nhập (hoặc bàn vừa
+// được thanh toán/reset).
 // messages = lịch sử chat theo bàn, dùng chung cho cả widget của khách lẫn
 // hộp thoại chat của admin.
 const toClientTable = (t) => ({
@@ -31,6 +35,8 @@ const toClientTable = (t) => ({
     pendingItems: t.pendingItems || [],
     active: !!t.active,
     chatEnabled: t.chatEnabled !== false,
+    guestName: t.guestName || null,
+    guestPhone: t.guestPhone || null,
     messages: (t.messages || []).map((m) => ({
         id: m._id ? String(m._id) : undefined,
         from: m.from,
@@ -54,6 +60,8 @@ async function ensureTablesSeeded() {
         pendingItems: [],
         active: false, // mặc định khoá, admin phải chủ động bật cho khách gọi món
         chatEnabled: true, // mặc định mở, admin có thể tắt nếu cần
+        guestName: null,
+        guestPhone: null,
         messages: [],
     }));
 
@@ -168,14 +176,24 @@ function initSocket(server) {
         });
 
         // ── 5. Thanh toán thành công → xoá giỏ, reset bàn về empty ────────
-        // Lưu ý: reset KHÔNG đụng tới "active"/"chatEnabled" và "messages" —
-        // các thiết lập bật/tắt vẫn giữ nguyên qua các lượt khách, chỉ đơn
-        // hàng mới bị xoá.
+        // Lưu ý: reset KHÔNG đụng tới "active"/"chatEnabled" — các thiết lập
+        // bật/tắt vẫn giữ nguyên qua các lượt khách. "messages" VÀ
+        // "guestName"/"guestPhone" thì bị xoá cùng nhau, vì khách tiếp theo
+        // ngồi vào bàn là một người khác — không được giữ tên/SĐT hay lịch
+        // sử chat của khách trước.
         socket.on("checkout_table", async ({ tableId }) => {
             try {
                 const updated = await Table.findOneAndUpdate(
                     { number: tableId },
-                    { status: "empty", since: null, items: [], pendingItems: [], messages: [] },
+                    {
+                        status: "empty",
+                        since: null,
+                        items: [],
+                        pendingItems: [],
+                        messages: [],
+                        guestName: null,
+                        guestPhone: null,
+                    },
                     { new: true }
                 );
                 if (!updated) return;
@@ -421,6 +439,38 @@ function initSocket(server) {
                 io.to("admin_room").emit("tables_state", tableCache);
             } catch (err) {
                 console.error("[socket] toggle_table_chat lỗi:", err.message);
+            }
+        });
+
+        // ── 9c. Khách gửi tên + SĐT (từ GuestInfoPage.jsx phía khách) ──────
+        // Validate lại ở server (không chỉ tin client): tên không rỗng, SĐT
+        // đúng 10 chữ số. Lưu vào đúng bàn để admin thấy tên/SĐT ngay trong
+        // hộp thoại chat, kể cả khi admin mới join sau (join_admin đọc lại
+        // từ DB qua tableCache).
+        socket.on("set_guest_info", async ({ tableId, name, phone }) => {
+            try {
+                if (tableId == null) return;
+
+                const cleanName = (name || "").trim();
+                const cleanPhone = (phone || "").trim();
+                if (!cleanName || !/^[0-9]{10}$/.test(cleanPhone)) return;
+
+                const updated = await Table.findOneAndUpdate(
+                    { number: tableId },
+                    { guestName: cleanName, guestPhone: cleanPhone },
+                    { new: true }
+                );
+                if (!updated) return;
+
+                const clientTable = toClientTable(updated);
+                const idx = tableCache.findIndex((t) => t.id === tableId);
+                if (idx === -1) tableCache.push(clientTable);
+                else tableCache[idx] = clientTable;
+
+                io.to(`table:${tableId}`).emit("tables_state", [clientTable]);
+                io.to("admin_room").emit("tables_state", tableCache);
+            } catch (err) {
+                console.error("[socket] set_guest_info lỗi:", err.message);
             }
         });
 

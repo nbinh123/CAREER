@@ -1,6 +1,7 @@
 import React from "react";
 import { GlobalProvider } from "./context/GlobalContext";
 import { TableProvider, useTable } from "./context/TableContext";
+import { GuestProvider } from "./context/GuestContext";
 import { CartProvider } from "./context/CartContext";
 import { SocketProvider } from "./context/SocketContext";
 import Header from "./layout/header/Header";
@@ -33,11 +34,13 @@ export default function App() {
   return (
     <GlobalProvider>
       <TableProvider>
-        <CartProvider>
-          <SocketProvider>
-            <AppLayout />
-          </SocketProvider>
-        </CartProvider>
+        <GuestProvider>
+          <CartProvider>
+            <SocketProvider>
+              <AppLayout />
+            </SocketProvider>
+          </CartProvider>
+        </GuestProvider>
       </TableProvider>
     </GlobalProvider>
   );

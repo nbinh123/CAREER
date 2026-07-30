@@ -24,6 +24,8 @@ const mkEmptyTable = (id) => ({
     pendingItems: [],
     active: false, // mặc định khoá gọi món cho tới khi admin bật, khớp default ở DB
     chatEnabled: true, // mặc định mở tin nhắn, khớp default ở DB
+    guestName: null, // tên khách nhập ở GuestInfoPage.jsx (phía khách) trước khi gọi món
+    guestPhone: null, // SĐT khách, đủ 10 chữ số — hiện cùng tên trong hộp thoại chat
     messages: [],
 });
 
@@ -96,12 +98,15 @@ export default function OrdersPage() {
 
         socket.on("disconnect", () => setConnected(false));
 
-        // Nhận toàn bộ state bàn từ server (đã gồm cả pendingItems, active, chatEnabled, messages)
+        // Nhận toàn bộ state bàn từ server (đã gồm cả pendingItems, active, chatEnabled,
+        // guestName, guestPhone, messages)
         socket.on("tables_state", (serverTables) => {
             setTables(serverTables.map((t) => ({
                 ...t,
                 active: t.active ?? false,
                 chatEnabled: t.chatEnabled !== false,
+                guestName: t.guestName || null,
+                guestPhone: t.guestPhone || null,
                 since: t.since ? new Date(t.since) : null,
                 items: t.items || [],
                 pendingItems: t.pendingItems || [],
@@ -158,6 +163,13 @@ export default function OrdersPage() {
     const subtotal = activeTable?.items.reduce((s, i) => s + i.unitPrice * i.quantity, 0) ?? 0;
     const pendingSubtotal = activeTable?.pendingItems.reduce((s, i) => s + i.unitPrice * i.quantity, 0) ?? 0;
     const occupiedCount = tables.filter((t) => t.status === "occupied").length;
+
+    // Tiêu đề hộp thoại chat: "Bàn 1 - Bình - 0123456789" nếu khách đã nhập
+    // tên/SĐT ở GuestInfoPage.jsx, hoặc chỉ "Bàn 1" nếu chưa có (bàn vừa mở
+    // lại sau thanh toán, khách chưa kịp nhập).
+    const chatModalTitle = chatTable
+        ? [chatTable.name, chatTable.guestName, chatTable.guestPhone].filter(Boolean).join(" - ")
+        : "";
 
     // Tự cuộn xuống mỗi khi có tin nhắn mới trong bàn đang mở chat
     useEffect(() => {
@@ -566,6 +578,9 @@ export default function OrdersPage() {
                                             )}
                                             <div className={`text-3xl mb-1.5 ${t.status === "empty" ? "opacity-25" : ""}`}>🪑</div>
                                             <p className="font-bold text-sm text-gray-700">{t.name}</p>
+                                            {t.guestName && (
+                                                <p className="text-[10px] text-gray-400 truncate">{t.guestName}</p>
+                                            )}
                                             {t.status === "occupied" ? (
                                                 <div className="mt-1">
                                                     <p className="text-xs font-bold text-orange-600">{t.items.reduce((s, i) => s + i.quantity, 0)} món</p>
@@ -661,9 +676,16 @@ export default function OrdersPage() {
                         {activeTable ? (
                             <>
                                 <div className="px-4 py-3.5 border-b border-gray-100 flex items-center justify-between">
-                                    <h3 className="font-bold text-gray-800">{activeTable.name}</h3>
+                                    <div className="min-w-0">
+                                        <h3 className="font-bold text-gray-800">{activeTable.name}</h3>
+                                        {(activeTable.guestName || activeTable.guestPhone) && (
+                                            <p className="text-xs text-gray-400 truncate">
+                                                {[activeTable.guestName, activeTable.guestPhone].filter(Boolean).join(" - ")}
+                                            </p>
+                                        )}
+                                    </div>
                                     <button onClick={() => setSelectedId(null)}
-                                        className="text-gray-400 hover:text-gray-600 w-7 h-7 rounded-lg hover:bg-gray-100 flex items-center justify-center">
+                                        className="text-gray-400 hover:text-gray-600 w-7 h-7 rounded-lg hover:bg-gray-100 flex items-center justify-center shrink-0">
                                         <X size={16} />
                                     </button>
                                 </div>
@@ -890,7 +912,7 @@ export default function OrdersPage() {
             </Modal>
 
             {/* ── Modal chat theo bàn ── */}
-            <Modal open={chatOpenTableId != null} onClose={closeChat} title={`Chat — ${chatTable?.name || ""}`}>
+            <Modal open={chatOpenTableId != null} onClose={closeChat} title={chatModalTitle}>
                 {chatTable && (
                     <div className="flex flex-col" style={{ height: 420 }}>
                         {/* Thanh hành động — nút xoá lịch sử */}

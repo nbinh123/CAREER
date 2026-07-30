@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { io } from "socket.io-client";
 import { useTable } from "./TableContext";
+import { useGuest } from "./GuestContext";
 
 const SocketContext = createContext(null);
 
@@ -41,6 +42,7 @@ const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || "http://localhost:5000";
  */
 export function SocketProvider({ children }) {
   const { table } = useTable();
+  const { clearGuest } = useGuest();
   const socketRef = useRef(null);
   const [connected, setConnected] = useState(false);
   const [stateReceived, setStateReceived] = useState(false);
@@ -114,13 +116,16 @@ export function SocketProvider({ children }) {
     socket.on("chat_cleared", () => {
       chatHistoryRef.current = [];
       chatResetListeners.current.forEach((cb) => cb());
+      // Bàn vừa được admin thanh toán/reset -> khách mới sẽ ngồi vào, bắt
+      // nhập lại tên/SĐT thay vì giữ nguyên thông tin của khách trước.
+      clearGuest();
     });
 
     return () => {
       socket.disconnect();
       socketRef.current = null;
     };
-  }, [table?.tableId]);
+  }, [table?.tableId, clearGuest]);
 
   // items: mảng cart context [{ id (foodId), qty }]
   const sendOrder = useCallback(
@@ -133,6 +138,20 @@ export function SocketProvider({ children }) {
         items: items.map((i) => ({ foodId: i.id, quantity: i.qty })),
       });
       return Promise.resolve({ ok: true });
+    },
+    [table?.tableId]
+  );
+
+  // Gửi tên + SĐT khách vừa nhập ở GuestInfoPage lên server, để lưu vào
+  // đúng bàn (DB) và admin thấy được ngay trong hộp thoại chat của bàn này.
+  const sendGuestInfo = useCallback(
+    (name, phone) => {
+      if (!socketRef.current || !table?.tableId) return;
+      socketRef.current.emit("set_guest_info", {
+        tableId: Number(table.tableId),
+        name,
+        phone,
+      });
     },
     [table?.tableId]
   );
@@ -183,10 +202,11 @@ export function SocketProvider({ children }) {
       chatEnabled: tableState?.chatEnabled !== false,
       sendOrder,
       sendChatMessage,
+      sendGuestInfo,
       onChatMessage,
       onChatReset,
     }),
-    [connected, stateReceived, tableState, sendOrder, sendChatMessage, onChatMessage, onChatReset]
+    [connected, stateReceived, tableState, sendOrder, sendChatMessage, sendGuestInfo, onChatMessage, onChatReset]
   );
 
   return <SocketContext.Provider value={value}>{children}</SocketContext.Provider>;

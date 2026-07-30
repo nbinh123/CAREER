@@ -10,10 +10,8 @@ const API_BASE = `${API_URL}/api`;
 
 const http = axios.create({ baseURL: API_BASE, withCredentials: true });
 http.interceptors.request.use((c) => {
-    // const t = localStorage.getItem('token');
     const token =
         useAuthZustand.getState().accessToken;
-    // if (t) c.headers.Authorization = `Bearer ${t}`;
     if (token) c.headers.Authorization = `Bearer ${token}`
     return c;
 });
@@ -25,20 +23,32 @@ const txService = {
 };
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-const EXPORT_REASONS = [
-    { value: 'Sử dụng để chế biến món ăn', icon: '🍳' },
-    { value: 'Hư hỏng / hết hạn sử dụng', icon: '🗑️' },
-    { value: 'Trả lại nhà cung cấp', icon: '↩️' },
-    { value: 'Kiểm kê điều chỉnh tồn kho', icon: '📋' },
-    { value: 'Tặng / cho nhân viên', icon: '🎁' },
-    { value: 'Thất thoát / mất mát', icon: '⚠️' },
-    { value: 'Khác', icon: '✏️' },
+// Trang này chỉ dùng để ghi nhận nguyên liệu hư hỏng/hao hụt (không còn là
+// "xuất kho" nói chung), nên thu gọn lý do xuống đúng phạm vi đó.
+const DAMAGE_REASONS = [
+    'Hết hạn sử dụng',
+    'Hư hỏng do bảo quản không đúng cách',
+    'Hư hỏng khi vận chuyển / nhập hàng',
+    'Thất thoát / mất mát',
+    'Khác',
 ];
 
 const fmt = {
     money: (n) => n ? Number(n).toLocaleString('vi-VN') + 'đ' : '—',
     date: (d) => new Date(d).toLocaleString('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }),
     num: (n) => Number(n).toLocaleString('vi-VN'),
+};
+
+// Mặc định lọc theo tháng hiện tại: ngày 1 → ngày cuối tháng.
+// Dùng getFullYear/getMonth/getDate (giờ local) thay vì toISOString(),
+// vì toISOString() quy đổi sang UTC và có thể bị lùi 1 ngày ở múi giờ VN (+7).
+const pad2 = (n) => String(n).padStart(2, '0');
+const toISODate = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+const currentMonthRange = () => {
+    const now = new Date();
+    const first = new Date(now.getFullYear(), now.getMonth(), 1);
+    const last = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    return { fromDate: toISODate(first), toDate: toISODate(last) };
 };
 
 // ─── CSS injected once ────────────────────────────────────────────────────────
@@ -114,7 +124,6 @@ body { font-family: var(--font); background: var(--bg); color: var(--text-1); }
 .stat-card.amber::before { background:var(--amber); }
 .stat-card.blue::before  { background:var(--blue); }
 .stat-card.red::before   { background:var(--red); }
-.stat-icon  { font-size:22px; margin-bottom:10px; display:block; }
 .stat-label { font-size:12px; font-weight:600; color:var(--text-3); text-transform:uppercase; letter-spacing:.6px; margin-bottom:6px; }
 .stat-value { font-size:24px; font-weight:800; letter-spacing:-1px; font-variant-numeric:tabular-nums; }
 .stat-value.green { color:var(--green); }
@@ -255,10 +264,9 @@ body { font-family: var(--font); background: var(--bg); color: var(--text-1); }
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
-function StatCard({ label, value, sub, icon, color, delay = 0 }) {
+function StatCard({ label, value, sub, color, delay = 0 }) {
     return (
         <div className={`stat-card ${color}`} style={{ animationDelay: `${delay}ms` }}>
-            <span className="stat-icon">{icon}</span>
             <div className="stat-label">{label}</div>
             <div className={`stat-value ${color}`}>{value}</div>
             {sub && <div className="stat-sub">{sub}</div>}
@@ -289,6 +297,8 @@ function Pagination({ page, totalPages, onChange }) {
     );
 }
 
+// Bảng lịch sử giao dịch — phần duy nhất trong trang này giữ lại icon
+// (badge ↑/↓, nút xem hoá đơn, icon trạng thái rỗng), theo đúng yêu cầu.
 function TransactionTable({ rows, loading, onViewImage }) {
     if (loading) {
         return (
@@ -336,7 +346,7 @@ function TransactionTable({ rows, loading, onViewImage }) {
                                 </td>
                                 <td>
                                     <span className={`badge ${imp ? 'badge-import' : 'badge-export'}`}>
-                                        {imp ? '↑ Nhập' : '↓ Xuất'}
+                                        {imp ? '↑ Nhập' : '↓ Hư hỏng'}
                                     </span>
                                 </td>
                                 <td className="right">
@@ -494,11 +504,11 @@ function ImportModal({ open, onClose, onSuccess, ingredients }) {
         <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
             <div className="modal-box">
                 <div className="modal-head">
-                    <span className="modal-title">📥 Nhập kho</span>
+                    <span className="modal-title">Nhập kho</span>
                     <button className="modal-close" onClick={onClose}>✕</button>
                 </div>
                 <div className="modal-body">
-                    {error && <div className="alert alert-error">⚠️ {error}</div>}
+                    {error && <div className="alert alert-error">{error}</div>}
 
                     <div className="form-group">
                         <label className="form-label">Nguyên liệu <span className="required">*</span></label>
@@ -533,7 +543,7 @@ function ImportModal({ open, onClose, onSuccess, ingredients }) {
 
                     {amount > 0 && (
                         <div className="amount-calc">
-                            💰 Thành tiền ≈ {fmt.money(amount)}
+                            Thành tiền ≈ {fmt.money(amount)}
                         </div>
                     )}
 
@@ -542,10 +552,7 @@ function ImportModal({ open, onClose, onSuccess, ingredients }) {
                         <div className="upload-zone" onClick={() => fileRef.current.click()}>
                             {preview
                                 ? <img src={preview} alt="preview" className="upload-preview" />
-                                : <>
-                                    <span style={{ fontSize: 22 }}>📎</span>
-                                    <span className="upload-zone-text">Click để tải ảnh hóa đơn</span>
-                                </>}
+                                : <span className="upload-zone-text">Click để tải ảnh hóa đơn</span>}
                         </div>
                         <input ref={fileRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={onFile} />
                     </div>
@@ -563,7 +570,7 @@ function ImportModal({ open, onClose, onSuccess, ingredients }) {
                 <div className="modal-foot">
                     <button className="btn btn-ghost" onClick={onClose} disabled={loading}>Hủy</button>
                     <button className="btn btn-primary" onClick={submit} disabled={loading}>
-                        {loading ? '⏳ Đang lưu...' : '✅ Xác nhận nhập kho'}
+                        {loading ? 'Đang lưu...' : 'Xác nhận nhập kho'}
                     </button>
                 </div>
             </div>
@@ -590,7 +597,7 @@ function ExportModal({ open, onClose, onSuccess, ingredients }) {
         const qty = parseFloat(form.quantity);
         if (!qty || qty <= 0) return 'Số lượng phải lớn hơn 0';
         if (ing && qty > ing.quantity) return `Tồn kho không đủ — hiện có ${fmt.num(ing.quantity)} ${ing.smallUnit}`;
-        if (!form.reason) return 'Vui lòng chọn lý do xuất kho';
+        if (!form.reason) return 'Vui lòng chọn lý do hư hỏng';
         if (isOther && !form.customNote.trim()) return 'Vui lòng nhập lý do cụ thể';
         return null;
     };
@@ -618,15 +625,15 @@ function ExportModal({ open, onClose, onSuccess, ingredients }) {
         <div className="modal-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
             <div className="modal-box tall">
                 <div className="modal-head">
-                    <span className="modal-title">📤 Xuất kho</span>
+                    <span className="modal-title">Ghi nhận nguyên liệu hư hỏng</span>
                     <button className="modal-close" onClick={onClose}>✕</button>
                 </div>
                 <div className="modal-body">
-                    {error && <div className="alert alert-error">⚠️ {error}</div>}
+                    {error && <div className="alert alert-error">{error}</div>}
                     {confirmed && !error && (
                         <div className="alert alert-warn">
-                            ⚠️ Xác nhận xuất <strong>{form.quantity} {ing?.smallUnit}</strong> của <strong>{ing?.ingredientName}</strong>?
-                            Nhấn "<strong>Xác nhận xuất kho</strong>" lần nữa để hoàn tất.
+                            Xác nhận ghi nhận <strong>{form.quantity} {ing?.smallUnit}</strong> hư hỏng của <strong>{ing?.ingredientName}</strong>?
+                            Nhấn "<strong>Xác nhận ghi nhận</strong>" lần nữa để hoàn tất.
                         </div>
                     )}
 
@@ -663,23 +670,22 @@ function ExportModal({ open, onClose, onSuccess, ingredients }) {
                         <input
                             className="form-input"
                             type="number" min="0" step="0.01"
-                            placeholder="Nhập số lượng xuất..."
+                            placeholder="Nhập số lượng hư hỏng..."
                             value={form.quantity}
                             onChange={(e) => { setForm({ ...form, quantity: e.target.value }); setConfirmed(false); }}
                         />
                     </div>
 
                     <div className="form-group">
-                        <label className="form-label">Lý do xuất kho <span className="required">*</span></label>
+                        <label className="form-label">Lý do hư hỏng <span className="required">*</span></label>
                         <div className="reason-list">
-                            {EXPORT_REASONS.map(({ value, icon }) => (
+                            {DAMAGE_REASONS.map((value) => (
                                 <div
                                     key={value}
                                     className={`reason-item${form.reason === value ? ' active' : ''}`}
                                     onClick={() => { setForm({ ...form, reason: value, customNote: '' }); setConfirmed(false); }}
                                 >
                                     <div className="reason-radio" />
-                                    <span style={{ fontSize: 16 }}>{icon}</span>
                                     <span className="reason-text">{value}</span>
                                 </div>
                             ))}
@@ -691,7 +697,7 @@ function ExportModal({ open, onClose, onSuccess, ingredients }) {
                             <label className="form-label">Lý do cụ thể <span className="required">*</span></label>
                             <textarea
                                 className="form-input form-textarea"
-                                placeholder="Nhập lý do xuất kho..."
+                                placeholder="Nhập lý do hư hỏng..."
                                 value={form.customNote}
                                 onChange={(e) => setForm({ ...form, customNote: e.target.value })}
                             />
@@ -701,7 +707,7 @@ function ExportModal({ open, onClose, onSuccess, ingredients }) {
                 <div className="modal-foot">
                     <button className="btn btn-ghost" onClick={onClose} disabled={loading}>Hủy</button>
                     <button className="btn btn-danger" onClick={submit} disabled={loading}>
-                        {loading ? '⏳ Đang xử lý...' : confirmed ? '⚠️ Xác nhận xuất kho' : '📤 Xuất kho'}
+                        {loading ? 'Đang xử lý...' : confirmed ? 'Xác nhận ghi nhận' : 'Ghi nhận hư hỏng'}
                     </button>
                 </div>
             </div>
@@ -722,7 +728,8 @@ export default function StoragePage() {
     const [showImport, setShowImport] = useState(false);
     const [showExport, setShowExport] = useState(false);
 
-    const [filters, setFilters] = useState({ search: '', type: '', fromDate: '', toDate: '' });
+    // Mặc định lọc theo tháng hiện tại (ngày 1 → ngày cuối tháng)
+    const [filters, setFilters] = useState(() => ({ search: '', type: '', ...currentMonthRange() }));
     const [debSearch, setDebSearch] = useState('');
 
     // Inject CSS once
@@ -763,7 +770,9 @@ export default function StoragePage() {
     useEffect(() => { load(1); }, [load]);
 
     const set = (key, val) => setFilters((f) => ({ ...f, [key]: val }));
-    const reset = () => setFilters({ search: '', type: '', fromDate: '', toDate: '' });
+    // "Đặt lại" đưa về mặc định tháng hiện tại (không xoá trắng khung thời gian,
+    // vì mặc định của trang vốn đã có ngày).
+    const reset = () => setFilters({ search: '', type: '', ...currentMonthRange() });
 
     return (
         <div className="sp-page">
@@ -790,27 +799,27 @@ export default function StoragePage() {
             <div className="sp-header">
                 <div>
                     <div className="sp-title">Quản lý Kho Nguyên Liệu</div>
-                    <div className="sp-sub">Theo dõi lịch sử nhập xuất kho và tồn kho thực tế</div>
+                    <div className="sp-sub">Theo dõi nhập kho, hao hụt và chi phí nguyên liệu</div>
                 </div>
                 <div className="sp-actions">
-                    <button className="btn btn-import" onClick={() => setShowImport(true)}>↑ Nhập kho</button>
-                    <button className="btn btn-export" onClick={() => setShowExport(true)}>↓ Xuất kho</button>
+                    <button className="btn btn-import" onClick={() => setShowImport(true)}>Nhập kho</button>
+                    <button className="btn btn-export" onClick={() => setShowExport(true)}>Nguyên liệu hư hỏng</button>
                 </div>
             </div>
 
             {/* Stats */}
             <div className="sp-stats">
-                <StatCard delay={0} color="green" icon="↑" label="Số lần nhập kho" value={fmt.num(stats.importCount)} sub="Tổng tất cả thời gian" />
-                <StatCard delay={60} color="amber" icon="↓" label="Số lần xuất kho" value={fmt.num(stats.exportCount)} sub="Tổng tất cả thời gian" />
-                <StatCard delay={120} color="blue" icon="💰" label="Tổng giá trị nhập" value={fmt.money(stats.importTotal)} sub="Chi phí nhập hàng" />
-                <StatCard delay={180} color="red" icon="📊" label="Tổng giá trị xuất" value={fmt.money(stats.exportTotal)} sub="Giá trị hàng xuất" />
+                <StatCard delay={0} color="green" label="Số lần nhập kho" value={fmt.num(stats.importCount)} sub="Trong khoảng thời gian đã lọc" />
+                <StatCard delay={60} color="amber" label="Số lần ghi nhận hư hỏng" value={fmt.num(stats.exportCount)} sub="Trong khoảng thời gian đã lọc" />
+                <StatCard delay={120} color="blue" label="Tổng giá trị nhập" value={fmt.money(stats.importTotal)} sub="Chi phí nhập hàng" />
+                <StatCard delay={180} color="red" label="Tổng giá trị hao hụt" value={fmt.money(stats.exportTotal)} sub="Tính theo giá nhập" />
             </div>
 
             {/* Filter */}
             <div className="sp-filter">
                 <div className="filter-head">
-                    <span className="filter-title">🔍 Bộ lọc</span>
-                    <button className="btn btn-ghost btn-sm" onClick={reset}>↺ Đặt lại</button>
+                    <span className="filter-title">Bộ lọc</span>
+                    <button className="btn btn-ghost btn-sm" onClick={reset}>Đặt lại</button>
                 </div>
                 <div className="filter-grid">
                     <div className="filter-item">
@@ -826,8 +835,8 @@ export default function StoragePage() {
                         <label className="filter-label">Loại giao dịch</label>
                         <select className="filter-input form-select" value={filters.type} onChange={(e) => set('type', e.target.value)}>
                             <option value="">Tất cả</option>
-                            <option value="IMPORT">↑ Nhập kho</option>
-                            <option value="EXPORT">↓ Xuất kho</option>
+                            <option value="IMPORT">Nhập kho</option>
+                            <option value="EXPORT">Nguyên liệu hư hỏng</option>
                         </select>
                     </div>
                     <div className="filter-item">
@@ -842,7 +851,7 @@ export default function StoragePage() {
             </div>
 
             {/* Error */}
-            {error && <div className="alert alert-error" style={{ marginBottom: 16 }}>⚠️ {error}</div>}
+            {error && <div className="alert alert-error" style={{ marginBottom: 16 }}>{error}</div>}
 
             {/* Table */}
             <div className="sp-table-card">

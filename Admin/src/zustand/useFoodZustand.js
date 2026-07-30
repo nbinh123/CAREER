@@ -192,20 +192,14 @@ const useFoodZustand = create((set, get) => ({
   },
   refreshCosts: async () => {
     set({ loading: true, error: null });
-
-    const res = await FoodService.refreshIngredientPrices();
-
-    if (!res.success) {
-      set({
-        error: res.message || "Không thể cập nhật giá nguyên liệu",
-        loading: false,
-      });
-      throw new Error(res.message || "Refresh failed");
+    try {
+      const { updatedCount, foods } = await FoodService.refreshIngredientPrices();
+      set({ foods, loading: false });
+      return { updatedCount };
+    } catch (err) {
+      set({ error: err.message, loading: false });
+      throw err;
     }
-
-    const { updatedCount, foods } = res.data; // res.data = { message, updatedCount, foods }
-    set({ foods, loading: false });
-    return { updatedCount };
   },
 
   clearError: () => set({ error: null }),

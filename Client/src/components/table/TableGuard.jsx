@@ -2,13 +2,16 @@ import React from "react";
 import { Outlet } from "react-router-dom";
 import { useTable } from "../../context/TableContext";
 import { useSocket } from "../../context/SocketContext";
+import { useGuest } from "../../context/GuestContext";
 import Loading from "../common/Loading";
 import InvalidTablePage from "./InvalidTablePage";
 import TableWaitingPage from "./TableWaitingPage";
+import GuestInfoPage from "./GuestInfoPage";
 
 export default function TableGuard() {
   const { status } = useTable();
   const { connected, stateReceived, tableKnown, tableActive } = useSocket();
+  const { hasGuest } = useGuest();
 
   // Bước 1: chưa xác định được tableId từ URL/sessionStorage
   if (status === "verifying") {
@@ -38,6 +41,14 @@ export default function TableGuard() {
   // bị sửa tay thành số bàn không tồn tại)
   if (!tableKnown) {
     return <InvalidTablePage />;
+  }
+
+  // Bước 3: bàn có thật, nhưng khách chưa nhập tên + SĐT — bắt nhập trước
+  // khi vào thực đơn, để admin biết đang phục vụ/chat với ai ở bàn này.
+  // Chỉ hỏi 1 lần mỗi phiên (lưu ở sessionStorage qua GuestContext), và sẽ
+  // hỏi lại nếu bàn vừa được thanh toán (khách mới ngồi vào).
+  if (!hasGuest) {
+    return <GuestInfoPage />;
   }
 
   // Bàn có thật nhưng admin chưa bật cho gọi món — chờ ở đây, tự động vào
