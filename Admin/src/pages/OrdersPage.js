@@ -90,7 +90,7 @@ export default function OrdersPage() {
             reconnectionDelay: 1500,
         });
         socketRef.current = socket;
-
+        const timers = tooltipTimers.current;
         socket.on("connect", () => {
             setConnected(true);
             socket.emit("join_admin");
@@ -140,7 +140,7 @@ export default function OrdersPage() {
 
         return () => {
             socket.disconnect();
-            Object.values(tooltipTimers.current).forEach(clearTimeout);
+            Object.values(timers).forEach(clearTimeout);
         };
     }, []);
 
