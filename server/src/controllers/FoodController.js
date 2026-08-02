@@ -4,21 +4,14 @@ const Ingredient = require("../models/IngredientModel");
 const mongoose = require("mongoose");
 const multer = require("multer");
 const path = require("path");
-const fs = require("fs");
-const { emitSafe } = require("../utils/emitSafe"); // ❗ MỚI — thay cho req.io?.emit
+const { emitSafe } = require("../utils/emitSafe");
+const cloudinary = require("../config/cloudinary");
+const uploadBufferToCloudinary = require("../utils/uploadToCloudinary");
 
 // ─── Multer ───────────────────────────────────────────────────────────────────
-const storage = multer.diskStorage({
-    destination: (req, file, cb) => {
-        const dir = "uploads/foods";
-        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-        cb(null, dir);
-    },
-    filename: (req, file, cb) => {
-        const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
-        cb(null, `${unique}${path.extname(file.originalname)}`);
-    },
-});
+// ❗ ĐỔI: diskStorage -> memoryStorage. Không ghi file ra ổ đĩa nữa, buffer
+// nhận từ multer sẽ được đẩy thẳng lên Cloudinary trong createFood/updateFood.
+const storage = multer.memoryStorage();
 const fileFilter = (req, file, cb) => {
     /jpeg|jpg|png|webp/.test(path.extname(file.originalname).toLowerCase())
         ? cb(null, true)
@@ -27,7 +20,6 @@ const fileFilter = (req, file, cb) => {
 const upload = multer({ storage, fileFilter, limits: { fileSize: 5 * 1024 * 1024 } });
 
 // ─── Helper: populate thống nhất ─────────────────────────────────────────────
-// Populate categoryId để các virtual field (profitMargin, discountedPrice…) hoạt động
 const POPULATE_CATEGORY = { path: "categoryId", select: "name percentageDiscount fixedDiscount" };
 
 // ─── Controller ───────────────────────────────────────────────────────────────
@@ -72,14 +64,20 @@ class FoodController {
                 imageUrl: bodyImageUrl,
                 ingredients,
             } = req.body;
-            console.log(req.body);
+
             if (!foodName?.trim()) return res.status(400).json({ error: "foodName là bắt buộc" });
             if (!categoryId) return res.status(400).json({ error: "categoryId là bắt buộc" });
             if (!originalPrice) return res.status(400).json({ error: "originalPrice là bắt buộc" });
 
-            const imageUrl = req.file
-                ? `${req.protocol}://${req.get("host")}/uploads/foods/${req.file.filename}`
-                : bodyImageUrl || null;
+            let imageUrl = bodyImageUrl || null;
+            let imagePublicId = null;
+
+            // Có file ảnh gửi kèm (multipart, field "image") -> đẩy lên Cloudinary
+            if (req.file) {
+                const uploaded = await uploadBufferToCloudinary(req.file.buffer);
+                imageUrl = uploaded.secure_url;
+                imagePublicId = uploaded.public_id;
+            }
 
             const newFood = await Food.create({
                 foodName: foodName.trim(),
@@ -90,12 +88,12 @@ class FoodController {
                 isAvailable: isAvailable !== "false" && Boolean(isAvailable ?? true),
                 emoji: emoji || "🍜",
                 imageUrl,
+                imagePublicId,
                 ingredients: ingredients
                     ? (typeof ingredients === "string" ? JSON.parse(ingredients) : ingredients)
                     : [],
             });
 
-            // Populate để trả về đầy đủ virtual fields
             await newFood.populate(POPULATE_CATEGORY);
 
             emitSafe("food_created", newFood);
@@ -110,6 +108,11 @@ class FoodController {
     async updateFood(req, res) {
         try {
             const { id } = req.params;
+            console.log("=== updateFood debug ===");
+            console.log("Content-Type header nhận được:", req.headers["content-type"]);
+            console.log("req.file:", req.file);
+            console.log("req.body keys:", Object.keys(req.body));
+            console.log("=========================");
             const updateData = { ...req.body };
 
             // Ép kiểu số
@@ -122,11 +125,15 @@ class FoodController {
             if (typeof updateData.ingredients === "string")
                 updateData.ingredients = JSON.parse(updateData.ingredients);
 
-            // Xử lý ảnh mới
+            // Có ảnh mới gửi kèm -> xoá ảnh cũ trên Cloudinary (nếu có publicId
+            // được lưu từ trước) rồi upload ảnh mới, thay cả imageUrl + imagePublicId
             if (req.file) {
                 const old = await Food.findById(id);
-                if (old?.imageUrl) _deleteLocalFile(old.imageUrl, req);
-                updateData.imageUrl = `${req.protocol}://${req.get("host")}/uploads/foods/${req.file.filename}`;
+                if (old?.imagePublicId) await _deleteCloudinaryImage(old.imagePublicId);
+
+                const uploaded = await uploadBufferToCloudinary(req.file.buffer);
+                updateData.imageUrl = uploaded.secure_url;
+                updateData.imagePublicId = uploaded.public_id;
             }
 
             const food = await Food.findByIdAndUpdate(id, updateData, { new: true })
@@ -148,7 +155,7 @@ class FoodController {
             const food = await Food.findByIdAndDelete(req.params.id);
             if (!food) return res.status(404).json({ error: "Không tìm thấy món ăn" });
 
-            if (food.imageUrl) _deleteLocalFile(food.imageUrl, req);
+            if (food.imagePublicId) await _deleteCloudinaryImage(food.imagePublicId);
 
             emitSafe("food_deleted", { id: req.params.id });
             res.json({ message: "Xóa thành công" });
@@ -164,7 +171,7 @@ class FoodController {
             const { name, categoryId } = req.query;
             const filter = {};
             if (name) filter.foodName = { $regex: name, $options: "i" };
-            if (categoryId) filter.categoryId = categoryId;      // ObjectId string
+            if (categoryId) filter.categoryId = categoryId;
 
             const foods = await Food.find(filter)
                 .populate(POPULATE_CATEGORY)
@@ -243,7 +250,6 @@ class FoodController {
                 "id": "6a17c500fa3b7335d6d892ab"
             }];
 
-            // ── Validate input ─────────────────────────────────────────
             if (!Array.isArray(foods) || foods.length === 0) {
                 return res.status(400).json({
                     success: false,
@@ -260,10 +266,8 @@ class FoodController {
                 failedList: [],
             };
 
-            // ── Xử lý từng food ────────────────────────────────────────
             for (const foodData of foods) {
                 try {
-                    // Kiểm tra trùng theo foodName + categoryId
                     const existing = await Food.findOne({
                         foodName: foodData.foodName?.trim(),
                         categoryId: foodData.categoryId?.trim(),
@@ -279,7 +283,6 @@ class FoodController {
                         continue;
                     }
 
-                    // Map ingredients nếu có
                     const ingredients = Array.isArray(foodData.ingredients)
                         ? foodData.ingredients.map((ing) => ({
                             ingredientId: ing.ingredientId,
@@ -290,7 +293,6 @@ class FoodController {
                         }))
                         : [];
 
-                    // Tính costPrice từ ingredients nếu không truyền
                     const computedCostPrice =
                         foodData.costPrice ??
                         ingredients.reduce((sum, ing) => sum + (ing.cost || 0), 0);
@@ -319,7 +321,6 @@ class FoodController {
                 }
             }
 
-            // ── Trả về kết quả tổng hợp ────────────────────────────────
             return res.status(200).json({
                 success: true,
                 message: `Import hoàn tất: ${results.created} thành công, ${results.skipped} bỏ qua, ${results.failed} lỗi.`,
@@ -347,7 +348,6 @@ class FoodController {
                 });
             }
 
-            // Gom hết ingredientId cần tra giá -> 1 query duy nhất
             const ingredientIds = [
                 ...new Set(foods.flatMap(f => f.ingredients.map(i => i.ingredientId.toString()))),
             ];
@@ -362,7 +362,6 @@ class FoodController {
                 const newIngredients = food.ingredients.map(row => {
                     const ing = ingredientMap.get(row.ingredientId.toString());
 
-                    // Nguyên liệu đã bị xoá khỏi kho -> giữ nguyên, không tính lại được
                     if (!ing) return row.toObject();
 
                     const baseQty = ing.quantity > 0 ? ing.quantity : 1;
@@ -376,7 +375,7 @@ class FoodController {
 
                     return {
                         ingredientId: row.ingredientId,
-                        ingredientName: ing.ingredientName, // đồng bộ luôn tên nếu đổi
+                        ingredientName: ing.ingredientName,
                         quantity: row.quantity,
                         unit: row.unit,
                         cost: newCost,
@@ -428,7 +427,7 @@ class FoodController {
             const allowedFields = [
                 'foodName', 'description', 'categoryId', 'ingredients',
                 'costPrice', 'originalPrice', 'aiTrainingWeight',
-                'isAvailable', 'soldCount', 'note', 'emoji', 'imageUrl',
+                'isAvailable', 'soldCount', 'note', 'emoji', 'imageUrl', 'imagePublicId',
             ];
 
             const ops = foods.map((item) => {
@@ -437,8 +436,6 @@ class FoodController {
                     if (item[f] !== undefined) doc[f] = item[f];
                 });
 
-                // Ingredients là subdocument (_id: false trong schema)
-                // nên chỉ cần đảm bảo đúng dạng mảng, không cần xử lý _id con
                 if (doc.ingredients && !Array.isArray(doc.ingredients)) {
                     doc.ingredients = [];
                 }
@@ -478,15 +475,19 @@ class FoodController {
 }
 
 // ─── Helper ───────────────────────────────────────────────────────────────────
-function _deleteLocalFile(imageUrl, req) {
+// ❗ ĐỔI: thay _deleteLocalFile (xoá file trên ổ đĩa) bằng xoá ảnh trên Cloudinary
+// qua public_id đã lưu ở FoodModel.imagePublicId.
+async function _deleteCloudinaryImage(publicId) {
+    if (!publicId) return;
     try {
-        const host = `${req.protocol}://${req.get("host")}/`;
-        if (!imageUrl.startsWith(host)) return;           // URL ngoài → bỏ qua
-        const rel = imageUrl.replace(host, "");
-        const full = path.join(__dirname, "..", rel);
-        if (fs.existsSync(full)) fs.unlinkSync(full);
-    } catch { /* ignore */ }
+        await cloudinary.uploader.destroy(publicId);
+    } catch (err) {
+        // Không throw — ảnh cũ xoá lỗi không nên chặn việc lưu món ăn mới/đã sửa
+        console.error("_deleteCloudinaryImage:", err.message);
+    }
 }
 
-// Export cả controller lẫn multer upload để dùng trong routes
-module.exports = new FoodController
+// Export controller + multer upload để routes dùng: upload.single('image')
+const foodController = new FoodController();
+foodController.upload = upload;
+module.exports = foodController;

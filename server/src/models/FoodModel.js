@@ -9,35 +9,30 @@ const Schema = mongoose.Schema;
 
 const ingredientSchema = new Schema(
     {
-        // Tham chiếu nguyên liệu
         ingredientId: {
             type: Schema.Types.ObjectId,
             ref: "Ingredient",
             required: true,
         },
 
-        // Tên nguyên liệu tại thời điểm tạo món
         ingredientName: {
             type: String,
             required: true,
             trim: true,
         },
 
-        // Số lượng sử dụng
         quantity: {
             type: Number,
             required: true,
             min: 0,
         },
 
-        // Đơn vị
         unit: {
             type: String,
             required: true,
             trim: true,
         },
 
-        // Chi phí nguyên liệu này
         cost: {
             type: Number,
             required: true,
@@ -55,14 +50,12 @@ const ingredientSchema = new Schema(
 
 const foodSchema = new Schema(
     {
-        // Tên món
         foodName: {
             type: String,
             required: [true, "Food name is required"],
             trim: true,
         },
 
-        // Mô tả món ăn
         description: {
             type: String,
             default: "",
@@ -75,13 +68,11 @@ const foodSchema = new Schema(
             trim: true,
         },
 
-        // Danh sách nguyên liệu
         ingredients: {
             type: [ingredientSchema],
             default: [],
         },
 
-        // Giá vốn
         costPrice: {
             type: Number,
             required: true,
@@ -89,16 +80,12 @@ const foodSchema = new Schema(
             default: 0,
         },
 
-        // Giá bán
         originalPrice: {
             type: Number,
             required: true,
             min: 0,
         },
 
-        // Trọng số AI
-        // Dùng để train recommendation
-        // Giá trị từ 0 -> 1
         aiTrainingWeight: {
             type: Number,
             min: 0,
@@ -106,13 +93,11 @@ const foodSchema = new Schema(
             default: 0,
         },
 
-        // Có đang bán không
         isAvailable: {
             type: Boolean,
             default: true,
         },
 
-        // Số lượng đã bán
         soldCount: {
             type: Number,
             default: 0,
@@ -124,11 +109,6 @@ const foodSchema = new Schema(
             trim: true,
         },
 
-        // Emoji đại diện cho món (hiển thị ở trang Order/Bếp phía admin -
-        // OrdersPage.jsx và KitchenPage.jsx đang đọc item.emoji, và
-        // initSocket.js (send_to_kitchen) đã forward field này từ Food
-        // sang pendingItems/items sẵn - trước đây schema chưa có field này
-        // nên luôn rơi về "").
         emoji: {
             type: String,
             default: "",
@@ -136,9 +116,19 @@ const foodSchema = new Schema(
         },
 
         // Ảnh món ăn (hiển thị ở trang Order phía khách - MenuItemCard.jsx /
-        // MenuItemDetailModal.jsx đang đọc item.imageUrl qua FoodThumbnail;
-        // trước đây schema chưa có field này nên luôn rơi về icon fallback).
+        // MenuItemDetailModal.jsx đang đọc item.imageUrl qua FoodThumbnail).
+        // Từ khi chuyển sang Cloudinary, đây là secure_url do Cloudinary trả về.
         imageUrl: {
+            type: String,
+            default: "",
+            trim: true,
+        },
+
+        // ❗ MỚI — public_id Cloudinary tương ứng với imageUrl ở trên. Cần
+        // lưu riêng để FoodController.updateFood/deleteFood xoá đúng ảnh cũ
+        // trên Cloudinary (cloudinary.uploader.destroy(imagePublicId)) mỗi
+        // khi đổi ảnh mới hoặc xoá món, tránh rác ảnh không dùng tới.
+        imagePublicId: {
             type: String,
             default: "",
             trim: true,
@@ -161,19 +151,9 @@ const foodSchema = new Schema(
 // VIRTUAL FIELDS
 // =====================================================
 
-// LỢI NHUẬN GỘP
-// Formula:
-// originalPrice - costPrice
-
 foodSchema.virtual("grossProfit").get(function () {
     return this.originalPrice - this.costPrice;
 });
-
-// =====================================================
-
-// BIÊN LỢI NHUẬN
-// Formula:
-// grossProfit / originalPrice
 
 foodSchema.virtual("profitMargin").get(function () {
     if (this.originalPrice <= 0) {
@@ -183,21 +163,9 @@ foodSchema.virtual("profitMargin").get(function () {
     return this.grossProfit / this.originalPrice;
 });
 
-// =====================================================
-
-// ĐIỂM AI
-// Formula:
-// profitMargin * aiTrainingWeight
-
 foodSchema.virtual("aiScore").get(function () {
     return this.profitMargin * this.aiTrainingWeight;
 });
-
-// =====================================================
-
-// TỶ LỆ COST
-// Formula:
-// costPrice / originalPrice
 
 foodSchema.virtual("costRatio").get(function () {
     if (this.originalPrice <= 0) {
@@ -206,10 +174,6 @@ foodSchema.virtual("costRatio").get(function () {
 
     return this.costPrice / this.originalPrice;
 });
-
-// =====================================================
-
-// TRẠNG THÁI LỢI NHUẬN
 
 foodSchema.virtual("profitStatus").get(function () {
     const margin = this.profitMargin;
@@ -233,8 +197,6 @@ foodSchema.virtual("profitStatus").get(function () {
 // STATIC METHODS
 // =====================================================
 
-// Tổng trọng số AI toàn menu
-
 foodSchema.statics.getTotalAIWeight =
     async function () {
         const result = await this.aggregate([
@@ -250,10 +212,6 @@ foodSchema.statics.getTotalAIWeight =
 
         return result[0]?.totalWeight || 0;
     };
-
-// =====================================================
-
-// Tổng số lượng bán
 
 foodSchema.statics.getTotalSoldCount =
     async function () {
@@ -275,8 +233,6 @@ foodSchema.statics.getTotalSoldCount =
 // INSTANCE METHODS
 // =====================================================
 
-// Trọng số AI tương đối
-
 foodSchema.methods.getRelativeWeight =
     async function () {
         const Food = this.constructor;
@@ -294,10 +250,6 @@ foodSchema.methods.getRelativeWeight =
         );
     };
 
-// =====================================================
-
-// Tỷ lệ bán tương đối
-
 foodSchema.methods.getRelativeSoldScore =
     async function () {
         const Food = this.constructor;
@@ -311,10 +263,6 @@ foodSchema.methods.getRelativeSoldScore =
 
         return this.soldCount / totalSold;
     };
-
-// =====================================================
-
-// Điểm ranking tổng hợp AI
 
 foodSchema.methods.getFinalAIScore =
     async function () {

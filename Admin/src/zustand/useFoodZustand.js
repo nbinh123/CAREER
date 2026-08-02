@@ -116,7 +116,6 @@ const useFoodZustand = create((set, get) => ({
   saveAllChanges: async () => {
     const { pendingChanges } = get();
     if (pendingChanges.size === 0) return;
-
     set({ loading: true, error: null });
 
     const entries = Array.from(pendingChanges.entries()); // [key, entry][]

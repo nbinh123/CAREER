@@ -1,12 +1,6 @@
 import { getData, postData, putData, deleteData, patchData } from "../utils/callAPI";
+import { API_URL } from "../config/api";
 
-/**
- * handleResponse() trong callAPI.js không bao giờ reject —
- * luôn resolve về { success, data, status, message }.
- * unwrap() biến "success: false" thành Promise bị reject thật,
- * để try/catch và Promise.allSettled trong useFoodZustand hoạt
- * động đúng như đã viết (giống IngredientService).
- */
 const unwrap = (res) => {
     if (!res.success) {
         const err = new Error(res.message || "Request thất bại");
@@ -17,22 +11,8 @@ const unwrap = (res) => {
     return res.data;
 };
 
-// Field chỉ tồn tại ở local state (FoodZustand), không được gửi lên server
 const INTERNAL_ONLY_KEYS = new Set(["_id", "id", "__isNew"]);
 
-/**
- * Nếu có imageFile → multipart/form-data; không → JSON.
- * ingredients luôn được serialize thành JSON string khi dùng FormData.
- *
- * Lưu ý:
- *  - `_id`/`id`/`__isNew` là field nội bộ của FoodZustand (id tạm dạng
- *    "temp_..." cho món đang staged, cờ đánh dấu món mới) — không được
- *    lọt vào body: id thật đã nằm trong URL (`/foods/:id`), còn id tạm
- *    sẽ khiến Mongo cast lỗi nếu gửi lên khi tạo mới.
- *  - Không append field "image" cũ (URL string còn sót trong state khi
- *    mở form edit) vào FormData nếu đã có imageFile mới, tránh 2 field
- *    "image" đè nhau (1 string, 1 File) trong cùng multipart request.
- */
 function buildPayload(food, imageFile) {
     const clean = Object.fromEntries(
         Object.entries(food).filter(([k]) => !INTERNAL_ONLY_KEYS.has(k))
@@ -43,48 +23,91 @@ function buildPayload(food, imageFile) {
     const fd = new FormData();
     for (const [k, v] of Object.entries(clean)) {
         if (v == null) continue;
-        if (k === "image") continue; // ảnh mới append riêng bên dưới
+        if (k === "image") continue;
         fd.append(k, k === "ingredients" ? JSON.stringify(v) : v);
     }
     fd.append("image", imageFile);
     return fd;
 }
 
+// ─── Upload ảnh qua fetch thuần ─────────────────────────────────────────────
+// Bypass hẳn axios (kể cả instance riêng lẫn axios.defaults toàn cục) —
+// fetch không có khái niệm default headers dính vào mọi request, nên
+// FormData luôn được gửi đúng multipart/form-data; boundary=... miễn là
+// KHÔNG tự set Content-Type trong headers dưới đây.
+const uploadRaw = async (method, url, formData) => {
+    const token = localStorage.getItem("token");
+    const headers = {};
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+
+    console.log("[uploadRaw] calling fetch:", { method, url: `${API_URL}/api${url}`, headers });
+    console.log("[uploadRaw] formData entries:", [...formData.entries()]);
+
+    let response;
+    try {
+        response = await fetch(`${API_URL}/api${url}`, {
+            method,
+            headers,
+            body: formData,
+        });
+    } catch (networkErr) {
+        console.error("[uploadRaw] fetch network error:", networkErr);
+        throw new Error(networkErr.message || "Lỗi kết nối tới server");
+    }
+
+    console.log("[uploadRaw] response status:", response.status, response.ok);
+
+    let data = null;
+    try {
+        data = await response.json();
+        console.log("[uploadRaw] response data:", data);
+    } catch (parseErr) {
+        console.error("[uploadRaw] failed to parse response json:", parseErr);
+    }
+
+    if (!response.ok) {
+        const err = new Error(data?.message || data?.error || `HTTP ${response.status}`);
+        err.status = response.status;
+        err.data = data;
+        throw err;
+    }
+
+    return data;
+};
+
 const FoodService = {
 
-    // GET /api/foods
     getAllFoods: () =>
         getData({ url: "/foods" }).then(unwrap),
 
-    // GET /api/foods/:id
     getFoodById: (id) =>
         getData({ url: `/foods/${id}` }).then(unwrap),
 
     // POST /api/foods
-    createFood: (food, imageFile = null) =>
-        postData({
-            url: "/foods",
-            data: buildPayload(food, imageFile),
-        }).then(unwrap),
+    createFood: (food, imageFile = null) => {
+        const payload = buildPayload(food, imageFile);
+        if (payload instanceof FormData) {
+            return uploadRaw("POST", "/foods", payload);
+        }
+        return postData({ url: "/foods", data: payload }).then(unwrap);
+    },
 
     // PUT /api/foods/:id
     updateFood: (food, imageFile = null) => {
         const id = food._id ?? food.id;
-        return putData({
-            url: `/foods/${id}`,
-            data: buildPayload(food, imageFile),
-        }).then(unwrap);
+        const payload = buildPayload(food, imageFile);
+        if (payload instanceof FormData) {
+            return uploadRaw("PUT", `/foods/${id}`, payload);
+        }
+        return putData({ url: `/foods/${id}`, data: payload }).then(unwrap);
     },
 
-    // DELETE /api/foods/:id
     deleteFood: (id) =>
         deleteData({ url: `/foods/${id}` }).then(unwrap),
 
-    // GET /api/foods/search?name=...&categoryId=...
     searchFoods: (params = {}) =>
         getData({ url: "/foods/search", params }).then(unwrap),
 
-    // PATCH /api/foods/refresh-cost
     refreshIngredientPrices: () =>
         patchData({ url: "/foods/refresh-cost" }).then(unwrap),
 };

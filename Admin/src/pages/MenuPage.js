@@ -3,6 +3,8 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import Button from "../components/Button";
 import FormInput from "../components/FormInput";
 import Modal from "../components/Modal";
+import ImageUploadField from "../components/ImageUploadField";
+
 import {
   Edit2, Plus, Search, Check, Info, Save, RotateCcw,
   Trash2, X, ImagePlus, ChevronDown, Minus, FolderOpen, RefreshCcw, StickyNote, Upload, Loader2
@@ -10,6 +12,7 @@ import {
 import fmtVND from "../utils/fmtVND";
 import useFoodZustand from "../zustand/useFoodZustand";
 import IngredientService from "../service/IngredientService";
+
 
 import exportJSON from "../utils/exportJSON"
 import { API_URL } from "../config/api";
@@ -89,7 +92,7 @@ function FoodCard({ food, onEdit, onInfo, onRemove, onEditNote, isPending }) {
       ${isPending ? "ring-2 ring-amber-300" : ""}`}>
 
       <div className="relative h-36">
-        <FoodImage src={food.image} name={food.foodName} className="h-36 w-full" />
+        <FoodImage src={food.imageUrl} name={food.foodName} className="h-36 w-full" />
         {!food.isAvailable && (
           <div className="absolute inset-0 bg-gray-200/60 flex items-center justify-center">
             <span className="text-xs font-bold text-gray-500 bg-white rounded-lg px-2 py-1">Tạm nghỉ</span>
@@ -195,7 +198,7 @@ function IngredientPicker({ selectedIngredients, onChange }) {
       ingredientName: ing.ingredientName,
       largeUnit: ing.largeUnit,
       smallUnit: ing.smallUnit,
-      image: ing.image ?? null,
+      image: ing.imageUrl ?? null,
       quantity: 1,            // số lượng đơn vị nhỏ dùng trong món
       unitQuantity: baseQty,  // lưu lại để tính giá đúng khi đổi số lượng
       cost: unitPrice * 1,
@@ -222,10 +225,6 @@ function IngredientPicker({ selectedIngredients, onChange }) {
     onChange(selectedIngredients.filter(r => r.ingredientId !== ingredientId));
 
   const totalCost = selectedIngredients.reduce((s, r) => s + (r.cost || 0), 0);
-
-  useEffect(() => {
-    console.log(selectedIngredients)
-  }, [selectedIngredients])
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between">
@@ -273,8 +272,8 @@ function IngredientPicker({ selectedIngredients, onChange }) {
               {filteredOptions.map(ing => (
                 <button key={ing._id} type="button" onClick={() => addIngredient(ing)}
                   className="w-full flex items-center gap-3 px-3 py-2.5 text-sm hover:bg-green-50 transition-colors text-left">
-                  {ing.image
-                    ? <img src={ing.image} alt="" className="w-7 h-7 rounded-lg object-cover flex-shrink-0" />
+                  {ing.imageUrl
+                    ? <img src={ing.imageUrl} alt="" className="w-7 h-7 rounded-lg object-cover flex-shrink-0" />
                     : <div className="w-7 h-7 rounded-lg bg-gray-100 flex items-center justify-center flex-shrink-0 text-gray-300 text-xs font-bold">{ing.ingredientName?.[0]}</div>
                   }
                   <div className="flex-1 min-w-0">
@@ -293,8 +292,8 @@ function IngredientPicker({ selectedIngredients, onChange }) {
         <div className="space-y-1.5">
           {selectedIngredients.map(row => (
             <div key={row.ingredientId} className="flex items-center gap-2 bg-gray-50 rounded-xl px-3 py-2">
-              {row.image
-                ? <img src={row.image} alt="" className="w-6 h-6 rounded-md object-cover flex-shrink-0" />
+              {row.imageUrl
+                ? <img src={row.imageUrl} alt="" className="w-6 h-6 rounded-md object-cover flex-shrink-0" />
                 : <div className="w-6 h-6 rounded-md bg-gray-200 flex items-center justify-center flex-shrink-0 text-gray-400 text-[10px] font-bold">{row.ingredientName?.[0]}</div>
               }
               <div className="flex-1 min-w-0">
@@ -362,7 +361,7 @@ function InfoModal({ food, open, onClose }) {
   return (
     <Modal open={open} onClose={onClose} title={`Chi tiết — ${food.foodName}`}>
       <div className="mb-4">
-        <FoodImage src={food.image} name={food.foodName} className="w-full h-44 rounded-xl" />
+        <FoodImage src={food.imageUrl} name={food.foodName} className="w-full h-44 rounded-xl" />
       </div>
       <table className="w-full text-sm">
         <tbody className="divide-y divide-gray-50">
@@ -411,13 +410,13 @@ export default function MenuPage() {
   const [form, setForm] = useState(EMPTY_FOOD);
   const [editId, setEditId] = useState(null);
   const [imageFile, setImageFile] = useState(null);
-  const [imagePreview, setImagePreview] = useState(null);
+  const [imageRemoved, setImageRemoved] = useState(false);
+  const [imageFieldKey, setImageFieldKey] = useState(0);
   const [infoFood, setInfoFood] = useState(null);
   const [saveStatus, setSaveStatus] = useState(null);
   const [noteFood, setNoteFood] = useState(null);
   const [noteDraft, setNoteDraft] = useState("");
   const [refreshMsg, setRefreshMsg] = useState(null);
-
   const fileInputRef = useRef(null);
   const [isImporting, setIsImporting] = useState(false);
   const [importError, setImportError] = useState(null);
@@ -460,11 +459,10 @@ export default function MenuPage() {
   // Form helpers
   const ff = useCallback((k, v) => setForm(p => ({ ...p, [k]: v })), []);
 
-  const handleImageChange = e => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setImageFile(file);
-    setImagePreview(URL.createObjectURL(file));
+  const handleRemoveImage = () => {
+    setImageFile(null);
+    setImageRemoved(true);
+    setImageFieldKey(k => k + 1); // ép ImageUploadField remount → xoá preview nội bộ
   };
 
   const handleIngredientsChange = useCallback(
@@ -475,7 +473,8 @@ export default function MenuPage() {
   // Modal controls
   const openAdd = () => {
     setForm({ ...EMPTY_FOOD });
-    setImageFile(null); setImagePreview(null);
+    setImageFile(null);
+    setImageRemoved(false);
     setModal("add");
   };
 
@@ -510,14 +509,11 @@ export default function MenuPage() {
       categoryId: extractCatName(fd.categoryId),
       ingredients: (fd.ingredients || []).map(i => ({
         ...i,
-        pricePerLargeUnit:
-          i.pricePerLargeUnit ||
-          (i.quantity > 0 ? i.cost / i.quantity : 0),
+        pricePerLargeUnit: i.pricePerLargeUnit || (i.quantity > 0 ? i.cost / i.quantity : 0),
       })),
     });
-
     setImageFile(null);
-    setImagePreview(fd.image ?? null);
+    setImageRemoved(false);
     setEditId(fd._id);
     setModal("edit");
   };
@@ -525,7 +521,7 @@ export default function MenuPage() {
   const openInfo = fd => { setInfoFood(fd); setModal("info"); };
   const closeModal = () => {
     setModal(null); setEditId(null);
-    setImageFile(null); setImagePreview(null);
+    setImageFile(null); setImageRemoved(false);
     setNoteFood(null); setNoteDraft("");
   };
 
@@ -708,20 +704,16 @@ export default function MenuPage() {
           {/* Ảnh */}
           <div>
             <label className="text-xs font-bold text-gray-500 uppercase tracking-wide block mb-2">Ảnh món ăn</label>
-            <label className="cursor-pointer block">
-              <div className={`relative w-full h-36 rounded-xl overflow-hidden border-2 border-dashed transition-colors ${imagePreview ? "border-transparent" : "border-gray-200 hover:border-green-300"
-                }`}>
-                {imagePreview
-                  ? <img src={imagePreview} alt="preview" className="w-full h-full object-cover" />
-                  : <div className="flex flex-col items-center justify-center h-full text-gray-400 gap-2">
-                    <ImagePlus size={22} /><span className="text-xs">Nhấn để tải ảnh lên</span>
-                  </div>}
-              </div>
-              <input type="file" accept="image/*" className="hidden" onChange={handleImageChange} />
-            </label>
-            {imagePreview && (
-              <button onClick={() => { setImageFile(null); setImagePreview(null); }}
-                className="mt-1 text-xs text-red-400 hover:text-red-600">Xoá ảnh</button>
+            <ImageUploadField
+              key={imageFieldKey}
+              currentUrl={imageRemoved ? null : (form.imageUrl ?? null)}
+              onSelect={(file) => { setImageFile(file); setImageRemoved(false); }}
+            />
+            {(imageFile || (!imageRemoved && form.imageUrl)) && (
+              <button onClick={handleRemoveImage}
+                className="mt-1 text-xs text-red-400 hover:text-red-600">
+                Xoá ảnh
+              </button>
             )}
           </div>
 
