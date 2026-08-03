@@ -7,7 +7,7 @@ import ImageUploadField from "../components/ImageUploadField";
 
 import {
   Edit2, Plus, Search, Check, Info, Save, RotateCcw,
-  Trash2, X, ImagePlus, ChevronDown, Minus, FolderOpen, RefreshCcw, StickyNote, Upload, Loader2
+  Trash2, X, ChevronDown, Minus, FolderOpen, RefreshCcw, StickyNote, Upload, Loader2
 } from "lucide-react";
 import fmtVND from "../utils/fmtVND";
 import useFoodZustand from "../zustand/useFoodZustand";
