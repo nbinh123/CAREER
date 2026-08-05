@@ -25,6 +25,15 @@ const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || "http://localhost:5000";
  *    còn xoá sạch "messages" trong DB và bắn riêng "chat_cleared" cho room
  *    bàn này, để tab khách (nếu đang mở sẵn, vd tablet gắn cố định tại bàn)
  *    tự dọn sạch khung chat mà không cần tải lại trang.
+ * 7. Trang Trái cây (FruitPage.jsx): emit "send_fruit_order". Payload gửi lên:
+ *    { tableId, guestName, phone, fruits: [{fruitId, fruitName}] x3,
+ *      quantity, matchedComboId, matchedComboName, totalPrice }.
+ *    Trái cây quản lý ở collection Fruit RIÊNG (FruitModel.js phía admin),
+ *    tách hẳn khỏi Food — không dùng chung "send_to_kitchen". Combo có sẵn
+ *    trong menu (nếu khách chọn trùng) là 1 Food document tên "A - B - C"
+ *    khớp tên 3 loại trong Fruit — chỉ mang tính THÔNG TIN cho admin, KHÔNG
+ *    ảnh hưởng giá: giá luôn CỐ ĐỊNH 35.000đ/phần dù tự mix hay trùng combo
+ *    có sẵn (server tự tính lại, không tin totalPrice từ client).
  *
  * Field `active` — do admin bật/tắt bằng nút toggle ở OrdersPage.jsx (hover
  * trên desktop / slider trên mobile). Đây là "cổng" thay thế cho token cũ:
@@ -135,7 +144,11 @@ export function SocketProvider({ children }) {
       }
       socketRef.current.emit("send_to_kitchen", {
         tableId: Number(table.tableId),
-        items: items.map((i) => ({ foodId: i.id, quantity: i.qty })),
+        items: items.map((i) => ({
+          foodId: i.id,
+          quantity: i.qty,
+          note: i.note || "",   // thêm trường note
+        })),
       });
       return Promise.resolve({ ok: true });
     },
@@ -154,6 +167,24 @@ export function SocketProvider({ children }) {
       });
     },
     [table?.tableId]
+  );
+
+  // Gửi đơn trái cây (FruitPage.jsx) — xem chú thích event 7 ở đầu file.
+  // `order` = { guestName, phone, fruits: [{fruitId, fruitName}] x3,
+  // quantity, matchedComboId, matchedComboName, totalPrice }.
+  const sendFruitOrder = useCallback(
+    (order) => {
+      if (!socketRef.current || !table?.tableId) {
+        return Promise.reject(new Error("Chưa kết nối được tới server"));
+      }
+      socketRef.current.emit("send_fruit_order", {
+        tableId: Number(table.tableId),
+        tableLabel: table.tableLabel,
+        ...order,
+      });
+      return Promise.resolve({ ok: true });
+    },
+    [table?.tableId, table?.tableLabel]
   );
 
   // ── Chat ───────────────────────────────────────────────────────────────
@@ -203,10 +234,21 @@ export function SocketProvider({ children }) {
       sendOrder,
       sendChatMessage,
       sendGuestInfo,
+      sendFruitOrder,
       onChatMessage,
       onChatReset,
     }),
-    [connected, stateReceived, tableState, sendOrder, sendChatMessage, sendGuestInfo, onChatMessage, onChatReset]
+    [
+      connected,
+      stateReceived,
+      tableState,
+      sendOrder,
+      sendChatMessage,
+      sendGuestInfo,
+      sendFruitOrder,
+      onChatMessage,
+      onChatReset,
+    ]
   );
 
   return <SocketContext.Provider value={value}>{children}</SocketContext.Provider>;

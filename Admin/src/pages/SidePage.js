@@ -1,4 +1,4 @@
-import { Home, Package, UtensilsCrossed, ShoppingCart, TrendingUp, GiftIcon, GroupIcon, IndentIncreaseIcon, FireExtinguisherIcon } from "lucide-react";
+import { Home, Package, UtensilsCrossed, ShoppingCart, GiftIcon, CherryIcon, TrendingUpIcon, ChefHatIcon, UserCogIcon, ChartColumnBigIcon } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import useAuthZustand from "../zustand/useAuthZustand";
 
@@ -24,18 +24,22 @@ const NAV = [
     icon: UtensilsCrossed,
     roles: ["admin"],
   },
-
+  {
+    path: "/fruit",
+    label: "Trái cây",
+    icon: CherryIcon,
+    roles: ["admin", "staff"],
+  },
   {
     path: "/orders",
     label: "Order",
     icon: ShoppingCart,
     roles: ["admin", "staff", "chef"],
   },
-
   {
     path: "/analyst",
     label: "Phân tích",
-    icon: TrendingUp,
+    icon: ChartColumnBigIcon,
     roles: ["admin"],
   },
 
@@ -49,25 +53,19 @@ const NAV = [
   {
     path: "/staff-manager",
     label: "Quản lý nhân viên",
-    icon: GroupIcon,
+    icon: UserCogIcon,
     roles: ["admin"],
-  },
-  {
-    path: "/shift",
-    label: "Ca làm",
-    icon: GroupIcon,
-    roles: ["admin", "staff"],
   },
   {
     path: "/cash-flow",
     label: "Dòng tiền",
-    icon: IndentIncreaseIcon,
+    icon: TrendingUpIcon,
     roles: ["admin"],
   },
   {
     path: "/kitchen",
     label: "Nhà bếp",
-    icon: FireExtinguisherIcon,
+    icon: ChefHatIcon,
     roles: ["admin", "chef"],
   }
 ];
@@ -109,8 +107,8 @@ export default function Sidebar({ page, setPage, mobileOpen, setMobileOpen, isSh
                   setMobileOpen(false);
                 }}
                 className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-bold transition-all ${page === path
-                    ? "bg-green-500 text-white"
-                    : "text-gray-600 hover:bg-green-50 hover:text-green-700"
+                  ? "bg-green-500 text-white"
+                  : "text-gray-600 hover:bg-green-50 hover:text-green-700"
                   }`}
               >
 

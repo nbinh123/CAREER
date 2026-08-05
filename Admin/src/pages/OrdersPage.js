@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from "react";
-import { io } from "socket.io-client";
+import socket from "../utils/socket";
 import Button from "../components/Button";
 import Modal from "../components/Modal";
 import StatusBadge from "../components/StatusBadge";
@@ -11,7 +11,6 @@ import axios from "axios"
 
 // ─── Hằng số ──────────────────────────────────────────────────────────────────
 const TABLE_COUNT = 12;
-const SOCKET_URL = `${API_URL}`;   // đổi nếu server khác host/port
 const ORDERS_API_URL = `${API_URL}/api/orders`;
 const CHAT_TOOLTIP_DURATION = 8000; // tooltip tự ẩn sau 8s nếu admin không bấm vào
 
@@ -83,24 +82,22 @@ export default function OrdersPage() {
     }, []);
 
     // ─── Socket setup ──────────────────────────────────────────────────────────
+    // Dùng instance socket DÙNG CHUNG (import từ ../utils/socket) — không tự
+    // io(...) ở đây nữa, để trang này và các trang khác (KitchenPage, trang
+    // khách...) chia sẻ đúng 1 connection.
     useEffect(() => {
-        const socket = io(SOCKET_URL, {
-            transports: ["websocket"],
-            reconnectionAttempts: 10,
-            reconnectionDelay: 1500,
-        });
         socketRef.current = socket;
         const timers = tooltipTimers.current;
-        socket.on("connect", () => {
+
+        const handleConnect = () => {
             setConnected(true);
             socket.emit("join_admin");
-        });
-
-        socket.on("disconnect", () => setConnected(false));
+        };
+        const handleDisconnect = () => setConnected(false);
 
         // Nhận toàn bộ state bàn từ server (đã gồm cả pendingItems, active, chatEnabled,
         // guestName, guestPhone, messages)
-        socket.on("tables_state", (serverTables) => {
+        const handleTablesState = (serverTables) => {
             setTables(serverTables.map((t) => ({
                 ...t,
                 active: t.active ?? false,
@@ -112,12 +109,12 @@ export default function OrdersPage() {
                 pendingItems: t.pendingItems || [],
                 messages: t.messages || [],
             })));
-        });
+        };
 
         // Tin nhắn mới (chat) — chỉ quan tâm tin từ khách để hiện tooltip/tín hiệu.
         // Nếu admin đang mở đúng hộp thoại của bàn đó thì coi như đã đọc luôn,
         // không cần hiện tooltip.
-        socket.on("chat_message", (payload) => {
+        const handleChatMessage = (payload) => {
             const { tableId, message } = payload || {};
             if (!message || message.from !== "guest") return;
 
@@ -136,10 +133,28 @@ export default function OrdersPage() {
                     return next;
                 });
             }, CHAT_TOOLTIP_DURATION);
-        });
+        };
+
+        // Socket dùng chung có thể ĐÃ connect từ trước (do một trang khác mở
+        // lên trước trang này) — nếu vậy event "connect" sẽ không bắn lại,
+        // nên cần tự đồng bộ state + join_admin ngay khi mount.
+        if (socket.connected) {
+            handleConnect();
+        }
+
+        socket.on("connect", handleConnect);
+        socket.on("disconnect", handleDisconnect);
+        socket.on("tables_state", handleTablesState);
+        socket.on("chat_message", handleChatMessage);
 
         return () => {
-            socket.disconnect();
+            // Chỉ gỡ listener của riêng trang này. KHÔNG gọi socket.disconnect()
+            // ở đây — socket này dùng chung cho cả app, disconnect sẽ làm
+            // trang khác (hoặc lần mount lại của chính trang này) mất kết nối.
+            socket.off("connect", handleConnect);
+            socket.off("disconnect", handleDisconnect);
+            socket.off("tables_state", handleTablesState);
+            socket.off("chat_message", handleChatMessage);
             Object.values(timers).forEach(clearTimeout);
         };
     }, []);
@@ -177,10 +192,10 @@ export default function OrdersPage() {
     }, [chatTable?.messages?.length]);
 
     // ─── Xác nhận món đang chờ & gửi bếp ────────────────────────────────────────
-    const togglePending = useCallback((foodId) => {
+    const togglePending = useCallback((itemId) => {
         setSelectedPending((prev) => {
             const next = new Set(prev);
-            const key = String(foodId);
+            const key = String(itemId);
             if (next.has(key)) next.delete(key); else next.add(key);
             return next;
         });
@@ -191,14 +206,14 @@ export default function OrdersPage() {
         setSelectedPending((prev) =>
             prev.size === activeTable.pendingItems.length
                 ? new Set()
-                : new Set(activeTable.pendingItems.map((i) => String(i.foodId)))
+                : new Set(activeTable.pendingItems.map((i) => String(i.id)))
         );
     }, [activeTable]);
 
-    const confirmItems = useCallback((foodIds) => {
-        if (!activeTable || !socketRef.current || foodIds.length === 0) return;
+    const confirmItems = useCallback((pendingItemIds) => {
+        if (!activeTable || !socketRef.current || pendingItemIds.length === 0) return;
         setConfirmLoading(true);
-        socketRef.current.emit("confirm_items", { tableId: activeTable.id, foodIds });
+        socketRef.current.emit("confirm_items", { tableId: activeTable.id, pendingItemIds });
         setSelectedPending(new Set());
         showToast("success", `Đã xác nhận & gửi bếp cho ${activeTable.name}`);
         setTimeout(() => setConfirmLoading(false), 300);
@@ -267,12 +282,18 @@ export default function OrdersPage() {
 
         const mergedForOrder = new Map();
         activeTable.items.forEach((i) => {
-            const key = String(i.foodId);
-            mergedForOrder.set(key, (mergedForOrder.get(key) || 0) + i.quantity);
+            const noteKey = i.note || "";
+            const key = `${i.foodId}::${noteKey}`;
+            const existing = mergedForOrder.get(key);
+            if (existing) {
+                existing.quantity += i.quantity;
+            } else {
+                mergedForOrder.set(key, { foodId: i.foodId, note: noteKey, quantity: i.quantity });
+            }
         });
 
         const payload = {
-            items: Array.from(mergedForOrder, ([foodId, quantity]) => ({ foodId, quantity })),
+            items: Array.from(mergedForOrder.values()),
             discountAmount: 0,
             paymentMethod: payMethod,
             isPaid: true,
@@ -394,7 +415,7 @@ export default function OrdersPage() {
                         <div className="rounded-xl border-2 border-red-200 bg-red-50 p-3">
                             <div className="flex items-center justify-between mb-2">
                                 <p className="text-xs font-bold text-red-600 uppercase tracking-wide flex items-center gap-1.5">
-                                    <Bell size={13} /> Khách vừa gọi — cần xác nhận
+                                    <Bell size={13} /> Cần xác nhận
                                 </p>
                                 <button onClick={toggleSelectAllPending} className="text-[11px] font-semibold text-red-500 hover:underline">
                                     {selectedPending.size === activeTable.pendingItems.length ? "Bỏ chọn tất cả" : "Chọn tất cả"}
@@ -402,16 +423,16 @@ export default function OrdersPage() {
                             </div>
                             <div className="space-y-1.5">
                                 {activeTable.pendingItems.map((item) => (
-                                    <label key={item.foodId} className="flex items-center gap-2.5 bg-white rounded-lg p-2 cursor-pointer">
+                                    <label key={item.id} className="flex items-center gap-3.5 bg-white rounded-lg p-2 cursor-pointer">
                                         <input type="checkbox"
-                                            checked={selectedPending.has(String(item.foodId))}
-                                            onChange={() => togglePending(item.foodId)}
+                                            checked={selectedPending.has(String(item.id))}
+                                            onChange={() => togglePending(item.id)}
                                             className="w-4 h-4 accent-red-500" />
-                                        <span className="text-lg">{item.emoji}</span>
                                         <div className="flex-1 min-w-0">
                                             <p className="text-xs font-bold text-gray-700 truncate">{item.foodName}</p>
                                             <p className="text-xs text-gray-400">{fmtVND(item.unitPrice)} × {item.quantity}</p>
                                         </div>
+                                        {item.note && <p className="text-xs text-gray-500 mt-0.5">{item.note}</p>}
                                     </label>
                                 ))}
                             </div>
@@ -423,7 +444,7 @@ export default function OrdersPage() {
                             </button>
                             {activeTable.pendingItems.length > 1 && (
                                 <button
-                                    onClick={() => confirmItems(activeTable.pendingItems.map((i) => String(i.foodId)))}
+                                    onClick={() => confirmItems(activeTable.pendingItems.map((i) => String(i.id)))}
                                     disabled={confirmLoading}
                                     className="w-full text-center text-xs font-semibold text-red-500 hover:underline mt-2">
                                     Xác nhận tất cả ({activeTable.pendingItems.length} món)
@@ -444,11 +465,11 @@ export default function OrdersPage() {
                             <p className="text-xs text-gray-400 font-bold uppercase tracking-wide mb-2">Đã xác nhận</p>
                             <div className="space-y-2">
                                 {activeTable.items.map((item, idx) => (
-                                    <div key={`${item.foodId}-${item.status}-${idx}`} className="flex items-center gap-2.5 bg-gray-50 rounded-xl p-2.5">
-                                        <span className="text-xl">{item.emoji}</span>
+                                    <div key={item.id || idx} className="flex items-center gap-2.5 bg-gray-50 rounded-xl p-4">
                                         <div className="flex-1 min-w-0">
                                             <p className="text-xs font-bold text-gray-700 truncate">{item.foodName}</p>
                                             <p className="text-xs text-gray-400">{fmtVND(item.unitPrice)} × {item.quantity}</p>
+                                            {item.note && <p className="text-[11px] text-gray-400 mt-0.5">{item.note}</p>}
                                         </div>
                                         {item.status === "ready" ? (
                                             <span className="flex items-center gap-1 text-[11px] font-bold text-green-600 bg-green-100 px-2 py-1 rounded-full whitespace-nowrap">
@@ -868,7 +889,10 @@ export default function OrdersPage() {
                         <div className="space-y-2 mb-5 bg-green-50 rounded-xl p-4">
                             {activeTable.items.map((item, idx) => (
                                 <div key={`${item.foodId}-${idx}`} className="flex justify-between text-sm">
-                                    <span className="text-gray-700">{item.emoji} {item.foodName} × {item.quantity}</span>
+                                    <span className="text-gray-700">
+                                        {item.foodName} × {item.quantity}
+                                        {item.note && <span className="block text-[11px] text-gray-400">{item.note}</span>}
+                                    </span>
                                     <span className="font-semibold">{fmtVND(item.unitPrice * item.quantity)}</span>
                                 </div>
                             ))}

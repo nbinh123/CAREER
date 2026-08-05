@@ -2,6 +2,7 @@ import React from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
 import TableGuard from "../../components/table/TableGuard";
 import OrderPage from "../../pages/OrderPage";
+import FruitPage from "../../pages/FruitPage";
 import HistoryPage from "../../pages/HistoryPage";
 import NotFoundPage from "../../pages/NotFoundPage";
 import { ROUTES } from "../../constants/routes";
@@ -13,6 +14,7 @@ export default function Body() {
       <Route element={<TableGuard />}>
         <Route path={ROUTES.ENTRY} element={<Navigate to={ROUTES.ORDER} replace />} />
         <Route path={ROUTES.ORDER} element={<OrderPage />} />
+        <Route path={ROUTES.FRUITS} element={<FruitPage />} />
         <Route path={ROUTES.HISTORY} element={<HistoryPage />} />
       </Route>
       <Route path="*" element={<NotFoundPage />} />

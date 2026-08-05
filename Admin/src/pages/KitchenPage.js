@@ -91,16 +91,16 @@ export default function KitchenPage() {
     }, [now]);
 
     // ─── Đánh dấu đã nấu xong ────────────────────────────────────────────────────
-    const markReady = useCallback((tableId, foodId, tableName, foodName) => {
-        const key = `${tableId}:${foodId}`;
+    const markReady = useCallback((tableId, itemId, tableName, foodName) => {
+        const key = `${tableId}:${itemId}`;
         setDoneFlash((prev) => new Set(prev).add(key));
-        socketRef.current?.emit("mark_item_ready", { tableId, foodId });
+        socketRef.current?.emit("mark_item_ready", { tableId, itemId });
         showToast("success", `${foodName} — ${tableName} đã xong`);
     }, [showToast]);
 
     const markAllReady = useCallback((table) => {
         table.items.forEach((item) => {
-            socketRef.current?.emit("mark_item_ready", { tableId: table.tableId, foodId: item.foodId });
+            socketRef.current?.emit("mark_item_ready", { tableId: table.tableId, itemId: item.id });
         });
         showToast("success", `${table.tableName} — đã xong toàn bộ`);
     }, [showToast]);
@@ -178,10 +178,10 @@ export default function KitchenPage() {
                                     {t.items.map((item) => {
                                         const mins = waitMinutes(item.confirmedAt);
                                         const itemLevel = urgencyOf(mins);
-                                        const key = `${t.tableId}:${item.foodId}`;
+                                        const key = `${t.tableId}:${item.id}`;
                                         const isFlashing = doneFlash.has(key);
                                         return (
-                                            <div key={item.foodId}
+                                            <div key={item.id}
                                                 className={`flex items-center gap-2.5 rounded-xl px-2.5 py-2.5 bg-gray-50 transition-opacity
                                                     ${isFlashing ? "opacity-40" : "opacity-100"}`}>
                                                 <span className="text-xl leading-none">{item.emoji}</span>
@@ -189,12 +189,15 @@ export default function KitchenPage() {
                                                     <p className="text-xs font-bold text-gray-700 truncate">
                                                         {item.foodName} <span className="text-gray-400">× {item.quantity}</span>
                                                     </p>
+                                                    {item.note && (
+                                                        <p className="text-[11px] text-blue-600 font-semibold truncate">{item.note}</p>
+                                                    )}
                                                     <p className={`text-[11px] ${itemLevel === "urgent" ? "text-red-500 font-semibold" : "text-gray-400"}`}>
                                                         Chờ {mins} phút
                                                     </p>
                                                 </div>
                                                 <button
-                                                    onClick={() => markReady(t.tableId, item.foodId, t.tableName, item.foodName)}
+                                                    onClick={() => markReady(t.tableId, item.id, t.tableName, item.foodName)}
                                                     disabled={isFlashing}
                                                     className="w-8 h-8 rounded-lg bg-green-500 hover:bg-green-600 active:scale-95 disabled:opacity-40 flex items-center justify-center text-white flex-shrink-0 transition-all">
                                                     <Check size={16} strokeWidth={3} />

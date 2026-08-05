@@ -1,3 +1,4 @@
+require("dotenv").config();
 const express = require("express");
 const http = require("http");
 const path = require("path");
@@ -9,6 +10,7 @@ const rateLimit = require("express-rate-limit");
 const db = require("./src/connectDB/db");
 const route = require("./src/routes/routes");
 const { initSocket } = require("./socket/socket"); // ❗ đổi thành destructure — socket.js giờ export { initSocket, getIO }
+const telegramBot = require("./telegram/bot"); // ❗ import bot để khởi tạo bot ngay khi server start
 
 const app = express();
 const port = 5000;
@@ -36,12 +38,11 @@ const allowedOrigins = [
 
 app.use(cors({
     origin(origin, callback) {
-        // Cho phép Postman, mobile app, server-to-server (không có Origin)
         if (!origin) return callback(null, true);
-
         if (allowedOrigins.includes(origin)) {
             callback(null, true);
         } else {
+            console.warn("[CORS] Bị chặn, origin không khớp:", origin); // thêm dòng này
             callback(new Error("Not allowed by CORS"));
         }
     },
@@ -68,3 +69,4 @@ route(app);
 server.listen(port, () => {
     console.log(`http://localhost:${port}`);
 });
+

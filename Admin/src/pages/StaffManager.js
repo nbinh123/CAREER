@@ -1,12 +1,6 @@
 // pages/StaffManager.js
 import { useState, useEffect, useRef, useCallback } from "react";
-import {
-  Search, Users, Clock, Wallet, Plus,
-  Eye, CalendarDays, BadgeDollarSign, X, ChevronLeft,
-  ChevronRight, Phone, CreditCard, ShieldCheck, UserCog,
-  CircleCheck, CircleX, Timer, TrendingUp, AlertTriangle,
-  RefreshCw, CheckCircle2,
-} from "lucide-react";
+import { Search, Plus, RefreshCw } from "lucide-react";
 import { getData, postData } from "../utils/callAPI";
 
 /* ════════════════════════════════════════════════════════════
@@ -23,26 +17,6 @@ const STYLE = `
   font-family: 'Nunito', sans-serif;
   position: relative;
   overflow-x: hidden;
-}
-
-/* ── ambient background ── */
-.sm-bg-blob {
-  position: fixed; border-radius: 50%;
-  filter: blur(90px); opacity: 0.35;
-  pointer-events: none; z-index: 0;
-  animation: sm-float 10s ease-in-out infinite;
-}
-.sm-bg-blob-1 { width:500px;height:500px;background:#e5e7eb;top:-150px;left:-150px;animation-delay:0s; }
-.sm-bg-blob-2 { width:400px;height:400px;background:#e5e7eb;bottom:-100px;right:-100px;animation-delay:-4s; }
-.sm-bg-blob-3 { width:280px;height:280px;background:#f3f4f6;top:35%;left:60%;animation-delay:-8s; }
-@keyframes sm-float {
-  0%,100%{ transform:translateY(0) scale(1); }
-  50%    { transform:translateY(-30px) scale(1.03); }
-}
-.sm-dots {
-  position:fixed;inset:0;pointer-events:none;z-index:0;
-  background-image:radial-gradient(circle,#d1d5db44 1px,transparent 1px);
-  background-size:28px 28px;
 }
 
 /* ── main layout ── */
@@ -62,12 +36,22 @@ const STYLE = `
 }
 .sm-header-left h1 {
   font-size: 28px; font-weight: 900;
-  color: #064e3b; margin: 0 0 4px;
+  color: #064e3b; margin: 0 0 6px;
   letter-spacing: -0.5px;
+}
+.sm-header-sub-row {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
 }
 .sm-header-left p {
   font-size: 13px; font-weight: 600;
-  color: #6ee7b7; margin: 0;
+  color: #6b7280; margin: 0;
+}
+.sm-live-badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  background: #dcfce7; color: #166534;
+  font-size: 11px; font-weight: 800;
+  padding: 4px 11px; border-radius: 100px;
+  white-space: nowrap;
 }
 .sm-header-actions { display: flex; gap: 10px; }
 
@@ -82,31 +66,26 @@ const STYLE = `
 @media (max-width: 500px) { .sm-stats { grid-template-columns: 1fr; } }
 
 .sm-stat-card {
-  background: rgba(255,255,255,0.82);
-  backdrop-filter: blur(16px);
-  border: 1.5px solid rgba(187,247,208,0.6);
-  border-radius: 18px;
-  padding: 18px 20px;
-  display: flex; align-items: center; gap: 14px;
-  box-shadow: 0 2px 12px rgba(16,185,129,0.08);
+  background: #fff;
+  border: 1.5px solid #e5e7eb;
+  border-radius: 14px;
+  padding: 16px 18px;
+  box-shadow: 0 1px 3px rgba(0,0,0,.05), 0 4px 12px rgba(0,0,0,.03);
   animation: sm-fade-up 0.5s ease both;
+  position: relative; overflow: hidden;
 }
+.sm-stat-card::before { content:''; position:absolute; top:0; left:0; width:4px; height:100%; }
+.sm-stat-card.green::before { background:#059669; }
+.sm-stat-card.teal::before  { background:#0d9488; }
+.sm-stat-card.amber::before { background:#d97706; }
+.sm-stat-card.rose::before  { background:#e11d48; }
 .sm-stat-card:nth-child(1){ animation-delay:0.08s }
 .sm-stat-card:nth-child(2){ animation-delay:0.14s }
 .sm-stat-card:nth-child(3){ animation-delay:0.20s }
 .sm-stat-card:nth-child(4){ animation-delay:0.26s }
-.sm-stat-icon {
-  width: 44px; height: 44px; border-radius: 13px;
-  display: flex; align-items: center; justify-content: center;
-  flex-shrink: 0;
-}
-.sm-stat-icon.green  { background: #f3f4f6; color: #16a34a; }
-.sm-stat-icon.teal   { background: #ccfbf1; color: #0d9488; }
-.sm-stat-icon.amber  { background: #fef9c3; color: #d97706; }
-.sm-stat-icon.rose   { background: #ffe4e6; color: #e11d48; }
-.sm-stat-label { font-size: 11px; font-weight: 800; color: #6ee7b7; text-transform: uppercase; letter-spacing: 0.5px; margin: 0 0 3px; }
+.sm-stat-label { font-size: 11px; font-weight: 700; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.5px; margin: 0 0 6px; }
 .sm-stat-val   { font-size: 22px; font-weight: 900; color: #064e3b; margin: 0; line-height: 1; }
-.sm-stat-sub   { font-size: 11px; font-weight: 600; color: #a7f3d0; margin: 2px 0 0; }
+.sm-stat-sub   { font-size: 11px; font-weight: 500; color: #9ca3af; margin: 4px 0 0; }
 
 /* ── toolbar ── */
 .sm-toolbar {
@@ -119,18 +98,18 @@ const STYLE = `
 }
 .sm-search-icon {
   position: absolute; left: 13px; top: 50%; transform: translateY(-50%);
-  color: #6ee7b7; display: flex; pointer-events: none;
+  color: #9ca3af; display: flex; pointer-events: none;
 }
 .sm-search {
   width: 100%; padding: 10px 13px 10px 38px;
   font-family: 'Nunito', sans-serif;
   font-size: 14px; font-weight: 600; color: #064e3b;
-  background: rgba(255,255,255,0.82);
+  background: #fff;
   border: 2px solid #e5e7eb; border-radius: 12px; outline: none;
   transition: border-color 0.2s, box-shadow 0.2s;
 }
 .sm-search:focus { border-color: #34d399; box-shadow: 0 0 0 4px rgba(52,211,153,0.12); }
-.sm-search::placeholder { color: #a7f3d0; }
+.sm-search::placeholder { color: #cbd5e1; }
 
 /* role filter tabs */
 .sm-tabs { display: flex; gap: 6px; flex-wrap: wrap; }
@@ -147,10 +126,10 @@ const STYLE = `
   box-shadow: 0 3px 10px rgba(5,150,105,0.3);
 }
 .sm-tab:not(.active) {
-  background: rgba(255,255,255,0.7); color: #065f46;
+  background: #fff; color: #065f46;
   border-color: #e5e7eb;
 }
-.sm-tab:not(.active):hover { background: #f3f4f6; border-color: #6ee7b7; }
+.sm-tab:not(.active):hover { background: #f3f4f6; border-color: #9ca3af; }
 
 /* ── grid ── */
 .sm-grid {
@@ -161,20 +140,18 @@ const STYLE = `
 
 /* ── staff card ── */
 .sm-card {
-  background: rgba(255,255,255,0.84);
-  backdrop-filter: blur(16px);
-  border: 1.5px solid rgba(187,247,208,0.6);
-  border-radius: 20px;
+  background: #fff;
+  border: 1.5px solid #e5e7eb;
+  border-radius: 16px;
   padding: 20px;
-  box-shadow: 0 2px 16px rgba(16,185,129,0.07);
-  transition: transform 0.2s, box-shadow 0.2s, border-color 0.2s;
+  box-shadow: 0 1px 3px rgba(0,0,0,.05), 0 4px 12px rgba(0,0,0,.03);
+  transition: box-shadow 0.2s, border-color 0.2s;
   animation: sm-fade-up 0.45s ease both;
   position: relative; overflow: hidden;
 }
 .sm-card:hover {
-  transform: translateY(-3px);
-  box-shadow: 0 8px 28px rgba(5,150,105,0.14);
-  border-color: rgba(52,211,153,0.5);
+  box-shadow: 0 4px 16px rgba(0,0,0,.07);
+  border-color: #d1d5db;
 }
 .sm-card::before {
   content: '';
@@ -216,7 +193,7 @@ const STYLE = `
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   margin: 0 0 4px;
 }
-.sm-card-phone { font-size: 12px; font-weight: 600; color: #6ee7b7; margin: 0; }
+.sm-card-phone { font-size: 12px; font-weight: 600; color: #9ca3af; margin: 0; }
 
 .sm-role-badge {
   font-size: 10px; font-weight: 800;
@@ -240,7 +217,7 @@ const STYLE = `
   padding: 9px 10px; text-align: center;
   border: 1px solid #e5e7eb;
 }
-.sm-mini-stat-label { font-size: 10px; font-weight: 700; color: #a7f3d0; margin: 0 0 3px; }
+.sm-mini-stat-label { font-size: 10px; font-weight: 700; color: #cbd5e1; margin: 0 0 3px; }
 .sm-mini-stat-val   { font-size: 14px; font-weight: 900; color: #065f46; margin: 0; }
 .sm-mini-stat-val.warn { color: #d97706; }
 .sm-mini-stat-val.ok   { color: #16a34a; }
@@ -259,33 +236,33 @@ const STYLE = `
 .sm-action-btn.info {
   background: #f9fafb; color: #065f46; border-color: #e5e7eb;
 }
-.sm-action-btn.info:hover { background: #f3f4f6; border-color: #6ee7b7; }
+.sm-action-btn.info:hover { background: #f3f4f6; border-color: #9ca3af; }
 .sm-action-btn.schedule {
   background: #f0f9ff; color: #0369a1; border-color: #bae6fd;
 }
 .sm-action-btn.schedule:hover { background: #e0f2fe; border-color: #7dd3fc; }
 .sm-action-btn.pay {
-  background: linear-gradient(135deg,#34d399,#059669);
+  background: #059669;
   color: #fff; border-color: transparent;
-  box-shadow: 0 3px 10px rgba(5,150,105,0.3);
+  box-shadow: 0 2px 6px rgba(5,150,105,0.25);
 }
-.sm-action-btn.pay:hover { transform: translateY(-1px); box-shadow: 0 5px 14px rgba(5,150,105,0.4); }
+.sm-action-btn.pay:hover { background: #047857; }
 .sm-action-btn.pay:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
 
 /* ── empty state ── */
 .sm-empty {
   grid-column: 1/-1; text-align: center;
   padding: 60px 20px;
-  color: #a7f3d0;
+  color: #cbd5e1;
 }
 .sm-empty-icon { font-size: 48px; margin-bottom: 12px; }
 .sm-empty p { font-size: 14px; font-weight: 700; margin: 0; }
 
 /* ── loading skeleton ── */
 .sm-skeleton-card {
-  background: rgba(255,255,255,0.7);
-  border: 1.5px solid rgba(187,247,208,0.6);
-  border-radius: 20px; padding: 20px;
+  background: #fff;
+  border: 1.5px solid #e5e7eb;
+  border-radius: 16px; padding: 20px;
   animation: sm-pulse 1.4s ease infinite;
 }
 @keyframes sm-pulse {
@@ -336,13 +313,13 @@ const STYLE = `
   font-size: 17px; font-weight: 900; color: #064e3b; margin: 0 0 3px;
 }
 .sm-modal-sub {
-  font-size: 12px; font-weight: 600; color: #6ee7b7; margin: 0;
+  font-size: 12px; font-weight: 600; color: #9ca3af; margin: 0;
 }
 .sm-modal-close {
   background: #f9fafb; border: none; cursor: pointer;
   width: 32px; height: 32px; border-radius: 10px;
   display: flex; align-items: center; justify-content: center;
-  color: #6ee7b7; transition: all 0.18s; flex-shrink: 0;
+  color: #9ca3af; transition: all 0.18s; flex-shrink: 0;
 }
 .sm-modal-close:hover { background: #f3f4f6; color: #065f46; }
 
@@ -376,14 +353,14 @@ const STYLE = `
 }
 .sm-info-item.full { grid-column: 1/-1; }
 .sm-info-item-label {
-  font-size: 10px; font-weight: 800; color: #6ee7b7;
+  font-size: 10px; font-weight: 800; color: #9ca3af;
   text-transform: uppercase; letter-spacing: 0.5px; margin: 0 0 4px;
   display: flex; align-items: center; gap: 4px;
 }
 .sm-info-item-val {
   font-size: 13px; font-weight: 800; color: #064e3b; margin: 0;
 }
-.sm-info-item-val.muted { color: #a7f3d0; font-weight: 600; }
+.sm-info-item-val.muted { color: #cbd5e1; font-weight: 600; }
 
 .sm-salary-box {
   background: linear-gradient(135deg,#064e3b,#065f46);
@@ -391,7 +368,7 @@ const STYLE = `
   display: grid; grid-template-columns: repeat(3,1fr); gap: 12px;
   margin-bottom: 4px;
 }
-.sm-salary-item-label { font-size:10px;font-weight:700;color:#6ee7b7;margin:0 0 4px; }
+.sm-salary-item-label { font-size:10px;font-weight:700;color:#9ca3af;margin:0 0 4px; }
 .sm-salary-item-val   { font-size:16px;font-weight:900;color:#fff;margin:0; }
 .sm-salary-item-val.highlight { color:#34d399; }
 
@@ -411,8 +388,9 @@ const STYLE = `
   border-radius: 10px; width: 34px; height: 34px;
   display: flex; align-items: center; justify-content: center;
   cursor: pointer; color: #065f46; transition: all 0.18s;
+  font-size: 18px; font-weight: 800; line-height: 1;
 }
-.sm-nav-btn:hover { background: #f3f4f6; border-color: #6ee7b7; }
+.sm-nav-btn:hover { background: #f3f4f6; border-color: #9ca3af; }
 
 .sm-week-grid { display: grid; grid-template-columns: repeat(7,1fr); gap: 6px; }
 .sm-day-col { min-height: 180px; }
@@ -423,7 +401,7 @@ const STYLE = `
 .sm-day-header.today { background: #059669; }
 .sm-day-header.today .sm-day-name,
 .sm-day-header.today .sm-day-num  { color: #fff; }
-.sm-day-name { font-size:10px;font-weight:800;color:#6ee7b7;display:block;margin-bottom:1px; }
+.sm-day-name { font-size:10px;font-weight:800;color:#9ca3af;display:block;margin-bottom:1px; }
 .sm-day-num  { font-size:15px;font-weight:900;color:#064e3b;display:block; }
 
 .sm-shift {
@@ -452,7 +430,7 @@ const STYLE = `
   background:#f9fafb;border:1px solid #e5e7eb;border-radius:12px;
   padding:10px 12px;text-align:center;
 }
-.sm-sched-sum-label { font-size:10px;font-weight:800;color:#6ee7b7;margin:0 0 3px; }
+.sm-sched-sum-label { font-size:10px;font-weight:800;color:#9ca3af;margin:0 0 3px; }
 .sm-sched-sum-val   { font-size:16px;font-weight:900;color:#064e3b;margin:0; }
 
 /* ── PAY MODAL ── */
@@ -465,9 +443,9 @@ const STYLE = `
   margin-bottom: 18px;
   text-align: center;
 }
-.sm-pay-amount-label { font-size:12px;font-weight:700;color:#6ee7b7;margin:0 0 6px; }
+.sm-pay-amount-label { font-size:12px;font-weight:700;color:#9ca3af;margin:0 0 6px; }
 .sm-pay-amount-val   { font-size:36px;font-weight:900;color:#fff;margin:0;letter-spacing:-1px; }
-.sm-pay-amount-sub   { font-size:12px;font-weight:600;color:#a7f3d0;margin:4px 0 0; }
+.sm-pay-amount-sub   { font-size:12px;font-weight:600;color:#cbd5e1;margin:4px 0 0; }
 
 .sm-pay-breakdown {
   background: #f9fafb; border-radius: 14px; padding: 14px;
@@ -478,7 +456,7 @@ const STYLE = `
   padding: 5px 0; font-size: 13px; font-weight: 700;
 }
 .sm-pay-row:not(:last-child) { border-bottom: 1px solid #e5e7eb; }
-.sm-pay-row-label { color: #6ee7b7; }
+.sm-pay-row-label { color: #9ca3af; }
 .sm-pay-row-val   { color: #064e3b; font-weight: 900; }
 .sm-pay-row-val.big { color: #059669; font-size: 15px; }
 
@@ -498,47 +476,47 @@ const STYLE = `
   border: 2px solid #e5e7eb; border-radius: 13px; cursor: pointer;
   transition: all 0.18s;
 }
-.sm-cancel-btn:hover { background: #f3f4f6; border-color: #6ee7b7; }
+.sm-cancel-btn:hover { background: #f3f4f6; border-color: #9ca3af; }
 .sm-confirm-pay-btn {
   flex: 2; padding: 12px;
   font-family: 'Nunito',sans-serif; font-size: 14px; font-weight: 900;
-  background: linear-gradient(135deg,#34d399,#059669);
+  background: #059669;
   color: #fff; border: none; border-radius: 13px; cursor: pointer;
   display: flex; align-items: center; justify-content: center; gap: 7px;
-  box-shadow: 0 4px 14px rgba(5,150,105,0.35);
-  transition: all 0.18s;
+  box-shadow: 0 2px 8px rgba(5,150,105,0.25);
+  transition: background 0.18s;
 }
-.sm-confirm-pay-btn:hover:not(:disabled) { transform:translateY(-1px); box-shadow:0 6px 18px rgba(5,150,105,0.42); }
+.sm-confirm-pay-btn:hover:not(:disabled) { background: #047857; }
 .sm-confirm-pay-btn:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
 
-/* ── shared btn ── */
+/* ── shared btn (colors match the Order page header buttons) ── */
 .sm-add-btn {
   display: flex; align-items: center; gap: 7px;
   padding: 10px 18px;
   font-family: 'Nunito',sans-serif; font-size: 13px; font-weight: 900;
-  background: linear-gradient(135deg,#34d399,#059669);
+  background: #22c55e;
   color: #fff; border: none; border-radius: 12px; cursor: pointer;
-  box-shadow: 0 3px 10px rgba(5,150,105,0.3);
-  transition: all 0.18s; white-space: nowrap;
+  box-shadow: 0 2px 8px rgba(34,197,94,0.3);
+  transition: background 0.18s; white-space: nowrap;
 }
-.sm-add-btn:hover { transform: translateY(-1px); box-shadow: 0 6px 18px rgba(5,150,105,0.38); }
+.sm-add-btn:hover { background: #16a34a; }
 
 .sm-refresh-btn {
   display: flex; align-items: center; gap: 6px;
   padding: 10px 14px;
   font-family: 'Nunito',sans-serif; font-size: 13px; font-weight: 800;
-  background: rgba(255,255,255,0.8); color: #065f46;
+  background: #fff; color: #4b5563;
   border: 2px solid #e5e7eb; border-radius: 12px; cursor: pointer;
   transition: all 0.18s;
 }
-.sm-refresh-btn:hover { background: #f3f4f6; border-color: #6ee7b7; }
+.sm-refresh-btn:hover { background: #f3f4f6; border-color: #d1d5db; }
 .sm-refresh-btn.spinning svg { animation: sm-rotate 0.8s linear infinite; }
 @keyframes sm-rotate { to{ transform: rotate(360deg) } }
 
 /* ── toast ── */
 .sm-toast {
   position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%);
-  background: #064e3b; color: #6ee7b7;
+  background: #064e3b; color: #9ca3af;
   padding: 11px 22px; border-radius: 100px;
   font-size: 13px; font-weight: 800;
   box-shadow: 0 8px 24px rgba(0,0,0,0.18);
@@ -660,7 +638,7 @@ function InfoModal({ staff, onClose }) {
             <p className="sm-modal-title">Thông tin nhân viên</p>
             <p className="sm-modal-sub">Chi tiết hồ sơ</p>
           </div>
-          <button className="sm-modal-close" onClick={onClose}><X size={16} /></button>
+          <button className="sm-modal-close" onClick={onClose}>✕</button>
         </div>
 
         <div className="sm-info-body">
@@ -672,8 +650,8 @@ function InfoModal({ staff, onClose }) {
               <div className="sm-info-meta">
                 <RoleBadge role={staff.role} />
                 {staff.isActive
-                  ? <span style={{ fontSize:11,fontWeight:700,color:"#16a34a",display:"flex",alignItems:"center",gap:3 }}><CircleCheck size={11}/>Đang hoạt động</span>
-                  : <span style={{ fontSize:11,fontWeight:700,color:"#94a3b8",display:"flex",alignItems:"center",gap:3 }}><CircleX size={11}/>Ngừng hoạt động</span>
+                  ? <span style={{ fontSize:11,fontWeight:700,color:"#16a34a" }}>● Đang hoạt động</span>
+                  : <span style={{ fontSize:11,fontWeight:700,color:"#94a3b8" }}>● Ngừng hoạt động</span>
                 }
               </div>
             </div>
@@ -682,25 +660,25 @@ function InfoModal({ staff, onClose }) {
           {/* info grid */}
           <div className="sm-info-grid">
             <div className="sm-info-item">
-              <p className="sm-info-item-label"><Phone size={10}/>Số điện thoại</p>
+              <p className="sm-info-item-label">Số điện thoại</p>
               <p className="sm-info-item-val">{staff.phone}</p>
             </div>
             <div className="sm-info-item">
-              <p className="sm-info-item-label"><UserCog size={10}/>Tên đăng nhập</p>
+              <p className="sm-info-item-label">Tên đăng nhập</p>
               <p className={`sm-info-item-val${!staff.username ? " muted" : ""}`}>
                 {staff.username || "Chưa đặt"}
               </p>
             </div>
             <div className="sm-info-item full">
-              <p className="sm-info-item-label"><CreditCard size={10}/>Số CCCD</p>
+              <p className="sm-info-item-label">Số CCCD</p>
               <p className="sm-info-item-val">{staff.citizenId}</p>
             </div>
             <div className="sm-info-item">
-              <p className="sm-info-item-label"><Timer size={10}/>Đăng nhập cuối</p>
+              <p className="sm-info-item-label">Đăng nhập cuối</p>
               <p className="sm-info-item-val" style={{ fontSize:12 }}>{fmtDate(staff.lastLogin)}</p>
             </div>
             <div className="sm-info-item">
-              <p className="sm-info-item-label"><ShieldCheck size={10}/>Đổi mật khẩu</p>
+              <p className="sm-info-item-label">Đổi mật khẩu</p>
               <p className="sm-info-item-val">
                 {staff.mustChangePassword
                   ? <span style={{ color:"#d97706" }}>⚠ Chưa đổi</span>
@@ -803,23 +781,19 @@ function ScheduleModal({ staff, onClose }) {
             <p className="sm-modal-title">Lịch làm việc — {staff.fullName}</p>
             <p className="sm-modal-sub">{weekLabel}</p>
           </div>
-          <button className="sm-modal-close" onClick={onClose}><X size={16}/></button>
+          <button className="sm-modal-close" onClick={onClose}>✕</button>
         </div>
 
         <div className="sm-sched-body">
           {/* week nav */}
           <div className="sm-week-nav">
-            <button className="sm-nav-btn" onClick={() => setWeekOffset((p) => p - 1)}>
-              <ChevronLeft size={16}/>
-            </button>
+            <button className="sm-nav-btn" onClick={() => setWeekOffset((p) => p - 1)}>‹</button>
             <span className="sm-week-label">{weekLabel}</span>
-            <button className="sm-nav-btn" onClick={() => setWeekOffset((p) => p + 1)}>
-              <ChevronRight size={16}/>
-            </button>
+            <button className="sm-nav-btn" onClick={() => setWeekOffset((p) => p + 1)}>›</button>
           </div>
 
           {loading ? (
-            <div style={{ textAlign:"center",padding:"32px",color:"#6ee7b7",fontWeight:700 }}>
+            <div style={{ textAlign:"center",padding:"32px",color:"#9ca3af",fontWeight:700 }}>
               <div className="sm-spin" style={{ margin:"0 auto 8px" }}/>
               <p style={{ margin:0,fontSize:13 }}>Đang tải lịch…</p>
             </div>
@@ -917,7 +891,7 @@ function PayModal({ staff, onClose, onSuccess }) {
             <p className="sm-modal-title">Trả lương</p>
             <p className="sm-modal-sub">{staff.fullName}</p>
           </div>
-          <button className="sm-modal-close" onClick={onClose}><X size={16}/></button>
+          <button className="sm-modal-close" onClick={onClose}>✕</button>
         </div>
 
         <div className="sm-pay-body">
@@ -951,7 +925,7 @@ function PayModal({ staff, onClose, onSuccess }) {
           {/* warning if 0 */}
           {!hasUnpaid && (
             <div className="sm-pay-warn">
-              <AlertTriangle size={14} style={{ flexShrink:0,marginTop:1 }}/>
+              <span>⚠️</span>
               <span>Nhân viên này không có giờ làm chưa được trả lương.</span>
             </div>
           )}
@@ -966,7 +940,7 @@ function PayModal({ staff, onClose, onSuccess }) {
             >
               {loading
                 ? <><div className="sm-spin"/><span>Đang xử lý…</span></>
-                : <><CheckCircle2 size={16}/><span>Xác nhận trả</span></>}
+                : "Xác nhận trả"}
             </button>
           </div>
         </div>
@@ -1022,18 +996,14 @@ function StaffCard({ staff, idx, onInfo, onSchedule, onPay }) {
 
       {/* actions */}
       <div className="sm-card-actions">
-        <button className="sm-action-btn info"     onClick={() => onInfo(staff)}>
-          <Eye size={12}/>Hồ sơ
-        </button>
-        <button className="sm-action-btn schedule" onClick={() => onSchedule(staff)}>
-          <CalendarDays size={12}/>Lịch
-        </button>
+        <button className="sm-action-btn info"     onClick={() => onInfo(staff)}>Hồ sơ</button>
+        <button className="sm-action-btn schedule" onClick={() => onSchedule(staff)}>Lịch</button>
         <button
           className="sm-action-btn pay"
           onClick={() => onPay(staff)}
           disabled={!staff.unpaidWorkTime}
         >
-          <BadgeDollarSign size={12}/>Trả lương
+          Trả lương
         </button>
       </div>
     </div>
@@ -1145,20 +1115,21 @@ export default function StaffManager() {
 
   return (
     <div className="sm-root">
-      <div className="sm-dots"/>
-      <div className="sm-bg-blob sm-bg-blob-1"/>
-      <div className="sm-bg-blob sm-bg-blob-2"/>
-      <div className="sm-bg-blob sm-bg-blob-3"/>
-
       <div className="sm-wrap">
 
         {/* ── header ── */}
         <div className="sm-header">
           <div className="sm-header-left">
-            <h1>👥 Quản lý nhân viên</h1>
-            <p>{staffList.length} nhân viên trong hệ thống</p>
+            <h1>Quản lý nhân viên</h1>
+            <div className="sm-header-sub-row">
+              <p>{staffList.length} nhân viên trong hệ thống</p>
+              <span className="sm-live-badge">🟢 {totalActive} đang hoạt động</span>
+            </div>
           </div>
           <div className="sm-header-actions">
+            <button className="sm-add-btn" onClick={() => window.location.href = "/register"}>
+              <Plus size={15}/> Thêm nhân viên
+            </button>
             <button
               className={`sm-refresh-btn${refreshing ? " spinning" : ""}`}
               onClick={() => fetchStaff(true)}
@@ -1166,27 +1137,21 @@ export default function StaffManager() {
               <RefreshCw size={14}/>
               {refreshing ? "Đang tải…" : "Làm mới"}
             </button>
-            <button className="sm-add-btn" onClick={() => window.location.href = "/register"}>
-              <Plus size={15}/> Thêm nhân viên
-            </button>
           </div>
         </div>
 
         {/* ── stats ── */}
         <div className="sm-stats">
           {[
-            { icon:<Users size={20}/>, cls:"green",  label:"Tổng nhân viên",   val:staffList.length,           sub:`${totalActive} đang hoạt động` },
-            { icon:<TrendingUp size={20}/>, cls:"teal",   label:"Đang hoạt động",    val:totalActive,               sub:`${staffList.length - totalActive} tạm ngưng` },
-            { icon:<Clock size={20}/>,   cls:"amber",  label:"Giờ chưa trả lương", val:fmtHours(totalUnpaidH),    sub:"Tổng toàn bộ NV" },
-            { icon:<Wallet size={20}/>,  cls:"rose",   label:"Nợ lương",          val:new Intl.NumberFormat("vi-VN",{notation:"compact",maximumFractionDigits:1}).format(totalUnpaidAmt)+"đ", sub:"Cần thanh toán" },
+            { cls:"green",  label:"Tổng nhân viên",   val:staffList.length,           sub:`${totalActive} đang hoạt động` },
+            { cls:"teal",   label:"Đang hoạt động",    val:totalActive,               sub:`${staffList.length - totalActive} tạm ngưng` },
+            { cls:"amber",  label:"Giờ chưa trả lương", val:fmtHours(totalUnpaidH),    sub:"Tổng toàn bộ NV" },
+            { cls:"rose",   label:"Nợ lương",          val:new Intl.NumberFormat("vi-VN",{notation:"compact",maximumFractionDigits:1}).format(totalUnpaidAmt)+"đ", sub:"Cần thanh toán" },
           ].map((s,i) => (
-            <div key={i} className="sm-stat-card">
-              <div className={`sm-stat-icon ${s.cls}`}>{s.icon}</div>
-              <div>
-                <p className="sm-stat-label">{s.label}</p>
-                <p className="sm-stat-val">{s.val}</p>
-                <p className="sm-stat-sub">{s.sub}</p>
-              </div>
+            <div key={i} className={`sm-stat-card ${s.cls}`}>
+              <p className="sm-stat-label">{s.label}</p>
+              <p className="sm-stat-val">{s.val}</p>
+              <p className="sm-stat-sub">{s.sub}</p>
             </div>
           ))}
         </div>

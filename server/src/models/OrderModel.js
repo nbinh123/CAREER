@@ -32,6 +32,10 @@ const orderItemSchema = new Schema(
             required: true,
             min: 1
         },
+        note: {
+            type: String,
+            default: ''
+        },
 
         // Tổng dòng
         total: {
@@ -48,7 +52,11 @@ const orderItemSchema = new Schema(
             required: true,
             min: 0
         },
-        ingredientSnapshots:[]
+        channel: { type: String, enum: ["DINE_IN", "ONLINE"], default: "DINE_IN" },
+        customerName: { type: String },
+        customerPhone: { type: String },
+        customerAddress: { type: String },
+        ingredientSnapshots: []
     },
     { _id: false }
 );

@@ -89,7 +89,8 @@ class OrderController {
 
                 const {
                     foodId,
-                    quantity
+                    quantity,
+                    note
                 } = item;
 
                 // -------------------------
@@ -149,21 +150,21 @@ class OrderController {
                 // -------------------------
 
                 return {
-                    foodId:              food._id,
-                    foodName:            food.foodName,
+                    foodId: food._id,
+                    foodName: food.foodName,
                     quantity,
-
+                    note: note || "",
                     // Giá bán tại thời điểm đặt (required)
                     unitPrice,
 
                     // Tổng dòng (required)
-                    total:               lineTotal,
+                    total: lineTotal,
 
                     // Giá vốn / đơn vị tại thời điểm đặt (required)
-                    costPriceSnapshot:   unitCost,
+                    costPriceSnapshot: unitCost,
 
                     // Lợi nhuận gộp dòng = doanh thu - chi phí
-                    grossProfit:         lineTotal - lineCost,
+                    grossProfit: lineTotal - lineCost,
 
                     // Snapshot nguyên liệu tại thời điểm đặt
                     ingredientSnapshots: food.ingredients ?? []

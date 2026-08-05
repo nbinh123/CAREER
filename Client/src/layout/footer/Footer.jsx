@@ -1,10 +1,11 @@
 import React from "react";
 import { NavLink } from "react-router-dom";
-import { UtensilsCrossed, Receipt } from "lucide-react";
+import { UtensilsCrossed, Cherry, Receipt } from "lucide-react";
 import { ROUTES } from "../../constants/routes";
 
 const TABS = [
   { to: ROUTES.ORDER, label: "Thực đơn", icon: UtensilsCrossed },
+  { to: ROUTES.FRUITS, label: "Trái cây", icon: Cherry },
   { to: ROUTES.HISTORY, label: "Lịch sử", icon: Receipt },
 ];
 

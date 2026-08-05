@@ -39,8 +39,11 @@ const tableItemSchema = new Schema(
         // Trong sub-schema của "items" (thêm 2 field):
         status: { type: String, enum: ["cooking", "ready"], default: "cooking" },
         confirmedAt: { type: Date, default: null },
+        note: {
+            type: String,
+            default: "",
+        },
     },
-    { _id: false }
 );
 
 const tableSchema = new Schema(
@@ -82,6 +85,7 @@ const tableSchema = new Schema(
                     unitPrice: Number,
                     quantity: Number,
                     emoji: String,
+                    note: { type: String, default: "" },
                     submittedAt: { type: Date, default: Date.now },
                 },
             ],
@@ -102,6 +106,26 @@ const tableSchema = new Schema(
         chatEnabled: { type: Boolean, default: true },
         guestName: { type: String, default: null },
         guestPhone: { type: String, default: null },
+        fruitOrders: [
+            {
+                guestName: String,
+                guestPhone: String,
+                fruits: [
+                    {
+                        foodId: { type: mongoose.Schema.Types.ObjectId, ref: "Food" },
+                        foodName: String,
+                        price: Number,
+                    },
+                ],
+                quantity: Number,
+                matchedComboId: { type: mongoose.Schema.Types.ObjectId, ref: "Food", default: null },
+                matchedComboName: { type: String, default: null },
+                totalPrice: Number,
+                status: { type: String, default: "pending" },
+                createdAt: { type: Date, default: Date.now },
+            },
+        ],
+        
     },
 
     { timestamps: true }

@@ -1,6 +1,8 @@
 const { Server } = require("socket.io");
 const Table = require("../src/models/TableModel");
 const Food = require("../src/models/FoodModel"); // đổi path nếu FoodModel của bạn nằm chỗ khác
+const Fruit = require("../src/models/FruitModel"); // ← THIẾU: send_fruit_order dùng Fruit.find() nhưng chưa từng require — đổi path nếu FruitModel của bạn nằm chỗ khác
+const FruitOrder = require("../src/models/FruitOrderModel"); // ← THIẾU: send_fruit_order dùng FruitOrder.create() nhưng chưa từng require — đổi path nếu FruitOrderModel của bạn nằm chỗ khác
 
 const TABLE_COUNT = 12;
 
@@ -10,7 +12,7 @@ let ioInstance = null;
 // KHÔNG còn là nguồn dữ liệu gốc — MongoDB (TableModel) mới là nguồn
 // sự thật. Cache được đồng bộ lại sau mỗi lần ghi DB thành công.
 let tableCache = [];
-
+const FRUIT_COMBO_PRICE = 35000;
 // ─── Helpers ──────────────────────────────────────────────────────────────
 
 // Chuẩn hoá 1 document Table (Mongo) về đúng shape mà front-end đang cần.
@@ -31,8 +33,27 @@ const toClientTable = (t) => ({
     name: t.name,
     status: t.status,
     since: t.since,
-    items: t.items || [],
-    pendingItems: t.pendingItems || [],
+    items: (t.items || []).map((i) => ({
+        id: i._id ? String(i._id) : undefined,
+        foodId: i.foodId,
+        foodName: i.foodName,
+        unitPrice: i.unitPrice,
+        quantity: i.quantity,
+        emoji: i.emoji,
+        note: i.note || "",
+        status: i.status,
+        confirmedAt: i.confirmedAt,
+    })),
+    pendingItems: (t.pendingItems || []).map((i) => ({
+        id: i._id ? String(i._id) : undefined,
+        foodId: i.foodId,
+        foodName: i.foodName,
+        unitPrice: i.unitPrice,
+        quantity: i.quantity,
+        emoji: i.emoji,
+        note: i.note || "",
+        submittedAt: i.submittedAt,
+    })),
     active: !!t.active,
     chatEnabled: t.chatEnabled !== false,
     guestName: t.guestName || null,
@@ -43,6 +64,18 @@ const toClientTable = (t) => ({
         text: m.text,
         at: m.at,
         read: m.read,
+    })),
+    fruitOrders: (t.fruitOrders || []).map((o) => ({
+        id: o._id ? String(o._id) : undefined,
+        guestName: o.guestName,
+        guestPhone: o.guestPhone,
+        fruits: o.fruits || [],
+        quantity: o.quantity,
+        matchedComboId: o.matchedComboId ? String(o.matchedComboId) : null,
+        matchedComboName: o.matchedComboName || null,
+        totalPrice: o.totalPrice,
+        status: o.status,
+        createdAt: o.createdAt,
     })),
 });
 
@@ -63,6 +96,7 @@ async function ensureTablesSeeded() {
         guestName: null,
         guestPhone: null,
         messages: [],
+        fruitOrders: [],
     }));
 
     await Table.insertMany(docs);
@@ -193,6 +227,7 @@ function initSocket(server) {
                         messages: [],
                         guestName: null,
                         guestPhone: null,
+                        fruitOrders: [],
                     },
                     { new: true }
                 );
@@ -232,12 +267,13 @@ function initSocket(server) {
 
                 let updated = null;
 
-                for (const { foodId, quantity } of items) {
+                for (const { foodId, quantity, note } of items) {
                     const food = foodsInDb.find((f) => String(f._id) === String(foodId));
                     if (!food || !quantity || quantity <= 0) continue;
 
+                    const itemNote = note || "";
                     let result = await Table.findOneAndUpdate(
-                        { number: tableId, "pendingItems.foodId": foodId },
+                        { number: tableId, pendingItems: { $elemMatch: { foodId, note: itemNote } } },
                         {
                             $inc: { "pendingItems.$.quantity": quantity },
                             $set: { "pendingItems.$.submittedAt": new Date() },
@@ -257,6 +293,7 @@ function initSocket(server) {
                                         quantity,
                                         emoji: food.emoji || "",
                                         submittedAt: new Date(),
+                                        note: itemNote,
                                     },
                                 },
                             },
@@ -282,26 +319,26 @@ function initSocket(server) {
         });
 
         // ── 7. Admin xác nhận món đang chờ → chuyển sang "cooking" ────────
-        socket.on("confirm_items", async ({ tableId, foodIds }) => {
+        socket.on("confirm_items", async ({ tableId, pendingItemIds }) => {
             try {
-                let idsToConfirm = foodIds;
+                let idsToConfirm = pendingItemIds;
 
                 if (!idsToConfirm || idsToConfirm.length === 0) {
                     const snap = await Table.findOne({ number: tableId }, { pendingItems: 1 });
                     if (!snap) return;
-                    idsToConfirm = (snap.pendingItems || []).map((i) => String(i.foodId));
+                    idsToConfirm = (snap.pendingItems || []).map((i) => String(i._id));
                     if (idsToConfirm.length === 0) return;
                 }
 
                 const beforePull = await Table.findOneAndUpdate(
                     { number: tableId },
-                    { $pull: { pendingItems: { foodId: { $in: idsToConfirm } } } },
+                    { $pull: { pendingItems: { _id: { $in: idsToConfirm } } } },
                     { new: false }
                 );
                 if (!beforePull) return;
 
                 const pendingBefore = beforePull.pendingItems || [];
-                const toConfirm = pendingBefore.filter((i) => idsToConfirm.includes(String(i.foodId)));
+                const toConfirm = pendingBefore.filter((i) => idsToConfirm.includes(String(i._id)));
                 if (toConfirm.length === 0) return;
 
                 const now = new Date();
@@ -309,7 +346,7 @@ function initSocket(server) {
 
                 for (const p of toConfirm) {
                     let result = await Table.findOneAndUpdate(
-                        { number: tableId, items: { $elemMatch: { foodId: p.foodId, status: "cooking" } } },
+                        { number: tableId, items: { $elemMatch: { foodId: p.foodId, status: "cooking", note: p.note || "" } } },
                         { $inc: { "items.$.quantity": p.quantity } },
                         { new: true }
                     );
@@ -325,6 +362,7 @@ function initSocket(server) {
                                         unitPrice: p.unitPrice,
                                         quantity: p.quantity,
                                         emoji: p.emoji,
+                                        note: p.note || "",
                                         status: "cooking",
                                         confirmedAt: now,
                                     },
@@ -360,13 +398,13 @@ function initSocket(server) {
         });
 
         // ── 8. Bếp báo đã nấu xong 1 món của 1 bàn ─────────────────────────
-        socket.on("mark_item_ready", async ({ tableId, foodId }) => {
+        socket.on("mark_item_ready", async ({ tableId, itemId }) => {
             try {
                 const table = await Table.findOne({ number: tableId });
                 if (!table) return;
 
                 const items = table.items.map((i) =>
-                    String(i.foodId) === String(foodId) && i.status === "cooking"
+                    String(i._id) === String(itemId) && i.status === "cooking"
                         ? { ...i, status: "ready" }
                         : i
                 );
@@ -561,6 +599,82 @@ function initSocket(server) {
                 io.to("admin_room").emit("tables_state", tableCache);
             } catch (err) {
                 console.error("[socket] clear_chat_messages lỗi:", err.message);
+            }
+        });
+
+        // ── 15. Khách gửi đơn trái cây (FruitPage.jsx phía khách) ──────────
+        socket.on("send_fruit_order", async ({ tableId, guestName, phone, fruits, quantity, matchedComboId }) => {
+            try {
+                if (tableId == null) return;
+
+                const cleanName = (guestName || "").trim();
+                const cleanPhone = (phone || "").trim();
+                if (!cleanName || !/^[0-9]{10}$/.test(cleanPhone)) return;
+
+                if (!Array.isArray(fruits) || fruits.length !== 3) return;
+                const fruitIds = fruits.map((f) => f.fruitId).filter(Boolean);
+                if (fruitIds.length !== 3) return;
+
+                const fruitsInDb = await Fruit.find({ _id: { $in: fruitIds } });
+                if (fruitsInDb.length !== 3) return; // có fruitId không tồn tại/không hợp lệ
+
+                const cleanFruits = fruitIds.map((id) => {
+                    const fruit = fruitsInDb.find((f) => String(f._id) === String(id));
+                    return { fruitId: fruit._id, fruitName: fruit.fruitName };
+                });
+
+                const cleanQuantity = Number(quantity) > 0 ? Math.floor(Number(quantity)) : 1;
+                const cleanTotalPrice = FRUIT_COMBO_PRICE * cleanQuantity;
+
+                // Sort 3 fruitId để nhóm đúng combo bất kể khách chọn theo thứ tự nào.
+                const comboKey = fruitIds.map(String).sort().join("|");
+
+                // matchedComboId chỉ để hiển thị thông tin cho admin — verify nó là
+                // 1 Food document có thật, KHÔNG dùng để tính giá.
+                let matchedFood = null;
+                if (matchedComboId) {
+                    matchedFood = await Food.findById(matchedComboId).catch(() => null);
+                }
+
+                const orderFields = {
+                    guestName: cleanName,
+                    guestPhone: cleanPhone,
+                    fruits: cleanFruits,
+                    comboKey,
+                    matchedComboId: matchedFood ? matchedFood._id : null,
+                    matchedComboName: matchedFood ? matchedFood.foodName : null,
+                    quantity: cleanQuantity,
+                    totalPrice: cleanTotalPrice,
+                    status: "pending",
+                };
+
+                // 1) Lưu vào Table.fruitOrders (log theo phiên bàn hiện tại)
+                const updated = await Table.findOneAndUpdate(
+                    { number: tableId },
+                    { $push: { fruitOrders: { ...orderFields, createdAt: new Date() } } },
+                    { new: true }
+                );
+                if (!updated) return;
+
+                const clientTable = toClientTable(updated);
+                const idx = tableCache.findIndex((t) => t.id === tableId);
+                if (idx === -1) tableCache.push(clientTable);
+                else tableCache[idx] = clientTable;
+
+                const savedOrder = clientTable.fruitOrders[clientTable.fruitOrders.length - 1];
+
+                // 2) Lưu vĩnh viễn vào FruitOrder (log không bị xoá khi checkout)
+                await FruitOrder.create({ tableId, tableName: clientTable.name, ...orderFields });
+
+                io.to(`table:${tableId}`).emit("tables_state", [clientTable]);
+                io.to("admin_room").emit("tables_state", tableCache);
+                io.to("admin_room").emit("fruit_order_received", {
+                    tableId,
+                    tableName: clientTable.name,
+                    order: savedOrder,
+                });
+            } catch (err) {
+                console.error("[socket] send_fruit_order lỗi:", err.message);
             }
         });
 

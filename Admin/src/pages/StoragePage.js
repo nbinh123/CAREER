@@ -64,6 +64,7 @@ const GLOBAL_CSS = `
     --text-1:   #0D1117;
     --text-2:   #4B5563;
     --text-3:   #9CA3AF;
+    --title:    #064E3B;
     --green:    #059669;
     --green-bg: #ECFDF5;
     --green-bd: #A7F3D0;
@@ -95,19 +96,27 @@ body { font-family: var(--font); background: var(--bg); color: var(--text-1); }
 .sp-page { font-family:var(--font); min-height:100vh; background:var(--bg); padding:28px 24px; animation:fadeUp .4s ease both; }
 .sp-page * { font-family:var(--font); }
 
-/* ── Header ── */
+/* ── Header (colors/layout matched to the Order page header) ── */
 .sp-header { display:flex; justify-content:space-between; align-items:flex-start; gap:16px; flex-wrap:wrap; margin-bottom:24px; }
-.sp-title  { font-size:22px; font-weight:800; color:var(--text-1); letter-spacing:-.5px; }
-.sp-sub    { font-size:13px; color:var(--text-3); margin-top:3px; font-weight:500; }
+.sp-title  { font-size:27px; font-weight:800; color:var(--title); letter-spacing:-.5px; }
+.sp-sub-row { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-top:5px; }
+.sp-sub    { font-size:13px; color:#6B7280; font-weight:500; }
+.sp-period-badge {
+    display:inline-flex; align-items:center; gap:4px;
+    background:#DCFCE7; color:#166534;
+    font-size:11px; font-weight:800;
+    padding:4px 11px; border-radius:100px;
+    white-space:nowrap;
+}
 .sp-actions { display:flex; gap:10px; flex-wrap:wrap; }
 
 /* ── Buttons ── */
 .btn { display:inline-flex; align-items:center; gap:7px; padding:9px 18px; border-radius:9px; border:none; font-size:14px; font-weight:700; cursor:pointer; transition:all .18s; font-family:var(--font); white-space:nowrap; }
 .btn:disabled { opacity:.55; cursor:not-allowed; }
-.btn-import { background:linear-gradient(135deg,#059669,#047857); color:#fff; box-shadow:0 4px 14px rgba(5,150,105,.35); }
-.btn-import:hover:not(:disabled) { transform:translateY(-1px); box-shadow:0 6px 18px rgba(5,150,105,.45); }
-.btn-export { background:linear-gradient(135deg,#D97706,#B45309); color:#fff; box-shadow:0 4px 14px rgba(217,119,6,.35); }
-.btn-export:hover:not(:disabled) { transform:translateY(-1px); box-shadow:0 6px 18px rgba(217,119,6,.45); }
+.btn-import { background:#22C55E; color:#fff; box-shadow:0 2px 8px rgba(34,197,94,.3); border:none; }
+.btn-import:hover:not(:disabled) { background:#16A34A; }
+.btn-export { background:#fff; color:#4B5563; border:1.5px solid #E5E7EB; box-shadow:none; }
+.btn-export:hover:not(:disabled) { background:#F3F4F6; border-color:#D1D5DB; }
 .btn-ghost  { background:var(--card); color:var(--text-2); border:1.5px solid var(--border); box-shadow:var(--shadow); }
 .btn-ghost:hover:not(:disabled) { background:#F9FAFB; border-color:#D1D5DB; }
 .btn-primary { background:linear-gradient(135deg,#2563EB,#1D4ED8); color:#fff; box-shadow:0 4px 14px rgba(37,99,235,.35); }
@@ -250,7 +259,7 @@ body { font-family: var(--font); background: var(--bg); color: var(--text-1); }
 /* ── Responsive ── */
 @media (max-width:768px) {
     .sp-page { padding:16px 14px; }
-    .sp-title { font-size:18px; }
+    .sp-title { font-size:21px; }
     .stat-value { font-size:20px; }
     .sp-table th:nth-child(n+6), .sp-table td:nth-child(n+6) { display:none; }
     .modal-box { max-height:95vh; }
@@ -799,7 +808,10 @@ export default function StoragePage() {
             <div className="sp-header">
                 <div>
                     <div className="sp-title">Quản lý Kho Nguyên Liệu</div>
-                    <div className="sp-sub">Theo dõi nhập kho, hao hụt và chi phí nguyên liệu</div>
+                    <div className="sp-sub-row">
+                        <span className="sp-sub">Theo dõi nhập kho, hao hụt và chi phí nguyên liệu</span>
+                        <span className="sp-period-badge">📅 Tháng {new Date().getMonth() + 1}/{new Date().getFullYear()}</span>
+                    </div>
                 </div>
                 <div className="sp-actions">
                     <button className="btn btn-import" onClick={() => setShowImport(true)}>Nhập kho</button>

@@ -14,6 +14,7 @@ import AnalystPage from "./pages/AnalystPage";
 import RegisterPage from "./pages/RegisterPage";
 import StoragePage from "./pages/StoragePage";
 import KitchenPage from "./pages/KitchenPage";
+import FruitPage from "./pages/FruitPage";
 import Page403 from "./pages/403Page";
 
 import MainLayout from "../src/layouts/MainLayout"
@@ -247,6 +248,10 @@ export default function App() {
                   <Route path="/shift" element={
                     <ProtectedRoute isAdmin={false}>
                       <ShiftPage />
+                    </ProtectedRoute>} />
+                  <Route path="/fruit" element={
+                    <ProtectedRoute isAdmin={false}>
+                      <FruitPage />
                     </ProtectedRoute>} />
                 </Route>
                 <Route path="*" element={<Navigate to="/" replace />} />

@@ -6,6 +6,8 @@ const analystRoute = require("../routes/route/analystRoute")
 const ingredientRoute = require("../routes/route/ingredientRoute")
 const ingredientTracsactionRoute = require("../routes/route/ingredientTransactionRoutes")
 const tableRoute = require("../routes/route/tableRoute") // ❗ MỚI
+const fruitRoute = require("../routes/route/fruitRoute") // ❗ MỚI
+const fruitOrderRoute = require("../routes/route/fruitOrderRoute") // ❗ MỚI
 
 function router(app){ 
     app.use("/api/users",  userRoute)
@@ -15,6 +17,8 @@ function router(app){
     app.use("/api/ingredients", ingredientRoute)
     app.use("/api/ingredient-transactions", ingredientTracsactionRoute)
     app.use("/api/tables", tableRoute) // ❗ MỚI
+    app.use("/api/fruits", fruitRoute) // ❗ MỚI
+    app.use("/api/fruit-orders", fruitOrderRoute) // ❗ MỚI
 }
 
 module.exports = router

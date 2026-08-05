@@ -8,8 +8,10 @@ import CartDrawer from "../components/cart/CartDrawer";
 import Loading from "../components/common/Loading";
 import Button from "../components/common/Button";
 import { useFoods } from "../hooks/useFoods";
+import { useFruits } from "../hooks/useFruits";
 import { getBestSellerIds } from "../utils/bestSellers";
 import { formatCurrency } from "../utils/formatCurrency";
+import { isComboFoodItem } from "../utils/fruit";
 import { useCart } from "../context/CartContext";
 import { useGlobal } from "../context/GlobalContext";
 
@@ -40,7 +42,16 @@ export default function OrderPage() {
   const [cartOpen, setCartOpen] = useState(false);
   const { addItem } = useCart();
   const { showToast } = useGlobal();
-  const { foods, loading, error, refetch } = useFoods();
+  const { foods: allFoods, loading, error, refetch } = useFoods();
+  const { fruits } = useFruits();
+
+  // Combo trái cây có sẵn (Food document tên "A - B - C" khớp Fruit) chỉ
+  // bán qua trang riêng /fruits, không hiển thị lẫn trong Thực đơn — lọc bỏ
+  // ngay từ đây để danh mục (tabs) lẫn danh sách món bên dưới đều không thấy.
+  const foods = useMemo(
+    () => allFoods.filter((item) => !isComboFoodItem(item, fruits)),
+    [allFoods, fruits]
+  );
 
   // Reset số lượng mỗi khi mở món khác (kể cả đóng modal, item về null)
   useEffect(() => {

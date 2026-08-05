@@ -114,7 +114,11 @@ const userSchema = new Schema(
     totalWorkedTime: {
       type: Number,
       default: 0
-    }
+    },
+    telegramId: {
+      type: String,
+      default: null,
+    },
   },
   {
     timestamps: true,
