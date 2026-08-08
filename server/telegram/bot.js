@@ -1,13 +1,38 @@
+// telegram/bot.js
+//
+// Entry point của bot Telegram — được require 1 lần từ express.js lúc
+// server khởi động (chỉ để tạo side-effect: kết nối + bắt đầu polling).
+//
+// Export thêm notifyNewOrder(order) để phần tạo Order (OrderController)
+// gọi ngay sau khi lưu đơn thành công — xem README.md để biết chính
+// xác cần thêm dòng nào ở đó.
+require("dotenv").config();
+
 const { TelegramBot } = require("node-telegram-bot-api");
+const { TELEGRAM_TOKEN } = require("./config");
+const registerCommands = require("./commands");
+const registerCallbacks = require("./callbacks");
+const { notifyNewOrder } = require("./services/notify.service");
 
-const bot = new TelegramBot(process.env.TELEGRAM_TOKEN, {
-    polling: true,
-});
+let bot = null;
 
-// Đăng ký commands
-require("./commands")(bot);
+if (!TELEGRAM_TOKEN) {
+    console.warn("[telegram] Thiếu TELEGRAM_TOKEN trong .env — bot KHÔNG khởi động.");
+} else {
+    bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 
-// Đăng ký callbacks
-require("./callbacks")(bot);
+    registerCommands(bot);
+    registerCallbacks(bot);
 
-module.exports = bot;
+    bot.on("polling_error", (err) => console.error("[telegram] polling_error:", err.message));
+
+    console.log("[telegram] Bot đã khởi động (polling)");
+}
+
+module.exports = {
+    bot,
+    // Gọi hàm này ngay sau khi 1 Order được lưu thành công.
+    // An toàn khi gọi cả lúc bot chưa khởi động (thiếu TELEGRAM_TOKEN)
+    // — notifyNewOrder tự bỏ qua nếu bot === null.
+    notifyNewOrder: (order) => notifyNewOrder(bot, order),
+};

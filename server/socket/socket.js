@@ -3,6 +3,8 @@ const Table = require("../src/models/TableModel");
 const Food = require("../src/models/FoodModel"); // đổi path nếu FoodModel của bạn nằm chỗ khác
 const Fruit = require("../src/models/FruitModel"); // ← THIẾU: send_fruit_order dùng Fruit.find() nhưng chưa từng require — đổi path nếu FruitModel của bạn nằm chỗ khác
 const FruitOrder = require("../src/models/FruitOrderModel"); // ← THIẾU: send_fruit_order dùng FruitOrder.create() nhưng chưa từng require — đổi path nếu FruitOrderModel của bạn nằm chỗ khác
+const OnlineOrder = require("../src/models/OnlineOrderModel"); // ← MỚI: đơn online (dự án "Quán Ba Miền · Đặt món online") — đổi path nếu bạn đặt model ở chỗ khác
+const CustomerChat = require("../src/models/CustomerChatModel"); // ← MỚI: chat hỗ trợ của luồng online, gắn theo customerId
 
 const TABLE_COUNT = 12;
 
@@ -13,6 +15,31 @@ let ioInstance = null;
 // sự thật. Cache được đồng bộ lại sau mỗi lần ghi DB thành công.
 let tableCache = [];
 const FRUIT_COMBO_PRICE = 35000;
+
+// Cache RAM cho đơn online — TẤT CẢ khách, dùng cho trang quản lý admin.
+// Cùng nguyên tắc như tableCache: Mongo (OnlineOrder) mới là nguồn sự thật.
+// Chỉ giữ tối đa MAX_ONLINE_ORDERS_CACHE đơn gần nhất để tránh phình bộ nhớ
+// khi server chạy lâu ngày; lịch sử đầy đủ vẫn luôn còn trong MongoDB.
+let onlineOrdersCache = [];
+const MAX_ONLINE_ORDERS_CACHE = 300;
+
+// Cache RAM cho danh sách hội thoại chat online (1 phần tử = 1 customerId),
+// dùng để admin thấy ngay danh sách "ai đang nhắn tin" mà không cần query
+// lại DB mỗi lần. Không giới hạn số lượng — số khách nhắn tin thường ít hơn
+// nhiều so với số đơn hàng.
+let chatThreadsCache = [];
+
+// Trạng thái nào ứng với field mốc thời gian nào, đồng thời cũng LÀ danh
+// sách các trạng thái admin được phép set qua "admin_update_order_status"
+// (không cho set lại "pending" — đơn luôn bắt đầu ở pending lúc tạo).
+const ONLINE_ORDER_TIMESTAMP_FIELD = {
+    confirmed: "confirmedAt",
+    preparing: "preparingAt",
+    delivering: "deliveringAt",
+    completed: "completedAt",
+    cancelled: "cancelledAt",
+};
+
 // ─── Helpers ──────────────────────────────────────────────────────────────
 
 // Chuẩn hoá 1 document Table (Mongo) về đúng shape mà front-end đang cần.
@@ -79,6 +106,53 @@ const toClientTable = (t) => ({
     })),
 });
 
+// Chuẩn hoá 1 document OnlineOrder (Mongo) về đúng shape cho front-end —
+// field names khớp hợp đồng README của client-online (customerId,
+// customerName, phone, address, note, items, totalPrice, status,
+// createdAt, updatedAt) + vài field phụ cho trang admin (cancelReason,
+// các mốc thời gian).
+const toClientOnlineOrder = (o) => ({
+    id: o._id ? String(o._id) : undefined,
+    customerId: o.customerId,
+    customerName: o.customerName,
+    phone: o.phone,
+    address: o.address,
+    note: o.note || "",
+    items: (o.items || []).map((i) => ({
+        foodId: i.foodId,
+        foodName: i.foodName,
+        unitPrice: i.unitPrice,
+        quantity: i.quantity,
+        emoji: i.emoji || "",
+    })),
+    totalPrice: o.totalPrice,
+    status: o.status,
+    cancelReason: o.cancelReason || "",
+    createdAt: o.createdAt,
+    updatedAt: o.updatedAt,
+    confirmedAt: o.confirmedAt,
+    preparingAt: o.preparingAt,
+    deliveringAt: o.deliveringAt,
+    completedAt: o.completedAt,
+    cancelledAt: o.cancelledAt,
+});
+
+// Chuẩn hoá 1 document CustomerChat (Mongo) về "1 dòng hội thoại" cho danh
+// sách chat phía admin: tên khách (nếu đã biết), tin nhắn cuối, thời gian
+// tin cuối, số tin chưa đọc (chỉ đếm tin from: "customer").
+function toClientChatThread(doc) {
+    const messages = doc.messages || [];
+    const last = messages[messages.length - 1];
+    const unreadCount = messages.filter((m) => m.from === "customer" && !m.read).length;
+    return {
+        customerId: doc.customerId,
+        customerName: doc.customerName || "",
+        lastMessage: last ? last.text : "",
+        lastAt: last ? last.at : doc.updatedAt,
+        unreadCount,
+    };
+}
+
 // Tạo đủ TABLE_COUNT bàn mặc định trong DB nếu chưa có bàn nào
 async function ensureTablesSeeded() {
     const count = await Table.countDocuments();
@@ -106,6 +180,20 @@ async function ensureTablesSeeded() {
 async function loadTableCache() {
     const tables = await Table.find().sort({ number: 1 });
     tableCache = tables.map(toClientTable);
+}
+
+// Chỉ tải các đơn online GẦN ĐÂY vào cache (đủ dùng cho trang quản lý +
+// danh sách của từng khách). Nếu sau này cần xem lịch sử đầy đủ/phân trang
+// xa hơn, nên thêm 1 REST endpoint đọc thẳng từ MongoDB thay vì phình cache
+// này lên.
+async function loadOnlineOrdersCache() {
+    const orders = await OnlineOrder.find().sort({ createdAt: -1 }).limit(MAX_ONLINE_ORDERS_CACHE);
+    onlineOrdersCache = orders.map(toClientOnlineOrder);
+}
+
+async function loadChatThreadsCache() {
+    const docs = await CustomerChat.find();
+    chatThreadsCache = docs.map(toClientChatThread).sort((a, b) => new Date(b.lastAt) - new Date(a.lastAt));
 }
 
 // Gom danh sách món đang "cooking" theo từng bàn cho trang bếp,
@@ -149,6 +237,54 @@ async function persistChatMessage(io, tableId, from, text) {
     return clientTable.messages[clientTable.messages.length - 1];
 }
 
+// Ghi 1 tin nhắn chat ONLINE (theo customerId, KHÔNG theo tableId) — upsert
+// document CustomerChat, đồng bộ chatThreadsCache, trả về tin nhắn vừa lưu.
+// Không tự emit socket ở đây (khác với persistChatMessage phía trên) vì
+// handler gọi hàm này cần emit theo 2 kiểu khác nhau tuỳ ai gửi (khách vs
+// admin) — xem "send_chat_message"/"send_admin_chat_message" bên dưới.
+async function persistCustomerChatMessage(customerId, from, text) {
+    const value = (text || "").trim();
+    if (!customerId || !value) return null;
+
+    const message = { from, text: value, at: new Date(), read: from === "admin" };
+
+    const updated = await CustomerChat.findOneAndUpdate(
+        { customerId },
+        { $push: { messages: message }, $setOnInsert: { customerName: "" } },
+        { new: true, upsert: true }
+    );
+    if (!updated) return null;
+
+    const clientThread = toClientChatThread(updated);
+    const idx = chatThreadsCache.findIndex((t) => t.customerId === customerId);
+    if (idx === -1) chatThreadsCache.unshift(clientThread);
+    else chatThreadsCache[idx] = clientThread;
+    chatThreadsCache.sort((a, b) => new Date(b.lastAt) - new Date(a.lastAt));
+
+    const saved = updated.messages[updated.messages.length - 1];
+    return { id: String(saved._id), from: saved.from, text: saved.text, at: saved.at };
+}
+
+// Cập nhật 1 đơn online trong cache (thêm mới hoặc thay thế theo id), giữ
+// cache không vượt quá MAX_ONLINE_ORDERS_CACHE phần tử.
+function upsertOnlineOrderCache(clientOrder) {
+    const idx = onlineOrdersCache.findIndex((o) => o.id === clientOrder.id);
+    if (idx === -1) onlineOrdersCache.unshift(clientOrder);
+    else onlineOrdersCache[idx] = clientOrder;
+    if (onlineOrdersCache.length > MAX_ONLINE_ORDERS_CACHE) {
+        onlineOrdersCache.length = MAX_ONLINE_ORDERS_CACHE;
+    }
+}
+
+// Toàn bộ đơn (mọi trạng thái) của 1 customerId, mới nhất trước — dùng để
+// bắn lại "customer_orders_state" đúng hợp đồng README (mảng đầy đủ, không
+// phải 1 đơn lẻ) mỗi khi có đơn mới hoặc đổi trạng thái.
+function getCustomerOrders(customerId) {
+    return onlineOrdersCache
+        .filter((o) => o.customerId === customerId)
+        .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+}
+
 // ─── Socket.IO ──────────────────────────────────────────────────────────────
 function initSocket(server) {
     const io = new Server(server, {
@@ -160,7 +296,9 @@ function initSocket(server) {
         try {
             await ensureTablesSeeded();
             await loadTableCache();
-            console.log("[socket] Đã tải dữ liệu bàn từ MongoDB");
+            await loadOnlineOrdersCache();
+            await loadChatThreadsCache();
+            console.log("[socket] Đã tải dữ liệu bàn + đơn online + chat online từ MongoDB");
         } catch (err) {
             console.error("[socket] Lỗi khởi tạo dữ liệu bàn:", err.message);
         }
@@ -168,13 +306,15 @@ function initSocket(server) {
 
     io.on("connection", (socket) => {
 
-        // ── 1. Admin: join để thấy TOÀN BỘ bàn (kể cả pendingItems) ──────
+        // ── 1. Admin: join để thấy TOÀN BỘ bàn, đơn online, danh sách chat ──
         socket.on("join_admin", () => {
             socket.join("admin_room");
             socket.emit("tables_state", tableCache);
+            socket.emit("online_orders_state", onlineOrdersCache);
+            socket.emit("chat_threads_state", chatThreadsCache);
         });
 
-        // ── 2. Khách: join theo đúng 1 bàn ────────────────────────────────
+        // ── 2. Khách (bản tại bàn): join theo đúng 1 bàn ───────────────────
         socket.on("join_table", ({ tableId }) => {
             socket.join(`table:${tableId}`);
             const table = tableCache.find((t) => t.id === Number(tableId));
@@ -247,7 +387,7 @@ function initSocket(server) {
             }
         });
 
-        // ── 6. Khách gửi món (từ OrderPage.jsx phía khách) ────────────────
+        // ── 6. Khách gửi món (từ OrderPage.jsx phía khách, bản tại bàn) ────
         socket.on("send_to_kitchen", async ({ tableId, items }) => {
             try {
                 if (!tableId || !Array.isArray(items) || items.length === 0) return;
@@ -318,7 +458,7 @@ function initSocket(server) {
             }
         });
 
-        // ── 7. Admin xác nhận món đang chờ → chuyển sang "cooking" ────────
+        // ── 7. Admin xác nhận món đang chờ (bản tại bàn) → "cooking" ───────
         socket.on("confirm_items", async ({ tableId, pendingItemIds }) => {
             try {
                 let idsToConfirm = pendingItemIds;
@@ -454,9 +594,6 @@ function initSocket(server) {
         });
 
         // ── 9b. Admin bật/tắt cho phép khách gửi tin nhắn tại 1 bàn ────────
-        // Không xoá messages cũ, chỉ chặn khách gửi thêm khi chatEnabled=false
-        // (phần chặn gửi ở phía client — widget khách nên ẩn/khoá khi nhận
-        // được chatEnabled=false qua "tables_state").
         socket.on("toggle_table_chat", async ({ tableId, chatEnabled }) => {
             try {
                 if (tableId == null || typeof chatEnabled !== "boolean") return;
@@ -481,10 +618,6 @@ function initSocket(server) {
         });
 
         // ── 9c. Khách gửi tên + SĐT (từ GuestInfoPage.jsx phía khách) ──────
-        // Validate lại ở server (không chỉ tin client): tên không rỗng, SĐT
-        // đúng 10 chữ số. Lưu vào đúng bàn để admin thấy tên/SĐT ngay trong
-        // hộp thoại chat, kể cả khi admin mới join sau (join_admin đọc lại
-        // từ DB qua tableCache).
         socket.on("set_guest_info", async ({ tableId, name, phone }) => {
             try {
                 if (tableId == null) return;
@@ -512,7 +645,7 @@ function initSocket(server) {
             }
         });
 
-        // ── 10. Client yêu cầu đồng bộ lại (reconnect, refresh…) ───────────
+        // ── 10. Client yêu cầu đồng bộ lại bàn (reconnect, refresh…) ───────
         socket.on("request_tables", ({ tableId } = {}) => {
             if (tableId) {
                 const table = tableCache.find((t) => t.id === Number(tableId));
@@ -522,40 +655,74 @@ function initSocket(server) {
             }
         });
 
-        // ── 11. Khách gửi tin nhắn chat cho admin ──────────────────────────
-        // Chặn ngay từ server nếu bàn đang bị tắt tin nhắn, tránh khách vẫn
-        // gửi được qua request thủ công dù UI đã ẩn nút chat.
-        socket.on("send_chat_message", async ({ tableId, text }) => {
+        // ── 11. Gửi tin nhắn chat CHO admin — DÙNG CHUNG cho cả bản tại bàn
+        // (tableId) LẪN bản đặt online (customerId), vì 2 dự án frontend
+        // riêng biệt đều gọi cùng tên sự kiện "send_chat_message". Phân biệt
+        // bằng field nào có mặt trong payload — không đổi tên sự kiện được
+        // vì client-online đã hard-code đúng tên này (xem README, mục "Hợp
+        // đồng Socket.IO").
+        socket.on("send_chat_message", async ({ tableId, customerId, text } = {}) => {
             try {
-                const table = tableCache.find((t) => t.id === Number(tableId));
-                if (table && table.chatEnabled === false) return;
+                // ── Nhánh bản tại bàn (giữ nguyên logic cũ) ──
+                if (tableId != null) {
+                    const table = tableCache.find((t) => t.id === Number(tableId));
+                    if (table && table.chatEnabled === false) return;
 
-                const savedMessage = await persistChatMessage(io, tableId, "guest", text);
-                if (!savedMessage) return;
+                    const savedMessage = await persistChatMessage(io, tableId, "guest", text);
+                    if (!savedMessage) return;
 
-                io.to(`table:${tableId}`).emit("chat_message", savedMessage);
-                io.to("admin_room").emit("chat_message", { tableId, message: savedMessage });
+                    io.to(`table:${tableId}`).emit("chat_message", savedMessage);
+                    io.to("admin_room").emit("chat_message", { tableId, message: savedMessage });
+                    return;
+                }
+
+                // ── Nhánh bản đặt online ──
+                if (customerId) {
+                    const savedMessage = await persistCustomerChatMessage(customerId, "customer", text);
+                    if (!savedMessage) return;
+
+                    // Bắn NGUYÊN object tin nhắn cho khách — đúng hợp đồng README
+                    // ("chat_message" nhận 1 object, không bọc thêm customerId, vì
+                    // khách chỉ ở trong đúng 1 room "customer:<id>" của chính họ).
+                    io.to(`customer:${customerId}`).emit("chat_message", savedMessage);
+
+                    // Cho admin: bọc thêm customerId để phân biệt được thread nào —
+                    // admin có thể đang mở nhiều đơn/nhiều thread cùng lúc.
+                    io.to("admin_room").emit("customer_chat_message", { customerId, message: savedMessage });
+                    io.to("admin_room").emit("chat_threads_state", chatThreadsCache);
+                }
             } catch (err) {
                 console.error("[socket] send_chat_message lỗi:", err.message);
             }
         });
 
-        // ── 12. Admin trả lời tin nhắn cho khách tại 1 bàn ─────────────────
-        socket.on("send_admin_chat_message", async ({ tableId, text }) => {
+        // ── 12. Admin trả lời tin nhắn — DÙNG CHUNG cho cả 2 bản, cùng
+        // nguyên tắc phân nhánh như "send_chat_message" ở trên.
+        socket.on("send_admin_chat_message", async ({ tableId, customerId, text } = {}) => {
             try {
-                const savedMessage = await persistChatMessage(io, tableId, "admin", text);
-                if (!savedMessage) return;
+                if (tableId != null) {
+                    const savedMessage = await persistChatMessage(io, tableId, "admin", text);
+                    if (!savedMessage) return;
 
-                io.to(`table:${tableId}`).emit("chat_message", savedMessage);
-                io.to("admin_room").emit("chat_message", { tableId, message: savedMessage });
+                    io.to(`table:${tableId}`).emit("chat_message", savedMessage);
+                    io.to("admin_room").emit("chat_message", { tableId, message: savedMessage });
+                    return;
+                }
+
+                if (customerId) {
+                    const savedMessage = await persistCustomerChatMessage(customerId, "admin", text);
+                    if (!savedMessage) return;
+
+                    io.to(`customer:${customerId}`).emit("chat_message", savedMessage);
+                    io.to("admin_room").emit("customer_chat_message", { customerId, message: savedMessage });
+                    io.to("admin_room").emit("chat_threads_state", chatThreadsCache);
+                }
             } catch (err) {
                 console.error("[socket] send_admin_chat_message lỗi:", err.message);
             }
         });
 
         // ── 13. Admin mở hộp thoại chat của 1 bàn → đánh dấu đã đọc ────────
-        // Chỉ đánh dấu các tin nhắn from: "guest" đang read: false, không
-        // đụng tới tin nhắn from: "admin" (vốn đã read: true khi tạo).
         socket.on("mark_chat_read", async ({ tableId }) => {
             try {
                 if (tableId == null) return;
@@ -577,9 +744,9 @@ function initSocket(server) {
                 console.error("[socket] mark_chat_read lỗi:", err.message);
             }
         });
+
         // ── 14. Admin xoá toàn bộ lịch sử chat của 1 bàn ───────────────────
         socket.on("clear_chat_messages", async ({ tableId }) => {
-            console.log("[server] nhận clear_chat_messages, tableId =", tableId, typeof tableId);
             try {
                 if (tableId == null) return;
 
@@ -602,7 +769,7 @@ function initSocket(server) {
             }
         });
 
-        // ── 15. Khách gửi đơn trái cây (FruitPage.jsx phía khách) ──────────
+        // ── 15. Khách gửi đơn trái cây (FruitPage.jsx phía khách, bản tại bàn) ──
         socket.on("send_fruit_order", async ({ tableId, guestName, phone, fruits, quantity, matchedComboId }) => {
             try {
                 if (tableId == null) return;
@@ -626,11 +793,8 @@ function initSocket(server) {
                 const cleanQuantity = Number(quantity) > 0 ? Math.floor(Number(quantity)) : 1;
                 const cleanTotalPrice = FRUIT_COMBO_PRICE * cleanQuantity;
 
-                // Sort 3 fruitId để nhóm đúng combo bất kể khách chọn theo thứ tự nào.
                 const comboKey = fruitIds.map(String).sort().join("|");
 
-                // matchedComboId chỉ để hiển thị thông tin cho admin — verify nó là
-                // 1 Food document có thật, KHÔNG dùng để tính giá.
                 let matchedFood = null;
                 if (matchedComboId) {
                     matchedFood = await Food.findById(matchedComboId).catch(() => null);
@@ -648,7 +812,6 @@ function initSocket(server) {
                     status: "pending",
                 };
 
-                // 1) Lưu vào Table.fruitOrders (log theo phiên bàn hiện tại)
                 const updated = await Table.findOneAndUpdate(
                     { number: tableId },
                     { $push: { fruitOrders: { ...orderFields, createdAt: new Date() } } },
@@ -663,7 +826,6 @@ function initSocket(server) {
 
                 const savedOrder = clientTable.fruitOrders[clientTable.fruitOrders.length - 1];
 
-                // 2) Lưu vĩnh viễn vào FruitOrder (log không bị xoá khi checkout)
                 await FruitOrder.create({ tableId, tableName: clientTable.name, ...orderFields });
 
                 io.to(`table:${tableId}`).emit("tables_state", [clientTable]);
@@ -676,6 +838,171 @@ function initSocket(server) {
             } catch (err) {
                 console.error("[socket] send_fruit_order lỗi:", err.message);
             }
+        });
+
+        // ══════════════════════════════════════════════════════════════════
+        // ── LUỒNG ĐẶT ONLINE (dự án "Quán Ba Miền · Đặt món online") ────────
+        // Các sự kiện 16-17 khớp ĐÚNG tên + payload README client-online yêu
+        // cầu — không đổi tên được vì frontend đã hard-code sẵn. Các sự kiện
+        // 18 trở đi (admin_*) do mình tự đặt tên, vì trang quản lý chưa có
+        // sẵn (README nói rõ "chưa nằm trong dự án này").
+        // ══════════════════════════════════════════════════════════════════
+
+        // ── 16. Khách (online) kết nối → join phòng riêng, nhận đơn + chat cũ ──
+        socket.on("join_customer", async ({ customerId } = {}) => {
+            try {
+                if (!customerId) return;
+                socket.join(`customer:${customerId}`);
+                socket.emit("customer_orders_state", getCustomerOrders(customerId));
+
+                const chatDoc = await CustomerChat.findOne({ customerId });
+                const history = ((chatDoc && chatDoc.messages) || []).map((m) => ({
+                    id: String(m._id),
+                    from: m.from,
+                    text: m.text,
+                    at: m.at,
+                }));
+                socket.emit("chat_history", history);
+            } catch (err) {
+                console.error("[socket] join_customer lỗi:", err.message);
+            }
+        });
+
+        // ── 17. Khách (online) đặt đơn — server luôn tự tra Food trong DB để
+        // tính lại foodName/unitPrice, KHÔNG tin số liệu client gửi lên, cùng
+        // nguyên tắc bảo mật với "send_to_kitchen" ở bản tại bàn.
+        socket.on("place_order", async ({ customerId, customerName, phone, address, note, items } = {}) => {
+            try {
+                if (!customerId) return;
+
+                const cleanName = (customerName || "").trim();
+                const cleanPhone = (phone || "").trim();
+                const cleanAddress = (address || "").trim();
+                const cleanNote = (note || "").trim();
+                if (!cleanName || !cleanPhone || !cleanAddress) return;
+                if (!Array.isArray(items) || items.length === 0) return;
+
+                const foodIds = items.map((i) => i.foodId).filter(Boolean);
+                const foodsInDb = await Food.find({ _id: { $in: foodIds } });
+
+                const cleanItems = [];
+                for (const { foodId, quantity } of items) {
+                    const food = foodsInDb.find((f) => String(f._id) === String(foodId));
+                    const qty = Number(quantity);
+                    if (!food || !qty || qty <= 0) continue;
+                    cleanItems.push({
+                        foodId: food._id,
+                        foodName: food.foodName,
+                        unitPrice: food.originalPrice,
+                        quantity: qty,
+                        emoji: food.emoji || "",
+                    });
+                }
+                if (cleanItems.length === 0) return;
+
+                const totalPrice = cleanItems.reduce((s, i) => s + i.unitPrice * i.quantity, 0);
+
+                const created = await OnlineOrder.create({
+                    customerId,
+                    customerName: cleanName,
+                    phone: cleanPhone,
+                    address: cleanAddress,
+                    note: cleanNote,
+                    items: cleanItems,
+                    totalPrice,
+                    status: "pending",
+                });
+
+                // Đồng bộ tên khách vào hồ sơ chat — bản thân sự kiện chat không
+                // mang tên khách, nên admin cần lấy tên từ đây để hiện trong danh
+                // sách hội thoại thay vì chỉ thấy customerId.
+                const chatDoc = await CustomerChat.findOneAndUpdate(
+                    { customerId },
+                    { $set: { customerName: cleanName }, $setOnInsert: { messages: [] } },
+                    { new: true, upsert: true }
+                );
+                const threadIdx = chatThreadsCache.findIndex((t) => t.customerId === customerId);
+                const refreshedThread = toClientChatThread(chatDoc);
+                if (threadIdx === -1) chatThreadsCache.unshift(refreshedThread);
+                else chatThreadsCache[threadIdx] = refreshedThread;
+
+                const clientOrder = toClientOnlineOrder(created);
+                upsertOnlineOrderCache(clientOrder);
+
+                io.to(`customer:${customerId}`).emit("customer_orders_state", getCustomerOrders(customerId));
+                io.to("admin_room").emit("online_order_created", clientOrder);
+                io.to("admin_room").emit("online_orders_state", onlineOrdersCache);
+            } catch (err) {
+                console.error("[socket] place_order lỗi:", err.message);
+            }
+        });
+
+        // ── 18. Admin đổi trạng thái 1 đơn online — dùng chung 1 handler cho
+        // cả 5 bước (confirmed/preparing/delivering/completed) lẫn huỷ, thay
+        // vì 5 sự kiện riêng, cho gọn phía admin UI. Không cho set "pending"
+        // qua đây (đơn luôn bắt đầu pending lúc "place_order").
+        socket.on("admin_update_order_status", async ({ orderId, status, reason } = {}) => {
+            try {
+                if (!orderId || !ONLINE_ORDER_TIMESTAMP_FIELD[status]) return;
+
+                const update = { status, [ONLINE_ORDER_TIMESTAMP_FIELD[status]]: new Date() };
+                if (status === "cancelled") update.cancelReason = (reason || "").trim();
+
+                const updated = await OnlineOrder.findByIdAndUpdate(orderId, update, { new: true });
+                if (!updated) return;
+
+                const clientOrder = toClientOnlineOrder(updated);
+                upsertOnlineOrderCache(clientOrder);
+
+                io.to("admin_room").emit("online_orders_state", onlineOrdersCache);
+                io.to(`customer:${clientOrder.customerId}`).emit(
+                    "customer_orders_state",
+                    getCustomerOrders(clientOrder.customerId)
+                );
+            } catch (err) {
+                console.error("[socket] admin_update_order_status lỗi:", err.message);
+            }
+        });
+
+        // ── 19. Admin mở 1 thread chat online → lấy lịch sử + đánh dấu đã đọc.
+        // KHÔNG cần socket.join phòng "customer:<id>" ở đây — cập nhật realtime
+        // cho admin đã đi qua sự kiện "customer_chat_message" bắn tới cả
+        // "admin_room" (xem send_chat_message/send_admin_chat_message ở trên),
+        // có kèm customerId để admin tự lọc đúng thread đang mở.
+        socket.on("admin_join_customer_chat", async ({ customerId } = {}) => {
+            try {
+                if (!customerId) return;
+
+                const updated = await CustomerChat.findOneAndUpdate(
+                    { customerId },
+                    { $set: { "messages.$[el].read": true } },
+                    { new: true, arrayFilters: [{ "el.from": "customer", "el.read": false }] }
+                );
+
+                const doc = updated || (await CustomerChat.findOne({ customerId }));
+                const history = ((doc && doc.messages) || []).map((m) => ({
+                    id: String(m._id),
+                    from: m.from,
+                    text: m.text,
+                    at: m.at,
+                }));
+                socket.emit("chat_history", history);
+
+                if (updated) {
+                    const clientThread = toClientChatThread(updated);
+                    const idx = chatThreadsCache.findIndex((t) => t.customerId === customerId);
+                    if (idx === -1) chatThreadsCache.unshift(clientThread);
+                    else chatThreadsCache[idx] = clientThread;
+                    io.to("admin_room").emit("chat_threads_state", chatThreadsCache);
+                }
+            } catch (err) {
+                console.error("[socket] admin_join_customer_chat lỗi:", err.message);
+            }
+        });
+
+        // ── 20. Đồng bộ lại đơn online (reconnect, refresh…) — dùng cho admin.
+        socket.on("request_online_orders", () => {
+            socket.emit("online_orders_state", onlineOrdersCache);
         });
 
         socket.on("disconnect", () => { });

@@ -298,7 +298,7 @@ export default function OrdersPage() {
             paymentMethod: payMethod,
             isPaid: true,
             note: "",
-            createdBy: "Admin", // thay bằng userId khi có auth
+            createdBy: "Admin", // thay bằng userId khi có auth #fix
         };
 
         try {

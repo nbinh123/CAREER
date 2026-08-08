@@ -63,6 +63,12 @@ const NAV = [
     roles: ["admin"],
   },
   {
+    path: "/online",
+    label: "Đơn hàng online",
+    icon: ShoppingCart,
+    roles: ["admin"],
+  },
+  {
     path: "/kitchen",
     label: "Nhà bếp",
     icon: ChefHatIcon,
