@@ -139,6 +139,7 @@ export default function OnlineOrdersPage() {
     // trang admin khác — chia sẻ đúng 1 connection thay vì tự io(...) riêng.
     useEffect(() => {
         socketRef.current = socket;
+        const orderToastTimers = orderToastTimersRef.current; // chụp lại tham chiếu Map ngay lúc effect chạy
 
         const handleConnect = () => {
             setConnected(true);
@@ -153,7 +154,7 @@ export default function OnlineOrdersPage() {
             const toastId = `${order.id}-${Date.now()}`;
             setOrderToasts((prev) => [...prev, { toastId, order }]);
             const timeoutId = setTimeout(() => dismissOrderToast(toastId), NEW_ORDER_TOAST_DURATION);
-            orderToastTimersRef.current.set(toastId, timeoutId);
+            orderToastTimers.set(toastId, timeoutId); // dùng biến local thay vì .current
         };
 
         const handleChatThreadsState = (list) => setChatThreads(list || []);
@@ -187,7 +188,7 @@ export default function OnlineOrdersPage() {
             socket.off("chat_threads_state", handleChatThreadsState);
             socket.off("chat_history", handleChatHistory);
             socket.off("customer_chat_message", handleCustomerChatMessage);
-            orderToastTimersRef.current.forEach(clearTimeout); // clear hết timer còn treo (nếu unmount lúc còn toast)
+            orderToastTimers.forEach(clearTimeout); // dùng biến local, không đọc lại ref.current
             orderToastTimersRef.current.clear();
             clearTimeout(chatToastTimer.current);
         };
