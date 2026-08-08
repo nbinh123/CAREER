@@ -5,6 +5,7 @@ const Fruit = require("../src/models/FruitModel"); // ← THIẾU: send_fruit_or
 const FruitOrder = require("../src/models/FruitOrderModel"); // ← THIẾU: send_fruit_order dùng FruitOrder.create() nhưng chưa từng require — đổi path nếu FruitOrderModel của bạn nằm chỗ khác
 const OnlineOrder = require("../src/models/OnlineOrderModel"); // ← MỚI: đơn online (dự án "Quán Ba Miền · Đặt món online") — đổi path nếu bạn đặt model ở chỗ khác
 const CustomerChat = require("../src/models/CustomerChatModel"); // ← MỚI: chat hỗ trợ của luồng online, gắn theo customerId
+const { notifyNewOnlineOrder } = require("../telegram/bot"); // ← MỚI: bắn thông báo Telegram ngay khi có đơn online mới — đổi path nếu socket.js không nằm cùng cấp thư mục với telegram/ (xem README trong telegram/)
 
 const TABLE_COUNT = 12;
 
@@ -127,6 +128,8 @@ const toClientOnlineOrder = (o) => ({
     })),
     totalPrice: o.totalPrice,
     status: o.status,
+    paymentMethod: o.paymentMethod || null,
+    convertedOrderId: o.convertedOrderId ? String(o.convertedOrderId) : null,
     cancelReason: o.cancelReason || "",
     createdAt: o.createdAt,
     updatedAt: o.updatedAt,
@@ -932,6 +935,13 @@ function initSocket(server) {
                 io.to(`customer:${customerId}`).emit("customer_orders_state", getCustomerOrders(customerId));
                 io.to("admin_room").emit("online_order_created", clientOrder);
                 io.to("admin_room").emit("online_orders_state", onlineOrdersCache);
+
+                // Bắn Telegram NGAY lúc đơn đến (pending) — không đợi tới lúc
+                // admin xác nhận/thanh toán, vì mục đích là báo động tức thời
+                // cho admin phản hồi nhanh. Dùng "created" (document Mongo gốc,
+                // chưa qua toClientOnlineOrder) vì describeNewOnlineOrder đọc
+                // đúng field name của schema (phone/address/totalPrice...).
+                notifyNewOnlineOrder(created).catch(() => {});
             } catch (err) {
                 console.error("[socket] place_order lỗi:", err.message);
             }
@@ -941,12 +951,20 @@ function initSocket(server) {
         // cả 5 bước (confirmed/preparing/delivering/completed) lẫn huỷ, thay
         // vì 5 sự kiện riêng, cho gọn phía admin UI. Không cho set "pending"
         // qua đây (đơn luôn bắt đầu pending lúc "place_order").
-        socket.on("admin_update_order_status", async ({ orderId, status, reason } = {}) => {
+        socket.on("admin_update_order_status", async ({ orderId, status, reason, paymentMethod, convertedOrderId } = {}) => {
             try {
                 if (!orderId || !ONLINE_ORDER_TIMESTAMP_FIELD[status]) return;
 
                 const update = { status, [ONLINE_ORDER_TIMESTAMP_FIELD[status]]: new Date() };
                 if (status === "cancelled") update.cancelReason = (reason || "").trim();
+
+                // paymentMethod/convertedOrderId chỉ có ý nghĩa lúc "completed" —
+                // trang admin gửi kèm sau khi đã POST /api/orders thành công (xem
+                // OnlineOrdersPage.jsx, handleConfirmCheckout).
+                if (status === "completed") {
+                    if (paymentMethod) update.paymentMethod = paymentMethod;
+                    if (convertedOrderId) update.convertedOrderId = convertedOrderId;
+                }
 
                 const updated = await OnlineOrder.findByIdAndUpdate(orderId, update, { new: true });
                 if (!updated) return;

@@ -12,7 +12,7 @@ const { TelegramBot } = require("node-telegram-bot-api");
 const { TELEGRAM_TOKEN } = require("./config");
 const registerCommands = require("./commands");
 const registerCallbacks = require("./callbacks");
-const { notifyNewOrder } = require("./services/notify.service");
+const { notifyNewOrder, notifyNewOnlineOrder } = require("./services/notify.service");
 
 let bot = null;
 
@@ -35,4 +35,8 @@ module.exports = {
     // An toàn khi gọi cả lúc bot chưa khởi động (thiếu TELEGRAM_TOKEN)
     // — notifyNewOrder tự bỏ qua nếu bot === null.
     notifyNewOrder: (order) => notifyNewOrder(bot, order),
+    // Gọi ngay sau khi 1 OnlineOrder được tạo (status "pending", khách vừa
+    // đặt — xem socket.js, handler "place_order"). Cùng nguyên tắc an toàn
+    // như trên, tự bỏ qua nếu bot === null.
+    notifyNewOnlineOrder: (order) => notifyNewOnlineOrder(bot, order),
 };

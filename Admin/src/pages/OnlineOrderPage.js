@@ -4,14 +4,29 @@ import Button from "../components/Button";
 import Modal from "../components/Modal";
 import fmtVND from "../utils/fmtVND";
 import fmtDate from "../utils/fmtDate";
+import { API_URL } from "../config/api";
 import {
-    ArrowRight, Bell, MapPin, MessageCircle, Phone, Search,
+    ArrowRight, Bell, Check, MapPin, MessageCircle, Phone, Search,
     Send, ShoppingBag, Wifi, WifiOff, XCircle,
 } from "lucide-react";
 
 // ─── Hằng số ──────────────────────────────────────────────────────────────────
-const NEW_ORDER_TOAST_DURATION = 6000; // toast đơn mới tự ẩn sau 6s
+const NEW_ORDER_TOAST_DURATION = 6000; // mỗi toast đơn mới tự ẩn sau 6s (độc lập với các toast khác)
+const MAX_VISIBLE_ORDER_TOASTS = 3; // đơn mới về liên tiếp — chỉ hiện tối đa 3 toast, dư ra gộp vào dòng tổng
 const NEW_CHAT_TOAST_DURATION = 6000; // toast tin nhắn mới tự ẩn sau 6s
+const ACTION_TOAST_DURATION = 3500; // toast kết quả thao tác (thanh toán...) tự ẩn sau 3.5s
+
+// Đơn hàng thật (OrderModel) được tạo qua REST khi admin xác nhận thanh
+// toán — CÙNG endpoint mà OrdersPage.jsx (bản tại bàn) đang dùng, để đơn
+// online cũng lên chung 1 chỗ báo cáo doanh thu.
+const ORDERS_API_URL = `${API_URL}/api/orders`;
+
+const PAYMENT_OPTIONS = [
+    ["CASH", "💵 Tiền mặt"],
+    ["BANKING", "🏦 Chuyển khoản"],
+    ["MOMO", "🟣 MoMo"],
+    ["ZALOPAY", "🔵 ZaloPay"],
+];
 
 // Cột Kanban cho các đơn đang xử lý — đúng thứ tự luồng thật:
 // pending → confirmed → preparing → delivering → (completed nằm ở tab Lịch sử)
@@ -59,20 +74,36 @@ export default function OnlineOrdersPage() {
     const [ordersView, setOrdersView] = useState("active"); // "active" | "history"
     const [historySearch, setHistorySearch] = useState("");
 
-    const [orderToast, setOrderToast] = useState(null); // đơn mới vừa vào
+    // Hàng đợi toast đơn mới — KHÔNG dùng 1 state đơn lẻ nữa, vì nếu 2-3 khách
+    // đặt liên tiếp trong vài giây, đơn sau sẽ ghi đè mất thông báo đơn trước.
+    // Mỗi phần tử tự có timer riêng (xem orderToastTimersRef) nên tự tắt độc
+    // lập, không phụ thuộc đơn đến sau/trước.
+    const [orderToasts, setOrderToasts] = useState([]); // [{ toastId, order }]
     const [chatToast, setChatToast] = useState(null); // { customerId, message }
 
     const [cancelTarget, setCancelTarget] = useState(null);
     const [cancelReason, setCancelReason] = useState("");
     const [detailOrder, setDetailOrder] = useState(null); // xem chi tiết đơn ở tab lịch sử
 
+    // Bộ lọc trạng thái dùng trên mobile (<md) — thay cho Kanban 4 cột đầy đủ,
+    // xem 1 cột tại 1 thời điểm cho dễ thao tác bằng ngón tay.
+    const [mobileStatusFilter, setMobileStatusFilter] = useState("pending");
+
+    // Modal xác nhận thanh toán — chỉ mở lúc chuyển bước cuối
+    // "delivering" → "completed", vì chỉ bước đó thật sự liên quan tới tiền.
+    const [checkoutTarget, setCheckoutTarget] = useState(null);
+    const [checkoutPayMethod, setCheckoutPayMethod] = useState("CASH");
+    const [checkoutLoading, setCheckoutLoading] = useState(false);
+    const [actionToast, setActionToast] = useState(null); // { type: "success"|"error", msg }
+
     const [activeChatCustomerId, setActiveChatCustomerId] = useState(null);
     const [chatMessages, setChatMessages] = useState([]);
     const [chatDraft, setChatDraft] = useState("");
 
     const socketRef = useRef(null);
-    const orderToastTimer = useRef(null);
+    const orderToastTimersRef = useRef(new Map()); // toastId -> timeoutId, để clear đúng cái khi dismiss/unmount
     const chatToastTimer = useRef(null);
+    const actionToastTimer = useRef(null);
     const activeChatCustomerIdRef = useRef(null);
     const chatScrollRef = useRef(null);
     const chatInputRef = useRef(null);
@@ -80,6 +111,28 @@ export default function OnlineOrdersPage() {
     useEffect(() => {
         activeChatCustomerIdRef.current = activeChatCustomerId;
     }, [activeChatCustomerId]);
+
+    useEffect(() => () => clearTimeout(actionToastTimer.current), []);
+
+    // Kết quả 1 thao tác admin tự bấm (thanh toán...) — khác với orderToasts/
+    // chatToast vốn là thông báo real-time tới TỪ server.
+    const showActionToast = useCallback((type, msg) => {
+        setActionToast({ type, msg });
+        clearTimeout(actionToastTimer.current);
+        actionToastTimer.current = setTimeout(() => setActionToast(null), ACTION_TOAST_DURATION);
+    }, []);
+
+    // Gỡ đúng 1 toast đơn mới khỏi hàng đợi — dùng chung cho auto-timeout (hết
+    // 6s) và khi admin bấm tay vào toast đó. Luôn clear timer tương ứng để
+    // tránh set state trên toastId đã bị gỡ trước đó.
+    const dismissOrderToast = useCallback((toastId) => {
+        setOrderToasts((prev) => prev.filter((t) => t.toastId !== toastId));
+        const timeoutId = orderToastTimersRef.current.get(toastId);
+        if (timeoutId) {
+            clearTimeout(timeoutId);
+            orderToastTimersRef.current.delete(toastId);
+        }
+    }, []);
 
     // ─── Socket setup ──────────────────────────────────────────────────────────
     // Dùng instance socket DÙNG CHUNG (import từ ../utils/socket), giống các
@@ -97,9 +150,10 @@ export default function OnlineOrdersPage() {
 
         const handleOrdersState = (list) => setOrders(list || []);
         const handleOrderCreated = (order) => {
-            setOrderToast(order);
-            clearTimeout(orderToastTimer.current);
-            orderToastTimer.current = setTimeout(() => setOrderToast(null), NEW_ORDER_TOAST_DURATION);
+            const toastId = `${order.id}-${Date.now()}`;
+            setOrderToasts((prev) => [...prev, { toastId, order }]);
+            const timeoutId = setTimeout(() => dismissOrderToast(toastId), NEW_ORDER_TOAST_DURATION);
+            orderToastTimersRef.current.set(toastId, timeoutId);
         };
 
         const handleChatThreadsState = (list) => setChatThreads(list || []);
@@ -133,10 +187,11 @@ export default function OnlineOrdersPage() {
             socket.off("chat_threads_state", handleChatThreadsState);
             socket.off("chat_history", handleChatHistory);
             socket.off("customer_chat_message", handleCustomerChatMessage);
-            clearTimeout(orderToastTimer.current);
+            orderToastTimersRef.current.forEach(clearTimeout); // clear hết timer còn treo (nếu unmount lúc còn toast)
+            orderToastTimersRef.current.clear();
             clearTimeout(chatToastTimer.current);
         };
-    }, []);
+    }, [dismissOrderToast]);
 
     // Mở hộp thoại chat → cuộn xuống cuối + focus ô nhập
     useEffect(() => {
@@ -182,10 +237,25 @@ export default function OnlineOrdersPage() {
     const totalUnreadChat = chatThreads.reduce((s, t) => s + t.unreadCount, 0);
     const activeThread = chatThreads.find((t) => t.customerId === activeChatCustomerId);
 
+    // Đơn mới về liên tiếp (2, 3, hay nhiều hơn) đều nằm đủ trong orderToasts —
+    // chỉ giới hạn số toast HIỂN THỊ cùng lúc để không tràn màn hình trên
+    // điện thoại; phần dư gộp vào 1 dòng tổng, vẫn bấm được để nhảy tới tab
+    // đơn hàng. Toast nào tự hết 6s sẽ tự rời hàng đợi, không cần thao tác gì.
+    const visibleOrderToasts = orderToasts.slice(0, MAX_VISIBLE_ORDER_TOASTS);
+    const hiddenOrderToastCount = orderToasts.length - visibleOrderToasts.length;
+
     // ─── Hành động đơn hàng ────────────────────────────────────────────────────
+    // Bước cuối (delivering → completed) mở modal thanh toán thay vì đổi
+    // trạng thái ngay — các bước trước đó (pending/confirmed/preparing)
+    // không liên quan tới tiền nên vẫn đổi thẳng như cũ.
     const advanceStatus = useCallback((order) => {
         const next = NEXT_STATUS[order.status];
         if (!next) return;
+        if (next === "completed") {
+            setCheckoutTarget(order);
+            setCheckoutPayMethod("CASH");
+            return;
+        }
         socketRef.current?.emit("admin_update_order_status", { orderId: order.id, status: next });
     }, []);
 
@@ -199,6 +269,61 @@ export default function OnlineOrdersPage() {
         socketRef.current?.emit("admin_update_order_status", { orderId: cancelTarget.id, status: "cancelled", reason: cancelReason });
         setCancelTarget(null);
     }, [cancelTarget, cancelReason]);
+
+    // ─── Xác nhận thanh toán (bước Hoàn thành) ─────────────────────────────────
+    // Giống hệt handleCheckout của OrdersPage.jsx (bản tại bàn): tạo 1 Order
+    // THẬT qua REST để lên chung báo cáo doanh thu, rồi mới báo server đổi
+    // OnlineOrder sang "completed" kèm paymentMethod + id của Order vừa tạo.
+    // OrderModel.orderItemSchema có sẵn field channel/customerName/
+    // customerPhone/customerAddress ở TỪNG item — điền vào đây cho đúng thiết
+    // kế đó (không đổi field ở cấp đơn).
+    const handleConfirmCheckout = useCallback(async () => {
+        if (!checkoutTarget) return;
+        setCheckoutLoading(true);
+
+        const payload = {
+            items: checkoutTarget.items.map((i) => ({
+                foodId: i.foodId,
+                quantity: i.quantity,
+                note: checkoutTarget.note || "",
+                channel: "ONLINE",
+                customerName: checkoutTarget.customerName,
+                customerPhone: checkoutTarget.phone,
+                customerAddress: checkoutTarget.address,
+            })),
+            discountAmount: 0,
+            paymentMethod: checkoutPayMethod,
+            isPaid: true,
+            note: checkoutTarget.note || "",
+            createdBy: "Admin (Online)",
+        };
+
+        try {
+            const res = await fetch(ORDERS_API_URL, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+            });
+
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const saved = await res.json();
+
+            socketRef.current?.emit("admin_update_order_status", {
+                orderId: checkoutTarget.id,
+                status: "completed",
+                paymentMethod: checkoutPayMethod,
+                convertedOrderId: saved.order?._id,
+            });
+
+            showActionToast("success", `Đã ghi nhận thanh toán cho ${checkoutTarget.customerName}! 🎉`);
+            setCheckoutTarget(null);
+        } catch (err) {
+            console.error("[Checkout online]", err);
+            showActionToast("error", `Thanh toán thất bại: ${err.message}`);
+        } finally {
+            setCheckoutLoading(false);
+        }
+    }, [checkoutTarget, checkoutPayMethod, showActionToast]);
 
     // ─── Hành động chat ────────────────────────────────────────────────────────
     const openChatThread = useCallback((customerId) => {
@@ -218,6 +343,14 @@ export default function OnlineOrdersPage() {
         socketRef.current?.emit("send_admin_chat_message", { customerId: activeChatCustomerId, text: value });
         setChatDraft("");
     }, [chatDraft, activeChatCustomerId]);
+
+    // Bấm vào 1 toast đơn mới (hoặc dòng tổng "+N đơn khác") → nhảy thẳng tới
+    // cột "Chờ xác nhận" của tab đơn hàng, vì đơn mới luôn bắt đầu ở đó.
+    const goToNewOrders = useCallback(() => {
+        setTab("orders");
+        setOrdersView("active");
+        setMobileStatusFilter("pending");
+    }, []);
 
     // ─── Thẻ đơn hàng dùng chung cho các cột Kanban ────────────────────────────
     const renderOrderCard = (order) => (
@@ -263,31 +396,55 @@ export default function OnlineOrdersPage() {
     return (
         <div className="space-y-5">
 
-            {/* Toast đơn online mới */}
-            {orderToast && (
-                <button
-                    onClick={() => { setTab("orders"); setOrdersView("active"); setOrderToast(null); }}
-                    className="fixed top-4 right-4 z-50 text-left bg-white border-2 border-green-300 rounded-2xl shadow-lg px-4 py-3.5 max-w-xs animate-fade-in"
-                >
-                    <p className="text-xs font-bold text-green-600 mb-1 flex items-center gap-1.5">
-                        <Bell size={13} /> Đơn online mới
-                    </p>
-                    <p className="text-sm font-bold text-gray-700 truncate">{orderToast.customerName}</p>
-                    <p className="text-xs text-gray-400">{fmtVND(orderToast.totalPrice)} · {orderToast.items.length} món</p>
-                </button>
+            {/* Toast đơn online mới — hàng đợi, mỗi đơn 1 toast riêng, tự tắt
+                độc lập. Đơn liên tiếp thứ 4+ gộp vào dòng tổng phía dưới để
+                không tràn màn hình trên điện thoại. */}
+            {orderToasts.length > 0 && (
+                <div className="fixed top-4 right-4 z-50 flex flex-col gap-2 max-w-[calc(100vw-2rem)] sm:max-w-xs">
+                    {visibleOrderToasts.map(({ toastId, order }) => (
+                        <button
+                            key={toastId}
+                            onClick={() => { goToNewOrders(); dismissOrderToast(toastId); }}
+                            className="text-left bg-white border-2 border-green-300 rounded-2xl shadow-lg px-4 py-3.5 animate-fade-in"
+                        >
+                            <p className="text-xs font-bold text-green-600 mb-1 flex items-center gap-1.5">
+                                <Bell size={13} /> Đơn online mới
+                            </p>
+                            <p className="text-sm font-bold text-gray-700 truncate">{order.customerName}</p>
+                            <p className="text-xs text-gray-400">{fmtVND(order.totalPrice)} · {order.items.length} món</p>
+                        </button>
+                    ))}
+                    {hiddenOrderToastCount > 0 && (
+                        <button
+                            onClick={goToNewOrders}
+                            className="text-center bg-green-600 text-white rounded-2xl shadow-lg px-4 py-2.5 text-xs font-bold animate-fade-in"
+                        >
+                            +{hiddenOrderToastCount} đơn khác chờ xử lý
+                        </button>
+                    )}
+                </div>
             )}
 
             {/* Toast tin nhắn chat mới */}
             {chatToast && (
                 <button
                     onClick={() => { setTab("chat"); openChatThread(chatToast.customerId); setChatToast(null); }}
-                    className="fixed top-4 left-4 sm:left-auto sm:right-4 sm:mt-24 z-40 text-left bg-white border border-green-200 rounded-xl shadow-lg px-3.5 py-2.5 max-w-xs animate-fade-in"
+                    className="fixed top-4 left-4 sm:left-auto sm:right-4 sm:mt-24 z-40 text-left bg-white border border-green-200 rounded-xl shadow-lg px-3.5 py-2.5 max-w-[calc(100vw-2rem)] sm:max-w-xs animate-fade-in"
                 >
                     <p className="text-[11px] font-bold text-green-600 mb-0.5 flex items-center gap-1">
                         <MessageCircle size={11} /> Tin nhắn mới
                     </p>
                     <p className="text-xs text-gray-700 line-clamp-2">{chatToast.message.text}</p>
                 </button>
+            )}
+
+            {/* Toast kết quả thao tác (thanh toán...) — góc dưới-phải, tránh đè
+                lên toast đơn mới/tin nhắn vốn đã chiếm góc trên */}
+            {actionToast && (
+                <div className={`fixed bottom-4 right-4 z-50 px-4 py-3 rounded-xl shadow-lg text-sm font-semibold text-white transition-all
+                    ${actionToast.type === "success" ? "bg-green-500" : "bg-red-500"}`}>
+                    {actionToast.msg}
+                </div>
             )}
 
             {/* Header */}
@@ -351,27 +508,52 @@ export default function OnlineOrdersPage() {
                                 <p className="text-sm">Chưa có đơn online nào đang xử lý</p>
                             </div>
                         ) : (
-                            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-                                {ACTIVE_COLUMNS.map((col) => (
-                                    <div key={col.status} className={`bg-gray-50 rounded-2xl border-l-4 ${col.accent} p-3 space-y-3`}>
-                                        <div className="flex items-center justify-between px-1">
-                                            <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${col.badge}`}>{col.label}</span>
-                                            <span className="text-xs font-bold text-gray-400">{activeByStatus[col.status].length}</span>
-                                        </div>
-                                        <div className="space-y-3">
-                                            {activeByStatus[col.status].length === 0 ? (
-                                                <p className="text-center text-gray-300 text-xs py-6">Trống</p>
-                                            ) : (
-                                                activeByStatus[col.status].map(renderOrderCard)
-                                            )}
-                                        </div>
+                            <>
+                                {/* Mobile (<md): xem 1 trạng thái tại 1 thời điểm — admin quản lý
+                                    chủ yếu qua điện thoại nên 4 cột xếp chồng sẽ phải cuộn rất dài,
+                                    thay bằng dải chip lọc + danh sách 1 cột dễ thao tác 1 tay hơn. */}
+                                <div className="md:hidden space-y-3">
+                                    <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1">
+                                        {ACTIVE_COLUMNS.map((col) => (
+                                            <button key={col.status} onClick={() => setMobileStatusFilter(col.status)}
+                                                className={`shrink-0 px-3.5 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all
+                                                    ${mobileStatusFilter === col.status ? "bg-green-500 text-white" : "bg-white border border-gray-200 text-gray-600"}`}>
+                                                {col.label} ({activeByStatus[col.status].length})
+                                            </button>
+                                        ))}
                                     </div>
-                                ))}
-                            </div>
+                                    <div className="space-y-3">
+                                        {activeByStatus[mobileStatusFilter].length === 0 ? (
+                                            <div className="bg-white rounded-2xl border border-gray-100 text-center text-gray-400 py-10 text-sm">Trống</div>
+                                        ) : (
+                                            activeByStatus[mobileStatusFilter].map(renderOrderCard)
+                                        )}
+                                    </div>
+                                </div>
+
+                                {/* Tablet/desktop (md+): Kanban đầy đủ 4 cột */}
+                                <div className="hidden md:grid md:grid-cols-2 xl:grid-cols-4 gap-4">
+                                    {ACTIVE_COLUMNS.map((col) => (
+                                        <div key={col.status} className={`bg-gray-50 rounded-2xl border-l-4 ${col.accent} p-3 space-y-3`}>
+                                            <div className="flex items-center justify-between px-1">
+                                                <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${col.badge}`}>{col.label}</span>
+                                                <span className="text-xs font-bold text-gray-400">{activeByStatus[col.status].length}</span>
+                                            </div>
+                                            <div className="space-y-3">
+                                                {activeByStatus[col.status].length === 0 ? (
+                                                    <p className="text-center text-gray-300 text-xs py-6">Trống</p>
+                                                ) : (
+                                                    activeByStatus[col.status].map(renderOrderCard)
+                                                )}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </>
                         )
                     ) : (
                         <div className="space-y-3">
-                            <div className="relative max-w-xs">
+                            <div className="relative w-full sm:max-w-xs">
                                 <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400" />
                                 <input
                                     value={historySearch}
@@ -382,7 +564,34 @@ export default function OnlineOrdersPage() {
                             </div>
 
                             <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
-                                <div className="overflow-x-auto">
+                                {/* Mobile (<md): danh sách dạng thẻ — bảng cuộn ngang khó bấm 1 tay
+                                    nên thay bằng danh sách hàng dọc, tap vào để xem chi tiết. */}
+                                <div className="md:hidden divide-y divide-gray-50">
+                                    {historyOrders.length === 0 ? (
+                                        <div className="text-center py-12 text-gray-400 text-sm">Chưa có đơn nào trong lịch sử</div>
+                                    ) : (
+                                        historyOrders.map((order) => (
+                                            <button
+                                                key={order.id}
+                                                onClick={() => setDetailOrder(order)}
+                                                className="w-full text-left px-4 py-3.5 flex items-center justify-between gap-3 hover:bg-green-50/40 transition-colors"
+                                            >
+                                                <div className="min-w-0">
+                                                    <p className="font-semibold text-gray-700 text-sm truncate">{order.customerName}</p>
+                                                    <p className="text-xs text-gray-400">{order.phone}</p>
+                                                    <p className="text-[11px] text-gray-400 mt-0.5">{order.items.length} món · {fmtDate(order.createdAt)}</p>
+                                                </div>
+                                                <div className="text-right shrink-0">
+                                                    <p className="font-bold text-green-600 text-sm">{fmtVND(order.totalPrice)}</p>
+                                                    <div className="mt-1"><OnlineStatusBadge status={order.status} /></div>
+                                                </div>
+                                            </button>
+                                        ))
+                                    )}
+                                </div>
+
+                                {/* Tablet/desktop (md+): bảng đầy đủ như cũ */}
+                                <div className="hidden md:block overflow-x-auto">
                                     <table className="w-full text-sm">
                                         <thead>
                                             <tr className="bg-green-50 border-b border-green-100">
@@ -528,6 +737,58 @@ export default function OnlineOrdersPage() {
                             </Button>
                         )}
                     </div>
+                )}
+            </Modal>
+
+            {/* ── Modal xác nhận thanh toán (bước Hoàn thành) ── */}
+            <Modal open={!!checkoutTarget} onClose={() => setCheckoutTarget(null)} title={`Thanh toán — ${checkoutTarget?.customerName || ""}`}>
+                {checkoutTarget && (
+                    <>
+                        <div className="space-y-2 mb-5 bg-green-50 rounded-xl p-4">
+                            {checkoutTarget.items.map((item, idx) => (
+                                <div key={idx} className="flex justify-between text-sm">
+                                    <span className="text-gray-700">
+                                        {item.emoji} {item.foodName} × {item.quantity}
+                                    </span>
+                                    <span className="font-semibold">{fmtVND(item.unitPrice * item.quantity)}</span>
+                                </div>
+                            ))}
+                            <div className="border-t border-green-200 pt-2 mt-2 flex justify-between items-center">
+                                <span className="font-bold text-gray-700">Tổng cộng</span>
+                                <span className="font-black text-lg text-green-600">{fmtVND(checkoutTarget.totalPrice)}</span>
+                            </div>
+                        </div>
+
+                        <p className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-3">Phương thức thanh toán</p>
+                        <div className="grid grid-cols-2 gap-2">
+                            {PAYMENT_OPTIONS.map(([m, l]) => (
+                                <button key={m} onClick={() => setCheckoutPayMethod(m)}
+                                    className={`py-3 rounded-xl text-sm font-bold border-2 transition-all
+                                        ${checkoutPayMethod === m ? "border-green-500 bg-green-50 text-green-700" : "border-gray-200 text-gray-600 hover:border-green-200"}`}>
+                                    {l}
+                                </button>
+                            ))}
+                        </div>
+
+                        <div className="flex gap-2 mt-5">
+                            <Button variant="outline" className="flex-1 justify-center" onClick={() => setCheckoutTarget(null)}>
+                                Hủy
+                            </Button>
+                            <Button className="flex-1 justify-center" onClick={handleConfirmCheckout} disabled={checkoutLoading}>
+                                {checkoutLoading ? (
+                                    <span className="inline-flex items-center gap-2">
+                                        <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
+                                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                                        </svg>
+                                        Đang xử lý…
+                                    </span>
+                                ) : (
+                                    <><Check size={15} />Xác nhận thanh toán</>
+                                )}
+                            </Button>
+                        </div>
+                    </>
                 )}
             </Modal>
 

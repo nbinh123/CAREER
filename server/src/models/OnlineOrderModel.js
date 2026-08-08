@@ -50,6 +50,20 @@ const onlineOrderSchema = new Schema(
 
         totalPrice: { type: Number, required: true, min: 0 },
 
+        // Chỉ được SET lúc admin xác nhận thanh toán ở bước "Hoàn thành"
+        // (KHÔNG có lúc khách đặt — client-online không gửi field này, xem
+        // README của họ). null nghĩa là chưa thanh toán.
+        paymentMethod: {
+            type: String,
+            enum: ["CASH", "BANKING", "MOMO", "ZALOPAY"],
+            default: null,
+        },
+
+        // Trỏ sang document Order THẬT (OrderModel) được tạo qua
+        // POST /api/orders khi admin xác nhận thanh toán — dùng để tra cứu
+        // ngược, tránh phải đoán lại. null nếu đơn này chưa/không hoàn thành.
+        convertedOrderId: { type: Schema.Types.ObjectId, ref: "Order", default: null },
+
         // Luồng đầy đủ đúng README frontend:
         // pending → confirmed → preparing → delivering → completed
         // (hoặc → cancelled bất kỳ lúc nào trước completed)
