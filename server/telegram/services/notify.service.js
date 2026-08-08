@@ -95,9 +95,9 @@ function describeNewOnlineOrder(order) {
     ];
 
     const who = [order.customerName, order.phone].filter(Boolean).join(" — ");
-    if (who) lines.push(`${who}`);
-    if (order.address) lines.push(`${order.address}`);
-    if (order.note) lines.push(`${order.note}`);
+    if (who) lines.push(`Liên hệ: ${who}`);
+    if (order.address) lines.push(`Địa chỉ:${order.address}`);
+    if (order.note) lines.push(`Ghi chú:${order.note}`);
 
     return lines.join("\n");
 }
