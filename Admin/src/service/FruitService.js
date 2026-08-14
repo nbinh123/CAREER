@@ -81,7 +81,10 @@ const FruitService = {
     createFruit: (fruit, imageFile = null) => {
         const payload = buildPayload(fruit, imageFile);
         if (payload instanceof FormData) {
-            return uploadRaw("POST", "/fruits", payload);
+            // uploadRaw trả thẳng body gốc { success, data } (không qua lớp
+            // bọc của postData) — cần unwrap ở đây để khớp shape trả về với
+            // nhánh JSON thường bên dưới (fruit object, không phải envelope).
+            return uploadRaw("POST", "/fruits", payload).then(unwrap);
         }
         return postData({ url: "/fruits", data: payload }).then(unwrap);
     },
@@ -91,7 +94,7 @@ const FruitService = {
         const id = fruit._id ?? fruit.id;
         const payload = buildPayload(fruit, imageFile);
         if (payload instanceof FormData) {
-            return uploadRaw("PUT", `/fruits/${id}`, payload);
+            return uploadRaw("PUT", `/fruits/${id}`, payload).then(unwrap);
         }
         return putData({ url: `/fruits/${id}`, data: payload }).then(unwrap);
     },

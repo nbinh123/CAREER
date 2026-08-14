@@ -20,6 +20,7 @@ const FruitSchema = new Schema(
         isAvailable: { type: Boolean, default: true },
         note: { type: String, default: "" },
         imageUrl: { type: String, default: null },
+        imagePublicId: { type: String, default: "", trim: true },
     },
     { timestamps: true }
 );

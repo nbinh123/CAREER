@@ -8,8 +8,10 @@ router.get("/combo", FruitController.getComboFruits) // đặt TRƯỚC "/:id", 
 router.get("/", FruitController.getAllFruits)
 router.get("/:id", FruitController.getFruitById)
 
-router.post("/", FruitController.createFruit)
-router.put("/:id", FruitController.updateFruit)
+// ❗ MỚI — gắn multer để nhận file ảnh multipart (field "image"), khớp với
+// FruitService.buildPayload đang fd.append("image", imageFile)
+router.post("/", FruitController.upload.single("image"), FruitController.createFruit)
+router.put("/:id", FruitController.upload.single("image"), FruitController.updateFruit)
 router.delete("/:id", FruitController.deleteFruit)
 
 module.exports = router

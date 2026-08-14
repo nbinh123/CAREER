@@ -1,16 +1,20 @@
+const multer = require("multer");
+const path = require("path");
 const Fruit = require("../models/FruitModel");
 const Food = require("../models/FoodModel");
+const cloudinary = require("../config/cloudinary");
+const uploadBufferToCloudinary = require("../utils/uploadToCloudinary");
 
-// ⚠️ CẦN BẠN KIỂM TRA LẠI: chỗ lấy URL ảnh sau khi upload phải khớp với
-// cách FoodController hiện tại đang xử lý (multer lưu local trả về
-// req.file.path, hay multer-storage-cloudinary trả về req.file.path là URL
-// Cloudinary luôn, hay field khác như req.file.secure_url/location...).
-// Mình để 3 khả năng phổ biến nhất, ưu tiên theo thứ tự — bạn xoá bớt cho
-// khớp đúng 1 cách đang dùng để tránh nhầm lẫn.
-function resolveImageUrl(req) {
-    if (!req.file) return undefined;
-    return req.file.path || req.file.secure_url || req.file.location;
-}
+// ─── Multer ───────────────────────────────────────────────────────────────
+// memoryStorage — không ghi file ra ổ đĩa, buffer nhận từ multer được đẩy
+// thẳng lên Cloudinary trong createFruit/updateFruit. Giống hệt FoodController.
+const storage = multer.memoryStorage();
+const fileFilter = (req, file, cb) => {
+    /jpeg|jpg|png|webp/.test(path.extname(file.originalname).toLowerCase())
+        ? cb(null, true)
+        : cb(new Error("Chỉ cho phép file ảnh (jpg, png, webp)"));
+};
+const upload = multer({ storage, fileFilter, limits: { fileSize: 5 * 1024 * 1024 } });
 
 class FruitController {
 
@@ -49,12 +53,17 @@ class FruitController {
         }
     }
 
-    //  [POST]  /fruits  (multipart nếu có ảnh, JSON thuần nếu không — xem FruitService.js)
+    //  [POST]  /fruits  (multipart nếu có ảnh — field "image", JSON thuần nếu không)
     createFruit = async (req, res) => {
         try {
             const payload = { ...req.body };
-            const imageUrl = resolveImageUrl(req);
-            if (imageUrl) payload.imageUrl = imageUrl;
+
+            // Có file ảnh gửi kèm (multipart, field "image") -> đẩy lên Cloudinary
+            if (req.file) {
+                const uploaded = await uploadBufferToCloudinary(req.file.buffer);
+                payload.imageUrl = uploaded.secure_url;
+                payload.imagePublicId = uploaded.public_id;
+            }
 
             const fruit = await Fruit.create(payload);
             res.status(201).json({ success: true, data: fruit });
@@ -70,8 +79,18 @@ class FruitController {
     updateFruit = async (req, res) => {
         try {
             const payload = { ...req.body };
-            const imageUrl = resolveImageUrl(req);
-            if (imageUrl) payload.imageUrl = imageUrl;
+
+            // Có ảnh mới -> xoá ảnh cũ trên Cloudinary (nếu có publicId lưu từ
+            // trước) rồi upload ảnh mới, thay cả imageUrl + imagePublicId.
+            // Giống hệt FoodController.updateFood.
+            if (req.file) {
+                const old = await Fruit.findById(req.params.id);
+                if (old?.imagePublicId) await _deleteCloudinaryImage(old.imagePublicId);
+
+                const uploaded = await uploadBufferToCloudinary(req.file.buffer);
+                payload.imageUrl = uploaded.secure_url;
+                payload.imagePublicId = uploaded.public_id;
+            }
 
             const fruit = await Fruit.findByIdAndUpdate(req.params.id, payload, {
                 new: true,
@@ -96,11 +115,15 @@ class FruitController {
             if (!fruit) {
                 return res.status(404).json({ success: false, message: "Không tìm thấy loại trái cây" });
             }
+
+            if (fruit.imagePublicId) await _deleteCloudinaryImage(fruit.imagePublicId);
+
             res.json({ success: true, data: fruit });
         } catch (err) {
             res.status(500).json({ success: false, message: err.message });
         }
     }
+
     getComboFruits = async (req, res) => {
         try {
             const foods = await Food.find({
@@ -122,4 +145,18 @@ class FruitController {
     }
 }
 
-module.exports = new FruitController();
+// ─── Helper ───────────────────────────────────────────────────────────────
+// Xoá ảnh cũ trên Cloudinary qua public_id đã lưu ở FruitModel.imagePublicId.
+async function _deleteCloudinaryImage(publicId) {
+    if (!publicId) return;
+    try {
+        await cloudinary.uploader.destroy(publicId);
+    } catch (err) {
+        // Không throw — ảnh cũ xoá lỗi không nên chặn việc lưu trái cây mới/đã sửa
+        console.error("_deleteCloudinaryImage:", err.message);
+    }
+}
+
+const fruitController = new FruitController();
+fruitController.upload = upload; // để route dùng: upload.single('image')
+module.exports = fruitController;

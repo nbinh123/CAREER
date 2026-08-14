@@ -189,7 +189,7 @@ export default function OnlineOrdersPage() {
             socket.off("chat_history", handleChatHistory);
             socket.off("customer_chat_message", handleCustomerChatMessage);
             orderToastTimers.forEach(clearTimeout); // dùng biến local, không đọc lại ref.current
-            orderToastTimersRef.current.clear();
+            orderToastTimers.clear()
             clearTimeout(chatToastTimer.current);
         };
     }, [dismissOrderToast]);
