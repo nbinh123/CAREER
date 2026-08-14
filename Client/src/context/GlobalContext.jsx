@@ -3,7 +3,7 @@ import React, { createContext, useContext, useState, useCallback, useMemo } from
 const GlobalContext = createContext(null);
 
 export const RESTAURANT = {
-  name: "Quán Nguyên Bình",
+  name: "Ăn thỏa thích",
   tagline: "Nguyên Bình nấu ăn ngon nhất thế giới",
 };
 

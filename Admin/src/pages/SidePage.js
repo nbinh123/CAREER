@@ -87,17 +87,24 @@ export default function Sidebar({ page, setPage, mobileOpen, setMobileOpen, isSh
     <>
       {mobileOpen && <div className="fixed inset-0 z-30 bg-black/20 lg:hidden" onClick={() => setMobileOpen(false)} />}
       {isShow && <aside className={`fixed inset-y-0 left-0 z-40 w-56 bg-white border-r border-gray-100 flex flex-col transition-transform duration-300 lg:translate-x-0 lg:relative lg:flex ${mobileOpen ? "translate-x-0" : "-translate-x-full"}`}>
-        <div className="p-5 border-b border-gray-100">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-gradient-to-br from-green-400 to-emerald-600 rounded-xl flex items-center justify-center text-white text-xl">🍜</div>
-            <div>
-              <p className="font-black text-green-900 text-sm leading-tight">Xanh lá Là</p>
-              <p className="text-xs text-gray-400">Quản lý quán ăn</p>
+        <div className="p-4 sm:p-5 border-b border-gray-100">
+          <div className="flex flex-col gap-1.5 overflow-hidden">
+            <div className="w-16 h-16 sm:w-16 sm:h-16 shrink-0 rounded-md overflow-hidden bg-black flex items-center justify-center">
+              <img
+                src="/logo.png"
+                alt="Logo"
+                className="block w-full h-full object-contain"
+              />
             </div>
+            <div className="flex items-baseline gap-1.5 min-w-0">
+              <p className="font-black text-green-900 text-sm leading-tight truncate">Nguyen Binh</p>
+              {/* <span className="text-gray-300 text-xs">•</span> */}
+            </div>
+            <p className="text-xs text-gray-400 truncate">Quản lý quán ăn</p>
           </div>
         </div>
         {/* NAV */}
-        <nav className="flex-1 p-3 space-y-1">
+        <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
 
           {NAV
             .filter((item) =>
