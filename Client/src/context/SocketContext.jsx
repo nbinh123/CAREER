@@ -58,6 +58,11 @@ export function SocketProvider({ children }) {
   const [tableState, setTableState] = useState(null); // { id, name, status, since, items, pendingItems, active, messages }
   const chatListeners = useRef(new Set());
   const chatResetListeners = useRef(new Set());
+  // ❗ MỚI — listener cho sự kiện server báo món bị loại khỏi đơn vì đã tắt
+  // "Đang bán" (server tự chặn ở send_to_kitchen, xem socket.js), cùng
+  // pattern subscribe/unsubscribe với chat để nhiều component (nếu cần) đều
+  // nhận được, không chỉ riêng CartDrawer.
+  const orderRejectListeners = useRef(new Set());
   // Lịch sử chat của bàn hiện tại + cờ đánh dấu đã nạp lịch sử từ "tables_state"
   // hay chưa. Chỉ nạp 1 LẦN DUY NHẤT ở lần "tables_state" đầu tiên có dữ liệu —
   // các lần "tables_state" sau (do confirm_items, toggle_table_active...) không
@@ -128,6 +133,12 @@ export function SocketProvider({ children }) {
       // Bàn vừa được admin thanh toán/reset -> khách mới sẽ ngồi vào, bắt
       // nhập lại tên/SĐT thay vì giữ nguyên thông tin của khách trước.
       clearGuest();
+    });
+    // ❗ MỚI — món bị server loại khỏi lần gửi đơn gần nhất (đã ngừng bán giữa
+    // lúc khách xem menu và lúc bấm gửi). Không lưu vào ref nào cả (khác chat),
+    // vì đây là sự kiện tức thời, không cần replay lại cho listener mount sau.
+    socket.on("order_items_rejected", ({ items }) => {
+      orderRejectListeners.current.forEach((cb) => cb(items || []));
     });
 
     return () => {
@@ -215,6 +226,11 @@ export function SocketProvider({ children }) {
     chatResetListeners.current.add(cb);
     return () => chatResetListeners.current.delete(cb);
   }, []);
+  // ❗ MỚI
+  const onOrderItemsRejected = useCallback((cb) => {
+    orderRejectListeners.current.add(cb);
+    return () => orderRejectListeners.current.delete(cb);
+  }, []);
   const value = useMemo(
     () => ({
       connected,
@@ -237,6 +253,7 @@ export function SocketProvider({ children }) {
       sendFruitOrder,
       onChatMessage,
       onChatReset,
+      onOrderItemsRejected, // ❗ MỚI
     }),
     [
       connected,
@@ -248,6 +265,7 @@ export function SocketProvider({ children }) {
       sendFruitOrder,
       onChatMessage,
       onChatReset,
+      onOrderItemsRejected, // ❗ MỚI
     ]
   );
 

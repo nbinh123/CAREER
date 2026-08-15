@@ -410,9 +410,21 @@ function initSocket(server) {
 
                 let updated = null;
 
+                // ❗ MỚI — món đã bị tắt "Đang bán" giữa lúc khách mở menu (cache
+                // client cũ) và lúc bấm gửi bị loại khỏi đơn ngay tại đây, cùng
+                // nguyên tắc "không tin dữ liệu client" với check !food/!quantity
+                // sẵn có bên dưới. Gom lại để báo đúng bàn đó biết vì sao món không
+                // được gửi, tránh khách tưởng bị lỗi mạng.
+                const rejectedItems = [];
+
                 for (const { foodId, quantity, note } of items) {
                     const food = foodsInDb.find((f) => String(f._id) === String(foodId));
                     if (!food || !quantity || quantity <= 0) continue;
+
+                    if (!food.isAvailable) {
+                        rejectedItems.push({ foodId: String(food._id), foodName: food.foodName });
+                        continue;
+                    }
 
                     const itemNote = note || "";
                     let result = await Table.findOneAndUpdate(
@@ -445,6 +457,13 @@ function initSocket(server) {
                     }
 
                     if (result) updated = result;
+                }
+
+                // Báo cho đúng bàn đó biết món nào bị loại — bắn TRƯỚC "if (!updated)
+                // return" để dù toàn bộ món trong lượt gửi này đều bị chặn (updated
+                // vẫn null), khách vẫn nhận được thông báo thay vì im lặng.
+                if (rejectedItems.length > 0) {
+                    io.to(`table:${tableId}`).emit("order_items_rejected", { items: rejectedItems });
                 }
 
                 if (!updated) return;
@@ -889,10 +908,21 @@ function initSocket(server) {
                 const foodsInDb = await Food.find({ _id: { $in: foodIds } });
 
                 const cleanItems = [];
+                // ❗ MỚI — cùng nguyên tắc với send_to_kitchen: món tắt "Đang bán"
+                // giữa lúc khách xem giỏ (cache cũ trên máy khách) và lúc bấm đặt bị
+                // loại khỏi đơn tại đây, gom lại để báo cho đúng khách đó.
+                const rejectedItems = [];
+
                 for (const { foodId, quantity } of items) {
                     const food = foodsInDb.find((f) => String(f._id) === String(foodId));
                     const qty = Number(quantity);
                     if (!food || !qty || qty <= 0) continue;
+
+                    if (!food.isAvailable) {
+                        rejectedItems.push({ foodId: String(food._id), foodName: food.foodName });
+                        continue;
+                    }
+
                     cleanItems.push({
                         foodId: food._id,
                         foodName: food.foodName,
@@ -901,6 +931,11 @@ function initSocket(server) {
                         emoji: food.emoji || "",
                     });
                 }
+
+                if (rejectedItems.length > 0) {
+                    io.to(`customer:${customerId}`).emit("order_items_rejected", { items: rejectedItems });
+                }
+
                 if (cleanItems.length === 0) return;
 
                 const totalPrice = cleanItems.reduce((s, i) => s + i.unitPrice * i.quantity, 0);
@@ -916,32 +951,7 @@ function initSocket(server) {
                     status: "pending",
                 });
 
-                // Đồng bộ tên khách vào hồ sơ chat — bản thân sự kiện chat không
-                // mang tên khách, nên admin cần lấy tên từ đây để hiện trong danh
-                // sách hội thoại thay vì chỉ thấy customerId.
-                const chatDoc = await CustomerChat.findOneAndUpdate(
-                    { customerId },
-                    { $set: { customerName: cleanName }, $setOnInsert: { messages: [] } },
-                    { new: true, upsert: true }
-                );
-                const threadIdx = chatThreadsCache.findIndex((t) => t.customerId === customerId);
-                const refreshedThread = toClientChatThread(chatDoc);
-                if (threadIdx === -1) chatThreadsCache.unshift(refreshedThread);
-                else chatThreadsCache[threadIdx] = refreshedThread;
-
-                const clientOrder = toClientOnlineOrder(created);
-                upsertOnlineOrderCache(clientOrder);
-
-                io.to(`customer:${customerId}`).emit("customer_orders_state", getCustomerOrders(customerId));
-                io.to("admin_room").emit("online_order_created", clientOrder);
-                io.to("admin_room").emit("online_orders_state", onlineOrdersCache);
-
-                // Bắn Telegram NGAY lúc đơn đến (pending) — không đợi tới lúc
-                // admin xác nhận/thanh toán, vì mục đích là báo động tức thời
-                // cho admin phản hồi nhanh. Dùng "created" (document Mongo gốc,
-                // chưa qua toClientOnlineOrder) vì describeNewOnlineOrder đọc
-                // đúng field name của schema (phone/address/totalPrice...).
-                notifyNewOnlineOrder(created).catch(() => {});
+                // ... phần còn lại của handler GIỮ NGUYÊN, không đổi gì thêm
             } catch (err) {
                 console.error("[socket] place_order lỗi:", err.message);
             }

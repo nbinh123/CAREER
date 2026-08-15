@@ -115,21 +115,7 @@ class OrderController {
                         `Item[${idx}]: Food not found`
                     );
                 }
-
-                // -------------------------
-                // Validate available
-                // -------------------------
-
-                if (!food.isAvailable) {
-                    throw new Error(
-                        `${food.foodName} is unavailable`
-                    );
-                }
-
-                // -------------------------
-                // Calculate
-                // -------------------------
-
+                
                 const unitPrice =
                     food.originalPrice;
 

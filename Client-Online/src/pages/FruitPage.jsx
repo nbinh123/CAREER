@@ -81,14 +81,34 @@ export default function FruitPage() {
 
   const selectedNames = useMemo(() => selected.map((s) => s.fruitName), [selected]);
 
+  // Tên (normalize) của mọi loại trái cây ĐANG BÁN — dùng làm "danh sách
+  // trắng" để lọc combo. `fruits` từ useFruits() trả về TẤT CẢ loại (kể cả
+  // đang nghỉ bán, để FruitPickCard còn hiện badge "Hết"), nên phải tự lọc
+  // isAvailable ở đây chứ không dựa vào việc fruit có tồn tại hay không.
+  const availableFruitNames = useMemo(
+    () => new Set(fruits.filter((f) => f.isAvailable).map((f) => normalizeText(f.fruitName))),
+    [fruits]
+  );
+
+  // Lọc BỎ combo ngay từ nguồn nếu có bất kỳ thành phần nào đang nghỉ bán —
+  // làm ở bước này để combo lỗi KHÔNG BAO GIỜ tới được ComboSuggestions,
+  // thay vì hiện ra rồi chặn lúc bấm chọn.
+  const availableCombos = useMemo(
+    () =>
+      comboFoods.filter((c) =>
+        c.comboParts.every((part) => availableFruitNames.has(normalizeText(part)))
+      ),
+    [comboFoods, availableFruitNames]
+  );
+
   const suggestedCombos = useMemo(() => {
     if (selected.length === 0 || selected.length === 3) return [];
-    return findMatchingCombos(comboFoods, selectedNames);
-  }, [comboFoods, selectedNames, selected.length]);
+    return findMatchingCombos(availableCombos, selectedNames);
+  }, [availableCombos, selectedNames, selected.length]);
 
   const matchedCombo = useMemo(
-    () => findExactCombo(comboFoods, selectedNames),
-    [comboFoods, selectedNames]
+    () => findExactCombo(availableCombos, selectedNames),
+    [availableCombos, selectedNames]
   );
 
   const totalPrice = FRUIT_COMBO_PRICE * quantity;
@@ -133,7 +153,11 @@ export default function FruitPage() {
       const resolved = combo.comboParts.map((part) =>
         fruits.find((f) => normalizeText(f.fruitName) === normalizeText(part))
       );
-      if (resolved.some((r) => !r)) {
+      // Vòng chặn phòng hờ thứ 2: dữ liệu fruits có thể vừa đổi giữa lúc
+      // fetch combo và lúc khách bấm — availableCombos đã lọc từ đầu nên
+      // trường hợp này gần như không xảy ra trong luồng bấm gợi ý, nhưng
+      // giữ lại để không có kẽ hở nào lọt combo thiếu/nghỉ bán vào giỏ.
+      if (resolved.some((r) => !r || !r.isAvailable)) {
         showToast("Combo này có loại trái cây không còn bán, bạn tự chọn giúp mình nhé.");
         return;
       }
@@ -190,7 +214,7 @@ export default function FruitPage() {
         </p>
       </div>
 
-      <div className="grid grid-cols-3 gap-2.5 px-4 pb-4">
+      <div className="grid grid-cols-3 gap-3 sm:grid-cols-4 sm:gap-4 md:grid-cols-5 lg:grid-cols-6 px-4 pb-4 max-w-3xl mx-auto">
         {fruits.map((item) => {
           const itemId = item.id || item._id;
           const isSelected = selected.some((s) => (s.id || s._id) === itemId);

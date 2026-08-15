@@ -58,6 +58,23 @@ function StatusBadge({ isAvailable }) {
   );
 }
 
+function AvailabilityToggle({ isAvailable, onToggle }) {
+  return (
+    <button
+      type="button"
+      onClick={(e) => { e.stopPropagation(); onToggle(); }}
+      title={isAvailable ? "Đang hiển thị — bấm để ẩn" : "Đang ẩn — bấm để hiển thị"}
+      className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors duration-200 flex-shrink-0 ${isAvailable ? "bg-green-500" : "bg-gray-300"
+        }`}
+    >
+      <span
+        className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform duration-200 ${isAvailable ? "translate-x-[18px]" : "translate-x-[2px]"
+          }`}
+      />
+    </button>
+  );
+}
+
 function MarginBar({ margin }) {
   const m = Math.max(0, Math.min(margin, 100));
   const bar = m > 50 ? "bg-green-400" : m > 30 ? "bg-amber-400" : "bg-red-400";
@@ -89,7 +106,7 @@ function ItemImage({ src, name, className = "" }) {
 
 // ─── Trái cây: Card + Info Modal ───────────────────────────────────────────────
 
-function FruitCard({ fruit, onEdit, onInfo, onRemove, onEditNote, isPending }) {
+function FruitCard({ fruit, onEdit, onInfo, onRemove, onEditNote, isPending, onToggleAvailable }) {
   return (
     <div className={`bg-white rounded-2xl border overflow-hidden transition-all hover:shadow-md hover:-translate-y-0.5
       ${fruit.isAvailable ? "border-gray-100" : "border-gray-200 opacity-60"}
@@ -97,9 +114,23 @@ function FruitCard({ fruit, onEdit, onInfo, onRemove, onEditNote, isPending }) {
 
       <div className="relative h-36">
         <ItemImage src={fruit.imageUrl} name={fruit.fruitName} className="h-36 w-full" />
+
+        {/* Pill nổi góc trái: nhãn trạng thái + công tắc */}
+        <div className="absolute top-2 left-2 z-20 flex items-center gap-1.5 bg-white/90 backdrop-blur-sm rounded-full pl-2 pr-1 py-1 shadow-sm">
+          <span className={`text-[10px] font-bold ${fruit.isAvailable ? "text-green-600" : "text-gray-400"}`}>
+            {fruit.isAvailable ? "Hiện" : "Ẩn"}
+          </span>
+          <AvailabilityToggle
+            isAvailable={fruit.isAvailable}
+            onToggle={() => onToggleAvailable(fruit)}
+          />
+        </div>
+
         {!fruit.isAvailable && (
-          <div className="absolute inset-0 bg-gray-200/60 flex items-center justify-center">
-            <span className="text-xs font-bold text-gray-500 bg-white rounded-lg px-2 py-1">Tạm nghỉ</span>
+          <div className="absolute inset-0 bg-gray-900/40 flex items-center justify-center">
+            <span className="text-xs font-bold text-white bg-black/50 backdrop-blur-sm rounded-lg px-2.5 py-1">
+              Tạm nghỉ
+            </span>
           </div>
         )}
         {isPending && (
@@ -112,7 +143,6 @@ function FruitCard({ fruit, onEdit, onInfo, onRemove, onEditNote, isPending }) {
       <div className="p-4">
         <div className="flex items-start justify-between gap-2 mb-1">
           <h4 className="font-bold text-gray-800 text-sm leading-tight">{fruit.fruitName}</h4>
-          <StatusBadge isAvailable={fruit.isAvailable} />
         </div>
         <p className="text-xs text-gray-400 mb-3 font-medium">
           {fruit.ingredients?.length || 0} nguyên liệu
@@ -484,6 +514,11 @@ export default function FruitPage() {
 
   const handleRemove = useCallback(id => { stageRemoveFruit(id); }, [stageRemoveFruit]);
 
+  const handleToggleAvailable = useCallback(
+    fruit => stageUpdateFruit({ ...fruit, isAvailable: !fruit.isAvailable }, null),
+    [stageUpdateFruit]
+  );
+
   const handleSaveAll = async () => {
     setSaveStatus("saving");
     try {
@@ -691,7 +726,7 @@ export default function FruitPage() {
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
             {filtered.map(fruit => (
               <FruitCard key={fruit._id} fruit={fruit} onEdit={openEdit} onInfo={openInfo}
-                onRemove={handleRemove} onEditNote={openNoteEdit}
+                onRemove={handleRemove} onEditNote={openNoteEdit} onToggleAvailable={handleToggleAvailable}
                 isPending={fruitPendingChanges.has(`add:${fruit._id}`) || fruitPendingChanges.has(`update:${fruit._id}`)} />
             ))}
             {filtered.length === 0 && (

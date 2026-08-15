@@ -9,6 +9,10 @@ import { FRUIT_COMBO_PRICE } from "../../utils/fruit";
 // trái cây khách vừa chọn — bấm vào 1 gợi ý để tự điền đủ 3 loại của combo
 // đó vào lựa chọn hiện tại.
 //
+// `combos` được FruitPage.js (phía khách) lọc sẵn để loại bỏ mọi combo có
+// chứa loại trái cây đang nghỉ bán (`availableCombos`) — component này chỉ
+// render nguyên những gì nhận được, không tự kiểm tra isAvailable.
+//
 // `title` cho phép đổi câu dẫn khi component được dùng lại ở vị trí khác
 // trong trang (VD nhắc lại 1 lần nữa ngay trên phần gửi đơn) mà không đổi
 // hành vi mặc định ở những nơi khác đang dùng component này.
@@ -25,25 +29,27 @@ export default function ComboSuggestions({
         <Sparkles size={13} />
         {title}
       </p>
-      <div className="flex gap-2.5 overflow-x-auto no-scrollbar pb-1">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
         {combos.map((combo) => (
           <button
             key={combo.id || combo._id}
             type="button"
             onClick={() => onPick(combo)}
-            className="flex-shrink-0 w-40 rounded-2xl border border-turmeric/40 bg-turmeric-light/60 p-3 text-left active:bg-turmeric-light"
+            className="flex items-center gap-3 rounded-2xl border border-turmeric/40 bg-turmeric-light/60 p-2.5 text-left active:bg-turmeric-light"
           >
             <FoodThumbnail
               src={combo.imageUrl}
               alt={combo.foodName}
-              className="w-full h-20 rounded-xl mb-2"
+              className="w-14 h-14 rounded-xl flex-shrink-0"
             />
-            <p className="font-display font-medium text-ink text-[12.5px] leading-snug line-clamp-2">
-              {combo.foodName}
-            </p>
-            <p className="ticket-num text-chili-dark text-[12px] font-semibold mt-1">
-              {formatCurrency(FRUIT_COMBO_PRICE)}
-            </p>
+            <div className="min-w-0">
+              <p className="font-display font-medium text-ink text-[12.5px] leading-snug line-clamp-2">
+                {combo.foodName}
+              </p>
+              <p className="ticket-num text-chili-dark text-[12px] font-semibold mt-1">
+                {formatCurrency(FRUIT_COMBO_PRICE)}
+              </p>
+            </div>
           </button>
         ))}
       </div>

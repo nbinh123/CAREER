@@ -96,7 +96,14 @@ export default function MenuPage() {
   const bestSellerIds = useMemo(() => getBestSellerIds(foods), [foods]);
 
   const filteredItems = useMemo(
-    () => foods.filter((item) => getCategoryKey(item) === activeCategory),
+    () =>
+      foods
+        .filter((item) => getCategoryKey(item) === activeCategory)
+        // Món nghỉ bán (isAvailable: false) luôn đẩy xuống cuối danh sách,
+        // trong mỗi nhóm còn bán/nghỉ bán vẫn giữ nguyên thứ tự gốc — sort
+        // của JS (Array.prototype.sort) là stable sort từ ES2019 trở đi nên
+        // an toàn để làm việc này mà không cần so sánh thêm tiêu chí nào khác.
+        .sort((a, b) => Number(!a.isAvailable) - Number(!b.isAvailable)),
     [foods, activeCategory]
   );
 
@@ -226,8 +233,8 @@ export default function MenuPage() {
                 {unavailable
                   ? "Món hiện đang hết hàng"
                   : `Thêm vào giỏ · ${formatCurrency(
-                      selectedItem.originalPrice * qty
-                    )}`}
+                    selectedItem.originalPrice * qty
+                  )}`}
               </Button>
             </div>
           </div>

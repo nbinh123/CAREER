@@ -49,6 +49,23 @@ function StatusBadge({ isAvailable }) {
   );
 }
 
+function AvailabilityToggle({ isAvailable, onToggle }) {
+  return (
+    <button
+      type="button"
+      onClick={(e) => { e.stopPropagation(); onToggle(); }}
+      title={isAvailable ? "Đang hiển thị — bấm để ẩn khỏi menu" : "Đang ẩn — bấm để hiển thị lên menu"}
+      className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors flex-shrink-0 ${isAvailable ? "bg-green-500" : "bg-gray-300"
+        }`}
+    >
+      <span
+        className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform ${isAvailable ? "translate-x-[18px]" : "translate-x-[2px]"
+          }`}
+      />
+    </button>
+  );
+}
+
 function MarginBar({ margin }) {
   const m = Math.max(0, Math.min(margin, 100));
   const bar = m > 50 ? "bg-green-400" : m > 30 ? "bg-amber-400" : "bg-red-400";
@@ -78,7 +95,7 @@ function FoodImage({ src, name, className = "" }) {
   );
 }
 
-function FoodCard({ food, onEdit, onInfo, onRemove, onEditNote, isPending }) {
+function FoodCard({ food, onEdit, onInfo, onRemove, onEditNote, isPending, onToggleAvailable }) {
   const margin = food.originalPrice > 0
     ? Math.round((food.originalPrice - food.costPrice) / food.originalPrice * 100)
     : 0;
@@ -106,7 +123,13 @@ function FoodCard({ food, onEdit, onInfo, onRemove, onEditNote, isPending }) {
       <div className="p-4">
         <div className="flex items-start justify-between gap-2 mb-1">
           <h4 className="font-bold text-gray-800 text-sm leading-tight">{food.foodName}</h4>
-          <StatusBadge isAvailable={food.isAvailable} />
+          <div className="flex items-center gap-1.5 flex-shrink-0">
+            <StatusBadge isAvailable={food.isAvailable} />
+            <AvailabilityToggle
+              isAvailable={food.isAvailable}
+              onToggle={() => onToggleAvailable(food)}
+            />
+          </div>
         </div>
         <p className="text-xs text-gray-400 mb-3 font-medium">{catName || "—"}</p>
 
@@ -360,6 +383,11 @@ export default function MenuPage() {
 
   const handleRemove = useCallback(id => { stageRemoveFood(id); }, [stageRemoveFood]);
 
+  const handleToggleAvailable = useCallback(
+    food => stageUpdateFood({ ...food, isAvailable: !food.isAvailable }, null),
+    [stageUpdateFood]
+  );
+
   const handleRefreshCosts = async () => {
     try {
       const data = await refreshCosts();
@@ -508,7 +536,7 @@ export default function MenuPage() {
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
           {filtered.map(food => (
             <FoodCard key={food._id} food={food} onEdit={openEdit} onInfo={openInfo}
-              onRemove={handleRemove} onEditNote={openNoteEdit}
+              onRemove={handleRemove} onEditNote={openNoteEdit} onToggleAvailable={handleToggleAvailable}
               isPending={pendingChanges.has(`add:${food._id}`) || pendingChanges.has(`update:${food._id}`)} />
           ))}
           {filtered.length === 0 && (

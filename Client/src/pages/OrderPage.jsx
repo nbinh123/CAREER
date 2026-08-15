@@ -14,6 +14,7 @@ import { formatCurrency } from "../utils/formatCurrency";
 import { isComboFoodItem } from "../utils/fruit";
 import { useCart } from "../context/CartContext";
 import { useGlobal } from "../context/GlobalContext";
+import { useSocket } from "../context/SocketContext"; // ❗ MỚI
 
 // Không dùng danh mục cứng nữa: `categoryId` trong Food document (Mongo) là
 // chuỗi tên hiển thị tự do do người quản lý món tự đặt (vd "Tráng miệng",
@@ -42,8 +43,21 @@ export default function OrderPage() {
   const [cartOpen, setCartOpen] = useState(false);
   const { addItem } = useCart();
   const { showToast } = useGlobal();
+  const { onOrderItemsRejected } = useSocket(); // ❗ MỚI
   const { foods: allFoods, loading, error, refetch } = useFoods();
   const { fruits } = useFruits();
+
+  // ❗ MỚI — báo cho khách biết món nào vừa bị loại khỏi đơn do đã ngừng
+  // bán, đúng lúc bấm "Gửi đơn" ở CartDrawer (server chặn ở send_to_kitchen).
+  // Đặt ở đây (không phải CartDrawer) vì OrderPage là nơi sống suốt phiên
+  // xem menu, còn CartDrawer có thể unmount khi đóng — subscribe ở đây đảm
+  // bảo không bỏ lỡ sự kiện dù drawer đang đóng lúc server phản hồi.
+  useEffect(() => {
+    return onOrderItemsRejected((items) => {
+      const names = items.map((i) => i.foodName).join(", ");
+      showToast(`${names} vừa ngừng bán nên không thể gửi lên bếp — món này đã bị loại khỏi đơn, bạn kiểm tra lại giỏ hàng giúp mình nhé.`);
+    });
+  }, [onOrderItemsRejected, showToast]);
 
   // Combo trái cây có sẵn (Food document tên "A - B - C" khớp Fruit) chỉ
   // bán qua trang riêng /fruits, không hiển thị lẫn trong Thực đơn — lọc bỏ
@@ -235,8 +249,8 @@ export default function OrderPage() {
                 {unavailable
                   ? "Món hiện đang hết hàng"
                   : `Thêm vào giỏ · ${formatCurrency(
-                      selectedItem.originalPrice * qty
-                    )}`}
+                    selectedItem.originalPrice * qty
+                  )}`}
               </Button>
             </div>
           </div>
