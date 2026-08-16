@@ -999,7 +999,31 @@ function initSocket(server) {
                     status: "pending",
                 });
 
-                // ... phần còn lại của handler GIỮ NGUYÊN, không đổi gì thêm
+                const clientOrder = toClientOnlineOrder(created);
+                upsertOnlineOrderCache(clientOrder);
+
+                // Khách vừa đặt: đơn mới xuất hiện ngay trong /orders, không
+                // cần refresh (đúng hợp đồng "customer_orders_state" = mảng
+                // đầy đủ, mới nhất trước — xem getCustomerOrders()).
+                io.to(`customer:${customerId}`).emit(
+                    "customer_orders_state",
+                    getCustomerOrders(customerId)
+                );
+
+                // Admin: đồng bộ lại toàn bộ cache (để refresh/mở tab mới vẫn
+                // đúng) VÀ bắn riêng 1 sự kiện "online_order_created" — đây là
+                // sự kiện OnlineOrdersPage.jsx đang lắng nghe (handleOrderCreated)
+                // để bắn toast "Đơn online mới", trước đây chưa từng được emit.
+                io.to("admin_room").emit("online_orders_state", onlineOrdersCache);
+                io.to("admin_room").emit("online_order_created", clientOrder);
+
+                // Báo Telegram — tách try/catch riêng để lỗi gửi Telegram (mạng,
+                // token sai...) không làm crash cả handler đặt đơn của khách.
+                try {
+                    await notifyNewOnlineOrder(clientOrder);
+                } catch (notifyErr) {
+                    console.error("[socket] notifyNewOnlineOrder lỗi:", notifyErr.message);
+                }
             } catch (err) {
                 console.error("[socket] place_order lỗi:", err.message);
             }
