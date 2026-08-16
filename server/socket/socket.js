@@ -747,18 +747,29 @@ function initSocket(server) {
                 }
 
                 // ── Nhánh bản đặt online ──
-                if (customerId) {
-                    const savedMessage = await persistCustomerChatMessage(customerId, "customer", text);
+                // ❗ SỬA (lỗi mobile không gửi được chat) — app React Native
+                // (SocketContext.jsx, mục 3.5) CỐ Ý không gửi customerId trong
+                // payload, vì danh tính đã được xác thực qua access token lúc
+                // connect (xem khối auto-join ở đầu "connection" phía trên, nơi
+                // set socket.data.customerAccountId từ token ĐÃ VERIFY). Trước
+                // đây nhánh này chỉ đọc customerId từ payload nên với socket
+                // mobile luôn là undefined → tin nhắn bị bỏ qua âm thầm.
+                // Ưu tiên accountId đã verify (an toàn hơn, không tin client tự
+                // khai); chỉ dùng customerId từ payload khi socket CHƯA xác thực
+                // qua token — tức luồng web ẩn danh cũ, giữ nguyên hành vi cũ.
+                const resolvedCustomerId = socket.data.customerAccountId || customerId;
+                if (resolvedCustomerId) {
+                    const savedMessage = await persistCustomerChatMessage(resolvedCustomerId, "customer", text);
                     if (!savedMessage) return;
 
                     // Bắn NGUYÊN object tin nhắn cho khách — đúng hợp đồng README
                     // ("chat_message" nhận 1 object, không bọc thêm customerId, vì
                     // khách chỉ ở trong đúng 1 room "customer:<id>" của chính họ).
-                    io.to(`customer:${customerId}`).emit("chat_message", savedMessage);
+                    io.to(`customer:${resolvedCustomerId}`).emit("chat_message", savedMessage);
 
                     // Cho admin: bọc thêm customerId để phân biệt được thread nào —
                     // admin có thể đang mở nhiều đơn/nhiều thread cùng lúc.
-                    io.to("admin_room").emit("customer_chat_message", { customerId, message: savedMessage });
+                    io.to("admin_room").emit("customer_chat_message", { customerId: resolvedCustomerId, message: savedMessage });
                     io.to("admin_room").emit("chat_threads_state", chatThreadsCache);
                 }
             } catch (err) {
@@ -943,7 +954,21 @@ function initSocket(server) {
         // nguyên tắc bảo mật với "send_to_kitchen" ở bản tại bàn.
         socket.on("place_order", async ({ customerId, customerName, phone, address, note, items } = {}) => {
             try {
-                if (!customerId) return;
+                // ❗ SỬA (bug chính — app RN đặt đơn không tới server) — app
+                // React Native (SocketContext.jsx, mục 3.5) CỐ Ý không gửi
+                // customerId trong payload "place_order": danh tính khách đã
+                // được xác thực bằng access token ngay lúc connect (khối
+                // auto-join ở đầu "connection" phía trên set
+                // socket.data.customerAccountId từ token ĐÃ VERIFY). Trước đây
+                // dòng "if (!customerId) return;" chỉ đọc từ payload — với
+                // socket mobile customerId luôn undefined nên MỌI đơn từ app bị
+                // bỏ qua âm thầm (không lỗi, không log, vì đây là emit 1 chiều
+                // không có ack). Ưu tiên accountId đã verify qua token (an toàn
+                // hơn, không tin client tự khai); chỉ dùng customerId từ
+                // payload khi socket CHƯA xác thực qua token — tức luồng web
+                // ẩn danh cũ, giữ nguyên hành vi cũ 100%.
+                const resolvedCustomerId = socket.data.customerAccountId || customerId;
+                if (!resolvedCustomerId) return;
 
                 const cleanName = (customerName || "").trim();
                 const cleanPhone = (phone || "").trim();
@@ -981,7 +1006,7 @@ function initSocket(server) {
                 }
 
                 if (rejectedItems.length > 0) {
-                    io.to(`customer:${customerId}`).emit("order_items_rejected", { items: rejectedItems });
+                    io.to(`customer:${resolvedCustomerId}`).emit("order_items_rejected", { items: rejectedItems });
                 }
 
                 if (cleanItems.length === 0) return;
@@ -989,7 +1014,7 @@ function initSocket(server) {
                 const totalPrice = cleanItems.reduce((s, i) => s + i.unitPrice * i.quantity, 0);
 
                 const created = await OnlineOrder.create({
-                    customerId,
+                    customerId: resolvedCustomerId,
                     customerName: cleanName,
                     phone: cleanPhone,
                     address: cleanAddress,
@@ -999,15 +1024,23 @@ function initSocket(server) {
                     status: "pending",
                 });
 
+                // ❗ SỬA (lỗi realtime) — trước đây handler dừng ngay sau
+                // OnlineOrder.create(...): đơn ĐÃ nằm trong MongoDB nhưng
+                // onlineOrdersCache (RAM) không được cập nhật và không ai được
+                // emit gì cả, nên admin chỉ thấy đơn sau khi restart server
+                // (lúc đó loadOnlineOrdersCache() chạy lại từ đầu). Từ đây
+                // đồng bộ cache + báo cho cả khách lẫn admin ngay lập tức,
+                // đúng nguyên tắc "ghi DB xong → update cache → emit" đang
+                // dùng nhất quán ở mọi handler khác trong file này.
                 const clientOrder = toClientOnlineOrder(created);
                 upsertOnlineOrderCache(clientOrder);
 
                 // Khách vừa đặt: đơn mới xuất hiện ngay trong /orders, không
                 // cần refresh (đúng hợp đồng "customer_orders_state" = mảng
                 // đầy đủ, mới nhất trước — xem getCustomerOrders()).
-                io.to(`customer:${customerId}`).emit(
+                io.to(`customer:${resolvedCustomerId}`).emit(
                     "customer_orders_state",
-                    getCustomerOrders(customerId)
+                    getCustomerOrders(resolvedCustomerId)
                 );
 
                 // Admin: đồng bộ lại toàn bộ cache (để refresh/mở tab mới vẫn

@@ -11,5 +11,5 @@
 //
 // Tạm thời khai báo trực tiếp ở đây để bạn điền domain thật vào (xem câu hỏi
 // mở ở mục 8 tài liệu kế hoạch — cần domain backend production thực tế).
-export const API_BASE_URL = "http://192.168.100.213:5000/";
+export const API_BASE_URL = "http://192.168.100.18:5000/";
 export const SOCKET_URL = API_BASE_URL;
