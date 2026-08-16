@@ -369,7 +369,7 @@ export default function OnlineOrdersPage() {
             <div className="bg-gray-50 rounded-lg p-2.5 space-y-1">
                 {order.items.map((item, idx) => (
                     <div key={idx} className="flex justify-between text-xs">
-                        <span className="text-gray-700 truncate">{item.emoji} {item.foodName} × {item.quantity}</span>
+                        <span className="text-gray-700 truncate">{item.foodName} × {item.quantity}</span>
                     </div>
                 ))}
                 {order.note && <p className="text-[10px] text-gray-400 pt-1 mt-1 border-t border-gray-200">Ghi chú: {order.note}</p>}
@@ -657,6 +657,11 @@ export default function OnlineOrdersPage() {
                                     </div>
                                     <div className="flex-1 min-w-0">
                                         <p className="font-bold text-sm text-gray-800 truncate">{t.customerName || shortCustomerLabel(t.customerId)}</p>
+                                        {t.phone && (
+                                            <p className="text-[11px] text-gray-400 truncate flex items-center gap-1">
+                                                <Phone size={9} /> {t.phone}
+                                            </p>
+                                        )}
                                         <p className="text-xs text-gray-400 truncate">{t.lastMessage}</p>
                                     </div>
                                     <div className="flex flex-col items-end gap-1 shrink-0">
@@ -678,6 +683,11 @@ export default function OnlineOrdersPage() {
                             <>
                                 <div className="px-4 py-3.5 border-b border-gray-100">
                                     <h3 className="font-bold text-gray-800">{activeThread?.customerName || shortCustomerLabel(activeChatCustomerId)}</h3>
+                                    {activeThread?.phone && (
+                                        <p className="text-[11px] text-gray-400 flex items-center gap-1 mt-0.5">
+                                            <Phone size={10} /> {activeThread.phone}
+                                        </p>
+                                    )}
                                 </div>
                                 {renderChatBody()}
                             </>
@@ -695,8 +705,15 @@ export default function OnlineOrdersPage() {
 
             {/* ── Modal chat — mobile/tablet (dưới lg) ── */}
             <div className="lg:hidden">
-                <Modal open={!!activeChatCustomerId} onClose={closeChatThread}
-                    title={activeThread?.customerName || shortCustomerLabel(activeChatCustomerId || "")}>
+                <Modal
+                    open={!!activeChatCustomerId}
+                    onClose={closeChatThread}
+                    title={
+                        activeThread?.customerName
+                            ? `${activeThread.customerName}${activeThread.phone ? " · " + activeThread.phone : ""}`
+                            : shortCustomerLabel(activeChatCustomerId || "")
+                    }
+                >
                     <div className="flex flex-col" style={{ height: 420 }}>
                         {renderChatBody()}
                     </div>
@@ -718,7 +735,7 @@ export default function OnlineOrdersPage() {
                         <div className="bg-gray-50 rounded-xl p-3 space-y-1">
                             {detailOrder.items.map((item, idx) => (
                                 <div key={idx} className="flex justify-between text-sm">
-                                    <span className="text-gray-700">{item.emoji} {item.foodName} × {item.quantity}</span>
+                                    <span className="text-gray-700">{item.foodName} × {item.quantity}</span>
                                     <span className="font-semibold text-gray-600">{fmtVND(item.unitPrice * item.quantity)}</span>
                                 </div>
                             ))}
@@ -749,7 +766,7 @@ export default function OnlineOrdersPage() {
                             {checkoutTarget.items.map((item, idx) => (
                                 <div key={idx} className="flex justify-between text-sm">
                                     <span className="text-gray-700">
-                                        {item.emoji} {item.foodName} × {item.quantity}
+                                        {item.foodName} × {item.quantity}
                                     </span>
                                     <span className="font-semibold">{fmtVND(item.unitPrice * item.quantity)}</span>
                                 </div>

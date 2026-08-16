@@ -152,6 +152,7 @@ function toClientChatThread(doc) {
     return {
         customerId: doc.customerId,
         customerName: doc.customerName || "",
+        phone: doc.phone || "",
         lastMessage: last ? last.text : "",
         lastAt: last ? last.at : doc.updatedAt,
         unreadCount,
@@ -247,15 +248,34 @@ async function persistChatMessage(io, tableId, from, text) {
 // Không tự emit socket ở đây (khác với persistChatMessage phía trên) vì
 // handler gọi hàm này cần emit theo 2 kiểu khác nhau tuỳ ai gửi (khách vs
 // admin) — xem "send_chat_message"/"send_admin_chat_message" bên dưới.
-async function persistCustomerChatMessage(customerId, from, text) {
+// Ghi 1 tin nhắn chat ONLINE (theo customerId, KHÔNG theo tableId) — upsert
+// document CustomerChat, đồng bộ chatThreadsCache, trả về tin nhắn vừa lưu.
+// customerInfo = { name, phone } — CHỈ truyền khi socket đã xác thực qua
+// token (mobile); rỗng {} với luồng web ẩn danh cũ, giữ nguyên hành vi cũ.
+// Dùng $set (không phải $setOnInsert) để mỗi tin nhắn mới đều làm mới
+// tên/SĐT — phòng trường hợp khách đổi tên/SĐT hồ sơ sau lần chat đầu.
+async function persistCustomerChatMessage(customerId, from, text, customerInfo = {}) {
     const value = (text || "").trim();
     if (!customerId || !value) return null;
 
     const message = { from, text: value, at: new Date(), read: from === "admin" };
 
+    const update = { $push: { messages: message } };
+    const setFields = {};
+    if (customerInfo.name) setFields.customerName = customerInfo.name;
+    if (customerInfo.phone) setFields.phone = customerInfo.phone;
+
+    // Không được vừa $set vừa $setOnInsert trên cùng field (Mongo báo lỗi
+    // xung đột) — chỉ chọn 1 trong 2 tuỳ có customerInfo hay không.
+    if (Object.keys(setFields).length > 0) {
+        update.$set = setFields;
+    } else {
+        update.$setOnInsert = { customerName: "", phone: "" };
+    }
+
     const updated = await CustomerChat.findOneAndUpdate(
         { customerId },
-        { $push: { messages: message }, $setOnInsert: { customerName: "" } },
+        update,
         { new: true, upsert: true }
     );
     if (!updated) return null;
@@ -338,6 +358,8 @@ function initSocket(server) {
 
                 const accountId = String(customer._id);
                 socket.data.customerAccountId = accountId; // đánh dấu socket đã xác thực, phòng khi chỗ khác cần dùng sau này
+                socket.data.customerName = customer.fullName || "";
+                socket.data.customerPhone = customer.phone || "";
 
                 socket.join(`customer:${accountId}`);
                 socket.emit("customer_orders_state", getCustomerOrders(accountId));
@@ -759,16 +781,15 @@ function initSocket(server) {
                 // qua token — tức luồng web ẩn danh cũ, giữ nguyên hành vi cũ.
                 const resolvedCustomerId = socket.data.customerAccountId || customerId;
                 if (resolvedCustomerId) {
-                    const savedMessage = await persistCustomerChatMessage(resolvedCustomerId, "customer", text);
+                    // Chỉ có customerInfo khi socket đã xác thực qua token (mobile) —
+                    // luồng web ẩn danh (customerId tự khai) không có hồ sơ để tra.
+                    const customerInfo = socket.data.customerAccountId
+                        ? { name: socket.data.customerName, phone: socket.data.customerPhone }
+                        : {};
+                    const savedMessage = await persistCustomerChatMessage(resolvedCustomerId, "customer", text, customerInfo);
                     if (!savedMessage) return;
 
-                    // Bắn NGUYÊN object tin nhắn cho khách — đúng hợp đồng README
-                    // ("chat_message" nhận 1 object, không bọc thêm customerId, vì
-                    // khách chỉ ở trong đúng 1 room "customer:<id>" của chính họ).
                     io.to(`customer:${resolvedCustomerId}`).emit("chat_message", savedMessage);
-
-                    // Cho admin: bọc thêm customerId để phân biệt được thread nào —
-                    // admin có thể đang mở nhiều đơn/nhiều thread cùng lúc.
                     io.to("admin_room").emit("customer_chat_message", { customerId: resolvedCustomerId, message: savedMessage });
                     io.to("admin_room").emit("chat_threads_state", chatThreadsCache);
                 }

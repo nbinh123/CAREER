@@ -1,7 +1,7 @@
 // pages/LoginPage.js
 import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { Phone, Lock, Eye, EyeOff, ArrowRight, AlertCircle } from "lucide-react";
+import { Phone, Eye, EyeOff, ArrowRight, AlertCircle } from "lucide-react";
 import useAuthZustand from "../zustand/useAuthZustand";
 
 /* ─── tiny CSS-in-JS helper ──────────────────────────────── */
@@ -78,14 +78,21 @@ const STYLE = `
     animation: lp-fade 0.6s 0.15s both;
   }
   .lp-logo-icon {
-    width: 64px; height: 64px;
-    background: linear-gradient(135deg,#34d399,#059669);
+    width: 72px; height: 72px;
+    background: #ffffff;
     border-radius: 20px;
     display: flex; align-items: center; justify-content: center;
-    font-size: 28px;
-    box-shadow: 0 8px 24px rgba(5,150,105,0.3), inset 0 1px 0 rgba(255,255,255,0.25);
+    box-shadow: 0 8px 24px rgba(5,150,105,0.18), inset 0 1px 0 rgba(255,255,255,0.6);
     margin-bottom: 14px;
+    padding: 10px;
+    box-sizing: border-box;
+    overflow: hidden;
     animation: lp-pop 0.5s 0.25s cubic-bezier(.22,.68,0,1.4) both;
+  }
+  .lp-logo-icon img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
   }
   .lp-logo-title {
     font-size: 22px; font-weight: 900;
@@ -124,6 +131,26 @@ const STYLE = `
     margin-bottom: 7px;
   }
 
+  .lp-label-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 9px;
+  }
+  .lp-label-row .lp-label { margin-bottom: 0; }
+  .lp-eye-inline {
+    display: flex; align-items: center; gap: 4px;
+    background: none; border: none; cursor: pointer;
+    color: #6ee7b7;
+    font-family: 'Nunito', sans-serif;
+    font-size: 11px; font-weight: 800;
+    letter-spacing: 0.4px; text-transform: uppercase;
+    padding: 3px 8px;
+    border-radius: 100px;
+    transition: color 0.2s, background 0.2s;
+  }
+  .lp-eye-inline:hover { color: #059669; background: rgba(52,211,153,0.12); }
+
   .lp-input-wrap {
     position: relative;
     display: flex; align-items: center;
@@ -160,6 +187,48 @@ const STYLE = `
     box-shadow: 0 0 0 4px rgba(252,165,165,0.15);
   }
 
+  /* ── PIN (6 ô tròn) ── */
+  .lp-pin-wrap {
+    display: flex;
+    justify-content: center;
+    gap: 10px;
+  }
+  .lp-pin-input {
+    width: 44px; height: 44px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    text-align: center;
+    font-family: 'Nunito', sans-serif;
+    font-size: 19px; font-weight: 800;
+    color: #064e3b;
+    background: #f0fdf4;
+    border: 2px solid #bbf7d0;
+    outline: none;
+    caret-color: #34d399;
+    transition: border-color 0.22s, box-shadow 0.22s, background 0.22s, transform 0.15s;
+    appearance: none;
+  }
+  .lp-pin-input:focus {
+    border-color: #34d399;
+    background: #fff;
+    transform: scale(1.06);
+    box-shadow: 0 0 0 4px rgba(52,211,153,0.15);
+  }
+  .lp-pin-input.lp-filled {
+    border-color: #34d399;
+    background: #ecfdf5;
+  }
+  .lp-pin-input.lp-error {
+    border-color: #fca5a5;
+    background: #fff5f5;
+    box-shadow: 0 0 0 4px rgba(252,165,165,0.15);
+  }
+
+  @media (max-width: 380px) {
+    .lp-pin-input { width: 38px; height: 38px; font-size: 17px; }
+    .lp-pin-wrap { gap: 7px; }
+  }
+
   /* eye toggle */
   .lp-eye {
     position: absolute; right: 12px;
@@ -177,6 +246,7 @@ const STYLE = `
     font-size: 12px; font-weight: 700;
     color: #ef4444;
     margin-top: 6px;
+    justify-content: center;
     animation: lp-shake 0.35s ease;
   }
   @keyframes lp-shake {
@@ -253,13 +323,16 @@ const STYLE = `
   @keyframes lp-toast-out { from{opacity:1;transform:translateX(-50%) translateY(0)} to{opacity:0;transform:translateX(-50%) translateY(12px)} }
 `;
 
+const PIN_LENGTH = 6;
+
 /* ═══════════════════════════════════════════════════════════
    COMPONENT
 ═══════════════════════════════════════════════════════════ */
 export default function LoginPage() {
 
   const [phone, setPhone] = useState("");
-  const [password, setPassword] = useState("");
+  const [pin, setPin] = useState(Array(PIN_LENGTH).fill(""));
+  const pinRefs = useRef([]);
 
   const {
     login,
@@ -302,14 +375,63 @@ export default function LoginPage() {
   }
 
   function validatePwd(val) {
-    if (!val) return "Vui lòng nhập mật khẩu";
-    if (val.length < 6) return "Mật khẩu ít nhất 6 ký tự";
+    if (!val || val.length < PIN_LENGTH) return "Vui lòng nhập đủ 6 số";
     return "";
+  }
+
+  function resetPin(focusFirst = true) {
+    setPin(Array(PIN_LENGTH).fill(""));
+    if (focusFirst) pinRefs.current[0]?.focus();
+  }
+
+  /* ── pin (mật khẩu) handlers ── */
+  function handlePinChange(idx, e) {
+    const digit = e.target.value.replace(/\D/g, "").slice(-1);
+    setPin((prev) => {
+      const next = [...prev];
+      next[idx] = digit;
+      if (pwdErr) setPwdErr(validatePwd(next.join("")));
+      return next;
+    });
+    if (digit && idx < PIN_LENGTH - 1) {
+      pinRefs.current[idx + 1]?.focus();
+    }
+  }
+
+  function handlePinKeyDown(idx, e) {
+    if (e.key === "Backspace") {
+      if (!pin[idx] && idx > 0) {
+        e.preventDefault();
+        setPin((prev) => {
+          const next = [...prev];
+          next[idx - 1] = "";
+          return next;
+        });
+        pinRefs.current[idx - 1]?.focus();
+      }
+    } else if (e.key === "ArrowLeft" && idx > 0) {
+      pinRefs.current[idx - 1]?.focus();
+    } else if (e.key === "ArrowRight" && idx < PIN_LENGTH - 1) {
+      pinRefs.current[idx + 1]?.focus();
+    }
+  }
+
+  function handlePinPaste(e) {
+    e.preventDefault();
+    const text = e.clipboardData.getData("text").replace(/\D/g, "").slice(0, PIN_LENGTH);
+    if (!text) return;
+    const next = Array(PIN_LENGTH).fill("");
+    for (let i = 0; i < text.length; i++) next[i] = text[i];
+    setPin(next);
+    if (pwdErr) setPwdErr(validatePwd(next.join("")));
+    const focusIdx = Math.min(text.length, PIN_LENGTH - 1);
+    pinRefs.current[focusIdx]?.focus();
   }
 
   /* ── submit ── */
   async function handleSubmit(e) {
     e.preventDefault();
+    const password = pin.join("");
     const pErr = validatePhone(phone);
     const wErr = validatePwd(password);
     setPhoneErr(pErr);
@@ -325,10 +447,12 @@ export default function LoginPage() {
         setTimeout(() => navigate("/"), 800);
       } else {
         showToast("❌ " + (response.message || "Sai số điện thoại hoặc mật khẩu"));
+        resetPin();
       }
     } catch (err) {
       const msg = err?.response?.data?.message || "Sai số điện thoại hoặc mật khẩu";
       showToast("❌ " + msg);
+      resetPin();
     } finally {
       setLoading(false);
     }
@@ -339,11 +463,6 @@ export default function LoginPage() {
     const val = e.target.value.replace(/\D/g, "").slice(0, 10);
     setPhone(val);
     if (phoneErr) setPhoneErr(validatePhone(val));
-  }
-
-  function onPwdChange(e) {
-    setPassword(e.target.value);
-    if (pwdErr) setPwdErr(validatePwd(e.target.value));
   }
 
   /* ── render ── */
@@ -359,8 +478,10 @@ export default function LoginPage() {
       <div className="lp-card">
         {/* logo */}
         <div className="lp-logo">
-          <div className="lp-logo-icon">🍜</div>
-          <h1 className="lp-logo-title">NhàHàng Pro</h1>
+          <div className="lp-logo-icon">
+            <img src="/logo.png" alt="Logo" />
+          </div>
+          <h1 className="lp-logo-title">Chiến thắng</h1>
           <p className="lp-logo-sub">Đăng nhập để tiếp tục</p>
         </div>
 
@@ -392,33 +513,37 @@ export default function LoginPage() {
             )}
           </div>
 
-          {/* password */}
+          {/* password (6 ô tròn) */}
           <div className="lp-field">
-            <label className="lp-label">Mật khẩu</label>
-            <div className="lp-input-wrap">
-              <span className="lp-input-icon">
-                <Lock size={16} strokeWidth={2.5} />
-              </span>
-              <input
-                className={`lp-input${pwdErr ? " lp-error" : ""}`}
-                type={showPwd ? "text" : "password"}
-                placeholder="••••••••"
-                value={password}
-                onChange={onPwdChange}
-                autoComplete="current-password"
-                style={{ paddingRight: 44 }}
-              />
+            <div className="lp-label-row">
+              <label className="lp-label">Mật khẩu</label>
               <button
                 type="button"
-                className="lp-eye"
+                className="lp-eye-inline"
                 onClick={() => setShowPwd((v) => !v)}
                 tabIndex={-1}
-                aria-label={showPwd ? "Ẩn mật khẩu" : "Hiện mật khẩu"}
               >
                 {showPwd
-                  ? <EyeOff size={16} strokeWidth={2.2} />
-                  : <Eye size={16} strokeWidth={2.2} />}
+                  ? <><EyeOff size={13} strokeWidth={2.4} /> Ẩn</>
+                  : <><Eye size={13} strokeWidth={2.4} /> Hiện</>}
               </button>
+            </div>
+            <div className="lp-pin-wrap" onPaste={handlePinPaste}>
+              {pin.map((digit, idx) => (
+                <input
+                  key={idx}
+                  ref={(el) => (pinRefs.current[idx] = el)}
+                  className={`lp-pin-input${pwdErr ? " lp-error" : ""}${digit ? " lp-filled" : ""}`}
+                  type={showPwd ? "text" : "password"}
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  maxLength={1}
+                  value={digit}
+                  onChange={(e) => handlePinChange(idx, e)}
+                  onKeyDown={(e) => handlePinKeyDown(idx, e)}
+                  autoComplete={idx === 0 ? "current-password" : "off"}
+                />
+              ))}
             </div>
             {pwdErr && (
               <p className="lp-err-msg" key={pwdErr}>

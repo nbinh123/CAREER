@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
 import {
   View,
   Text,
@@ -11,14 +11,11 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useNavigation } from "@react-navigation/native";
 import Button from "../components/common/Button";
+import PinInput from "../components/common/PinInput";
 import { useAuth } from "../context/AuthContext";
 import { useGlobal } from "../context/GlobalContext";
 import { ROUTES } from "../constants/routes";
 
-// Auth Stack không nằm trong bộ file Giai đoạn 5 gốc (giả định đã có sẵn từ
-// Giai đoạn 4). Vì bản chạy độc lập này chưa có dự án Giai đoạn 4, màn hình
-// Đăng nhập/Đăng ký được viết mới ở đây, dùng đúng useAuth().login/register
-// theo shape mà AuthContext (tham khảo) cung cấp.
 export default function LoginScreen() {
   const insets = useSafeAreaInsets();
   const navigation = useNavigation();
@@ -29,11 +26,26 @@ export default function LoginScreen() {
   const [password, setPassword] = useState("");
   const [errors, setErrors] = useState({});
   const [submitting, setSubmitting] = useState(false);
+  const passwordRef = useRef(null);
+
+  // Không ép người dùng chỉ được gõ số (giữ nguyên hành vi cũ của ô này),
+  // chỉ ĐẾM riêng số chữ số để biết khi nào đã gõ đủ 10 số điện thoại —
+  // đúng lúc đó mới tự chuyển focus xuống 6 ô mật khẩu, không cần người
+  // dùng tự bấm vào. Dùng "===  10" (không phải ">=") để chỉ bắn đúng 1
+  // lần tại thời điểm số thứ 10 vừa được gõ, không lặp lại mỗi lần
+  // onChangeText bắn ra sau đó.
+  const handlePhoneChange = (text) => {
+    setPhone(text);
+    const digitCount = text.replace(/[^0-9]/g, "").length;
+    if (digitCount === 10) {
+      passwordRef.current?.focus();
+    }
+  };
 
   const validate = () => {
     const next = {};
     if (!phone.trim()) next.phone = "Vui lòng nhập số điện thoại.";
-    if (!password) next.password = "Vui lòng nhập mật khẩu.";
+    if (password.length !== 6) next.password = "Vui lòng nhập đủ 6 số.";
     setErrors(next);
     return Object.keys(next).length === 0;
   };
@@ -90,10 +102,13 @@ export default function LoginScreen() {
             </Text>
             <TextInput
               value={phone}
-              onChangeText={setPhone}
+              onChangeText={handlePhoneChange}
               placeholder="09xxxxxxxx"
               keyboardType="phone-pad"
               autoCapitalize="none"
+              maxLength={10}
+              returnKeyType="next"
+              onSubmitEditing={() => passwordRef.current?.focus()}
               className={`font-body text-ink bg-white rounded-2xl px-4 py-3 border ${
                 errors.phone ? "border-chili" : "border-ink/10"
               }`}
@@ -105,15 +120,12 @@ export default function LoginScreen() {
 
           <View>
             <Text className="font-bodyMedium text-xs text-steel mb-1.5">Mật khẩu</Text>
-            <TextInput
+            <PinInput
+              ref={passwordRef}
+              length={6}
               value={password}
               onChangeText={setPassword}
-              placeholder="••••••••"
-              secureTextEntry
-              autoCapitalize="none"
-              className={`font-body text-ink bg-white rounded-2xl px-4 py-3 border ${
-                errors.password ? "border-chili" : "border-ink/10"
-              }`}
+              error={!!errors.password}
             />
             {errors.password ? (
               <Text className="font-body text-xs text-chili mt-1">{errors.password}</Text>

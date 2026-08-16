@@ -54,8 +54,11 @@ export default function CheckoutScreen() {
   const validate = () => {
     const next = {};
     if (!form.name.trim()) next.name = "Vui lòng nhập tên người nhận.";
-    if (!form.phone.trim()) next.phone = "Vui lòng nhập số điện thoại.";
-    else if (!PHONE_RE.test(form.phone.trim())) next.phone = "Số điện thoại không hợp lệ.";
+    // Phone giờ khoá theo tài khoản (không cho gõ tay ở CheckoutFields), nên
+    // 2 lỗi dưới đây chỉ còn xảy ra nếu hồ sơ tài khoản thiếu/sai SĐT — báo
+    // đúng nguyên nhân thay vì bảo "vui lòng nhập" (khách không gõ được nữa).
+    if (!form.phone.trim()) next.phone = "Tài khoản chưa có số điện thoại hợp lệ, vui lòng cập nhật hồ sơ.";
+    else if (!PHONE_RE.test(form.phone.trim())) next.phone = "Số điện thoại tài khoản không hợp lệ, vui lòng cập nhật hồ sơ.";
     setErrors(next);
     return Object.keys(next).length === 0;
   };
@@ -85,7 +88,12 @@ export default function CheckoutScreen() {
     if (!validate()) return;
     setSubmitting(true);
     try {
-      await placeOrder(items, form);
+      // Chốt lại 1 lần nữa ngay tại điểm gửi đơn: SĐT nhận đơn LUÔN LUÔN lấy
+      // từ customer.phone (tài khoản đang đăng nhập/đăng nhập nhanh), không
+      // dùng form.phone dù ô đó đã bị khoá không cho sửa ở CheckoutFields —
+      // để chắc chắn không có đường nào gửi lệch SĐT khỏi tài khoản, kể cả
+      // nếu sau này có ai đó vô tình mở lại quyền sửa ô này.
+      await placeOrder(items, { ...form, phone: customer?.phone || form.phone });
       clearCart();
       showToast("Đã gửi đơn, đang chờ quán xác nhận!");
       // Quay Cart tab về màn gốc rồi mới chuyển sang tab Đơn hàng — tránh

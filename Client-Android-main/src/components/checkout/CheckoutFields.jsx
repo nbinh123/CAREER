@@ -45,15 +45,26 @@ export default function CheckoutFields({
       </View>
 
       <View>
-        <Text className="text-xs font-display font-medium text-steel mb-1.5">Số điện thoại *</Text>
+        <Text className="text-xs font-display font-medium text-steel mb-1.5">
+          Số điện thoại nhận đơn *
+        </Text>
+        {/*
+          Khoá không cho gõ tay: SĐT nhận đơn PHẢI trùng SĐT tài khoản đang
+          đăng nhập (điền sẵn từ useAuth().customer.phone ở CheckoutScreen —
+          nguồn duy nhất là lúc đăng nhập/đăng nhập nhanh, không cho khách tự
+          sửa lệch khỏi tài khoản của họ nữa).
+        */}
         <TextInput
           value={value.phone}
-          onChangeText={set("phone")}
+          editable={false}
           placeholder="09xx xxx xxx"
           placeholderTextColor={COLORS.steelLight}
           keyboardType="phone-pad"
-          className={inputBase}
+          className={`${inputBase} opacity-60`}
         />
+        <Text className="text-[11px] text-steel mt-1">
+          Theo số điện thoại tài khoản bạn đang đăng nhập.
+        </Text>
         {errors.phone && <Text className="text-[11px] text-chili mt-1">{errors.phone}</Text>}
       </View>
 

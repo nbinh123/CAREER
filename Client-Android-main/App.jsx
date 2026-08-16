@@ -3,7 +3,6 @@ import React from "react";
 import { View } from "react-native";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
-import { NavigationContainer } from "@react-navigation/native";
 import { useFonts } from "expo-font";
 import {
   SpaceGrotesk_500Medium,
@@ -18,13 +17,14 @@ import { IBMPlexMono_500Medium } from "@expo-google-fonts/ibm-plex-mono";
 
 import { AuthProvider } from "./src/context/AuthContext";
 import AppProviders from "./src/AppProviders";
-import RootNavigator from "./src/navigation/RootNavigator";
+import NavigationRoot from "./src/navigation/NavigationRoot";
 import Loading from "./src/components/common/Loading";
 
 // Gắn theo đúng thứ tự mô tả trong HUONG_DAN_TICH_HOP.md:
 //   AuthProvider (đăng nhập/token) > AppProviders (Global/Cart/Socket +
-//   Toast/ChatWidget global) > NavigationContainer > RootNavigator (Auth
-//   Stack <-> Main Tab Navigator tuỳ isAuthenticated).
+//   Toast/ChatWidget global) > NavigationRoot (NavigationContainer +
+//   ActiveRouteProvider, xem navigation/NavigationRoot.jsx) > RootNavigator
+//   (Auth Stack <-> Main Tab Navigator tuỳ isAuthenticated).
 export default function App() {
   const [fontsLoaded] = useFonts({
     SpaceGrotesk_500Medium,
@@ -50,9 +50,7 @@ export default function App() {
       <View className="flex-1 bg-paper">
         <AuthProvider>
           <AppProviders>
-            <NavigationContainer>
-              <RootNavigator />
-            </NavigationContainer>
+            <NavigationRoot />
           </AppProviders>
         </AuthProvider>
         <StatusBar style="dark" />

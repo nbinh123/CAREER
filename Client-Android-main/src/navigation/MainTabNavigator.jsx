@@ -45,6 +45,7 @@ export default function MainTabNavigator() {
     <Tab.Navigator
       screenOptions={{
         headerShown: false,
+        animation: "fade",
         tabBarActiveTintColor: COLORS.chili,
         tabBarInactiveTintColor: COLORS.steel,
         tabBarStyle: {

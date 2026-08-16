@@ -1,18 +1,15 @@
 import React from "react";
 import { MapPin, Phone, StickyNote } from "lucide-react";
 import OrderItemRow from "./OrderItemRow";
+import OrderStatusProgress from "./OrderStatusProgress";
 import { formatCurrency } from "../../utils/formatCurrency";
 import { timeAgo, formatTime } from "../../utils/formatTime";
-import { ORDER_STATUS_META } from "../../constants/orderStatus";
+import { ORDER_STATUS, ORDER_STATUS_META } from "../../constants/orderStatus";
 
-// Thẻ hiển thị MỘT đơn hàng đầy đủ — không có ở bản gốc (bản gốc chỉ có 1
-// bàn nên không cần "thẻ theo đơn", chỉ có 1 danh sách món phẳng). Ở đây mỗi
-// khách có thể có nhiều đơn cùng lúc nên cần tách thành từng thẻ riêng, mỗi
-// thẻ mang đúng 1 trạng thái (ORDER_STATUS), khác với trạng thái theo món
-// (ITEM_STATUS) của bản dine-in.
 export default function OrderCard({ order }) {
   const meta = ORDER_STATUS_META[order.status] || { label: order.status, tone: "bg-paper-dim text-steel" };
   const shortCode = String(order.id).slice(-6).toUpperCase();
+  const isCancelled = order.status === ORDER_STATUS.CANCELLED;
 
   return (
     <div className="bg-paper rounded-ticket border border-ink/8 px-4 py-2 mb-4">
@@ -23,10 +20,14 @@ export default function OrderCard({ order }) {
             {timeAgo(order.createdAt)}
           </p>
         </div>
-        <span className={`text-[11px] font-display font-medium px-2.5 py-1 rounded-full whitespace-nowrap ${meta.tone}`}>
-          {meta.label}
-        </span>
+        {isCancelled && (
+          <span className={`text-[11px] font-display font-medium px-2.5 py-1 rounded-full whitespace-nowrap ${meta.tone}`}>
+            {meta.label}
+          </span>
+        )}
       </div>
+
+      {!isCancelled && <OrderStatusProgress status={order.status} />}
 
       <div className="pt-1">
         {order.items.map((item, idx) => (

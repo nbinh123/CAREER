@@ -1,5 +1,5 @@
 import React from "react";
-import { View, Text, Pressable } from "react-native";
+import { View, Text, Pressable, Image } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Minus, Plus, PartyPopper } from "lucide-react-native";
 import Button from "../common/Button";
@@ -55,7 +55,7 @@ export default function FruitMixBar({
               key={slot}
               ref={(node) => registerSlotRef?.(slot, node)}
               onPress={() => item && onRemove(item)}
-              className={`flex-1 h-14 rounded-xl items-center justify-center px-2 ${
+              className={`flex-1 h-14 rounded-xl overflow-hidden items-center justify-center px-2 ${
                 item ? "bg-jade-light" : "bg-paper-dim"
               }`}
               style={
@@ -65,9 +65,21 @@ export default function FruitMixBar({
               }
             >
               {item ? (
-                <Text numberOfLines={1} className="font-display text-xs font-medium text-ink">
-                  {item.fruitName}
-                </Text>
+                <>
+                  {item.imageUrl ? (
+                    <Image
+                      source={{ uri: item.imageUrl }}
+                      resizeMode="cover"
+                      className="absolute inset-0 w-full h-full"
+                    />
+                  ) : null}
+                  {/* Lớp phủ jade-light mờ để ảnh nền không lấn chữ — vẫn thấy
+                      rõ đây là loại trái cây nào, đúng ý "hình nền mờ". */}
+                  <View className="absolute inset-0" style={{ backgroundColor: "rgba(220,235,227,0.8)" }} />
+                  <Text numberOfLines={1} className="font-display text-xs font-medium text-ink">
+                    {item.fruitName}
+                  </Text>
+                </>
               ) : (
                 <Text className="text-steel-light text-[11px]">Chọn loại {slot + 1}</Text>
               )}

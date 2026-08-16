@@ -4,12 +4,6 @@ import OrderCard from "../components/order/OrderCard";
 import Loading from "../components/common/Loading";
 import { useSocket } from "../context/SocketContext";
 
-// Khác với HistoryPage bản gốc (chỉ có dữ liệu của LƯỢT DÙNG BỮA hiện tại
-// tại 1 bàn, lấy tạm từ tableState vì backend chưa có endpoint riêng theo
-// bàn), trang này hiển thị TẤT CẢ đơn thuộc `customerId` của trình duyệt
-// này — do server đã lọc sẵn theo phòng `customer:<customerId>` (xem
-// SocketContext) nên không cần gọi thêm API riêng, danh sách tự cập nhật
-// realtime mỗi khi quán đổi trạng thái đơn.
 export default function OrdersPage() {
   const { orders, stateReceived } = useSocket();
 

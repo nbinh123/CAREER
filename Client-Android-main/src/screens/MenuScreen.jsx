@@ -15,7 +15,6 @@ import CategoryTabs from "../components/menu/CategoryTabs";
 import MenuItemCard from "../components/menu/MenuItemCard";
 import FoodThumbnail from "../components/menu/FoodThumbnail";
 import CartFloatingButton from "../components/cart/CartFloatingButton";
-import Header from "../components/common/Header";
 import Loading from "../components/common/Loading";
 import Button from "../components/common/Button";
 import DashedDivider from "../components/common/DashedDivider";
@@ -129,7 +128,6 @@ export default function MenuScreen() {
 
   return (
     <View className="flex-1 bg-paper">
-      <Header title="Thực đơn" subtitle="Chọn món yêu thích của bạn" />
       <CategoryTabs categories={categories} activeId={activeCategory} onChange={setActiveCategory} />
 
       <FlatList

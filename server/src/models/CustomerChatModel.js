@@ -22,6 +22,7 @@ const chatMessageSchema = new Schema(
         text: { type: String, required: true },
         at: { type: Date, default: Date.now },
         read: { type: Boolean, default: false },
+        phone: { type: String, default: "" },   
     },
     { _id: true }
 );

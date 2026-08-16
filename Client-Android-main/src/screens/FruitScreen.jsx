@@ -4,7 +4,6 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { RotateCcw, Cherry } from "lucide-react-native";
 import Loading from "../components/common/Loading";
 import Button from "../components/common/Button";
-import Header from "../components/common/Header";
 import FruitPickCard from "../components/fruit/FruitPickCard";
 import ComboSuggestions from "../components/fruit/ComboSuggestions";
 import FruitMixBar from "../components/fruit/FruitMixBar";
@@ -205,7 +204,6 @@ export default function FruitScreen() {
 
   return (
     <View className="flex-1 bg-paper">
-      <Header title="Trái cây" subtitle="Mix combo 3 loại theo ý bạn" />
       <FlatList
         data={fruits}
         keyExtractor={(item) => item.id || item._id}
@@ -213,7 +211,7 @@ export default function FruitScreen() {
         columnWrapperStyle={{ gap: 12, paddingHorizontal: 16 }}
         contentContainerStyle={{ gap: 12, paddingBottom: 240 + insets.bottom }}
         ListHeaderComponent={
-          <View className="px-4 pt-2 pb-3">
+          <View className="px-4 pt-4 pb-3">
             <View className="flex-row items-center gap-2 mb-1.5">
               <Cherry size={17} color={COLORS.chili} />
               <Text className="font-display font-semibold text-ink text-[15px]">Mix combo trái cây</Text>

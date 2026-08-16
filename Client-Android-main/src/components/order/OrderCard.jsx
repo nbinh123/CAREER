@@ -2,16 +2,15 @@ import React from "react";
 import { View, Text } from "react-native";
 import { MapPin, Phone, StickyNote } from "lucide-react-native";
 import OrderItemRow from "./OrderItemRow";
+import OrderProgressTrack from "./OrderProgressTrack";
 import DashedDivider from "../common/DashedDivider";
 import { formatCurrency } from "../../utils/formatCurrency";
 import { timeAgo } from "../../utils/formatTime";
-import { ORDER_STATUS_META, STATUS_TONE_CLASS } from "../../constants/orderStatus";
+import { ORDER_STATUS_META } from "../../constants/orderStatus";
 import { COLORS } from "../../theme/tokens";
 
-// Port từ src/components/order/OrderCard.jsx bản web.
 export default function OrderCard({ order }) {
-  const meta = ORDER_STATUS_META[order.status] || { label: order.status, tone: null };
-  const toneClass = STATUS_TONE_CLASS[meta.tone] || "bg-paper-dim text-steel";
+  const meta = ORDER_STATUS_META[order.status] || { label: order.status };
   const shortCode = String(order.id).slice(-6).toUpperCase();
 
   return (
@@ -21,14 +20,14 @@ export default function OrderCard({ order }) {
           <Text className="font-display font-semibold text-ink text-sm">Đơn #{shortCode}</Text>
           <Text className="text-steel text-[11px] mt-0.5">{timeAgo(order.createdAt)}</Text>
         </View>
-        <View className={`px-2.5 py-1 rounded-full ${toneClass}`}>
-          <Text className={`text-[11px] font-display font-medium ${toneClass.split(" ")[1] || ""}`}>
-            {meta.label}
-          </Text>
-        </View>
+        <Text className="text-steel text-[11px] font-display font-medium">{meta.label}</Text>
       </View>
 
-      <View className="pt-1">
+      <OrderProgressTrack status={order.status} />
+
+      <DashedDivider className="mt-1" />
+
+      <View className="pt-2">
         {order.items.map((item, idx) => (
           <OrderItemRow key={`${item.foodId}-${idx}`} item={item} isFirst={idx === 0} />
         ))}

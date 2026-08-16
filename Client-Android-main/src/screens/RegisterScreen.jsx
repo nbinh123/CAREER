@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
 import {
   View,
   Text,
@@ -11,6 +11,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useNavigation } from "@react-navigation/native";
 import { ArrowLeft } from "lucide-react-native";
 import Button from "../components/common/Button";
+import PinInput from "../components/common/PinInput";
 import { useAuth } from "../context/AuthContext";
 import { useGlobal } from "../context/GlobalContext";
 import { COLORS } from "../theme/tokens";
@@ -26,13 +27,25 @@ export default function RegisterScreen() {
   const [password, setPassword] = useState("");
   const [errors, setErrors] = useState({});
   const [submitting, setSubmitting] = useState(false);
+  const passwordRef = useRef(null);
+
+  // Giống LoginScreen: không ép chỉ được gõ số, chỉ đếm riêng số chữ số để
+  // biết khi nào gõ đủ 10 số điện thoại rồi tự chuyển focus xuống 6 ô mật
+  // khẩu. Dùng "=== 10" để chỉ bắn đúng 1 lần tại thời điểm số thứ 10 vừa
+  // được gõ.
+  const handlePhoneChange = (text) => {
+    setPhone(text);
+    const digitCount = text.replace(/[^0-9]/g, "").length;
+    if (digitCount === 10) {
+      passwordRef.current?.focus();
+    }
+  };
 
   const validate = () => {
     const next = {};
     if (!fullName.trim()) next.fullName = "Vui lòng nhập họ tên.";
     if (!phone.trim()) next.phone = "Vui lòng nhập số điện thoại.";
-    if (!password || password.length < 6)
-      next.password = "Mật khẩu cần tối thiểu 6 ký tự.";
+    if (password.length !== 6) next.password = "Vui lòng nhập đủ 6 số.";
     setErrors(next);
     return Object.keys(next).length === 0;
   };
@@ -95,10 +108,13 @@ export default function RegisterScreen() {
             </Text>
             <TextInput
               value={phone}
-              onChangeText={setPhone}
+              onChangeText={handlePhoneChange}
               placeholder="09xxxxxxxx"
               keyboardType="phone-pad"
               autoCapitalize="none"
+              maxLength={10}
+              returnKeyType="next"
+              onSubmitEditing={() => passwordRef.current?.focus()}
               className={`font-body text-ink bg-white rounded-2xl px-4 py-3 border ${
                 errors.phone ? "border-chili" : "border-ink/10"
               }`}
@@ -110,15 +126,12 @@ export default function RegisterScreen() {
 
           <View>
             <Text className="font-bodyMedium text-xs text-steel mb-1.5">Mật khẩu</Text>
-            <TextInput
+            <PinInput
+              ref={passwordRef}
+              length={6}
               value={password}
               onChangeText={setPassword}
-              placeholder="Tối thiểu 6 ký tự"
-              secureTextEntry
-              autoCapitalize="none"
-              className={`font-body text-ink bg-white rounded-2xl px-4 py-3 border ${
-                errors.password ? "border-chili" : "border-ink/10"
-              }`}
+              error={!!errors.password}
             />
             {errors.password ? (
               <Text className="font-body text-xs text-chili mt-1">{errors.password}</Text>

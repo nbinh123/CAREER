@@ -43,23 +43,42 @@ export function AuthProvider({ children }) {
   const refreshingRef = useRef(null); // Promise đang refresh dở, tránh gọi refresh-token trùng lặp
 
   // Khởi động: đọc token đã lưu, có thì thử lấy hồ sơ để xác nhận còn hiệu lực.
+  //
+  // BUGFIX (đăng nhập nhanh không ăn, phải đăng nhập lại mới gửi đơn được):
+  // Bản cũ coi BẤT KỲ lỗi nào ở bước gọi /api/customers/me (kể cả rớt
+  // mạng/timeout ngay lúc app vừa mở, wifi/4G chưa kịp "tỉnh" — rất hay gặp
+  // lúc cold start) đều là "token hỏng", rồi XOÁ LUÔN token đang còn hạn và
+  // buộc quay về màn Đăng nhập. Token vẫn hợp lệ nhưng cứ mạng chập chờn một
+  // nhịp là mất phiên oan, đúng triệu chứng "phải đăng nhập lại thì mới gửi
+  // đơn được". Sửa: chỉ coi là hết phiên (xoá token) khi SERVER THỰC SỰ từ
+  // chối token (401/403); lỗi mạng/timeout thì thử lại vài lần thay vì đầu
+  // hàng ngay, và nếu vẫn lỗi mạng thì GIỮ NGUYÊN token đã lưu (không xoá)
+  // để lần mở app kế tiếp/khi có mạng lại vẫn tự đăng nhập nhanh được bình
+  // thường, thay vì phải gõ lại mật khẩu chỉ vì một lần lỗi mạng thoáng qua.
   useEffect(() => {
     (async () => {
       try {
         const token = await SecureStore.getItemAsync(ACCESS_TOKEN_KEY);
         if (token) {
           setAccessToken(token);
-          const res = await axiosClient.get("/api/customers/me", {
-            headers: { Authorization: `Bearer ${token}` },
-          });
-          setCustomer(res.data);
+          const me = await fetchProfileWithRetry(token);
+          setCustomer(me);
         }
-      } catch {
-        // Token hỏng/hết hạn và refresh cũng thất bại (xem interceptor bên
-        // dưới) -> coi như chưa đăng nhập, để Auth Stack tự xử lý.
-        await clearTokens();
-        setAccessToken(null);
-        setCustomer(null);
+      } catch (err) {
+        const status = err?.response?.status;
+        if (status === 401 || status === 403) {
+          // Token thật sự không còn hợp lệ (hết hạn/bị thu hồi) -> đây mới
+          // đúng là "hết phiên", cho quay lại màn Đăng nhập.
+          await clearTokens();
+          setAccessToken(null);
+          setCustomer(null);
+        }
+        // Lỗi khác (mất mạng, timeout...): không đụng tới token đã lưu.
+        // customer tạm thời vẫn null nên isAuthenticated vẫn false (không
+        // vào Main Tab với hồ sơ rỗng dẫn tới tên/SĐT không đồng bộ khi đặt
+        // đơn) — khách sẽ thấy lại màn Đăng nhập lần này, nhưng phiên chưa
+        // bị xoá nên có mạng lại là đăng nhập nhanh thành công ngay, không
+        // cần gõ lại mật khẩu.
       } finally {
         setIsLoading(false);
       }
@@ -161,8 +180,11 @@ export function AuthProvider({ children }) {
 
   const updateProfile = useCallback(async (patch) => {
     const res = await axiosClient.patch("/api/customers/me", patch);
-    setCustomer(res.data);
-    return res.data;
+    // Cùng 1 cấu trúc response với GET /api/customers/me ở trên -> chuẩn hoá
+    // giống hệt để tránh lặp lại bug "customer rỗng field" sau khi lưu hồ sơ.
+    const customerData = normalizeCustomer(res.data);
+    setCustomer(customerData);
+    return customerData;
   }, []);
 
   const value = useMemo(
@@ -186,6 +208,47 @@ export function AuthProvider({ children }) {
 async function clearTokens() {
   await SecureStore.deleteItemAsync(ACCESS_TOKEN_KEY);
   await SecureStore.deleteItemAsync(REFRESH_TOKEN_KEY);
+}
+
+// Dùng riêng cho bước kiểm tra đăng nhập nhanh lúc mở app: thử lại tối đa 3
+// lần khi gặp lỗi MẠNG (không có response từ server), vì đây là lỗi hay tự
+// khỏi (mạng vừa tỉnh dậy) chứ không phải token sai. Gặp lỗi có response
+// (401/403 token bị từ chối) thì dừng ngay, không có gì để thử lại.
+async function fetchProfileWithRetry(token, attempts = 3) {
+  let lastErr;
+  for (let i = 0; i < attempts; i += 1) {
+    try {
+      const res = await axiosClient.get("/api/customers/me", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      return normalizeCustomer(res.data);
+    } catch (err) {
+      lastErr = err;
+      if (err?.response) throw err; // lỗi từ server (vd 401) -> không retry
+      if (i < attempts - 1) {
+        await new Promise((resolve) => setTimeout(resolve, 600 * (i + 1)));
+      }
+    }
+  }
+  throw lastErr;
+}
+
+// BUGFIX (đăng nhập nhanh vào được Menu nhưng tab Tài khoản trống tên/SĐT):
+// login()/register() đọc hồ sơ từ `res.data.customer` (server bọc trong 1
+// field "customer" cùng accessToken/refreshToken). Đăng nhập nhanh trước đó
+// lại gán thẳng `res.data` cho customer, coi /api/customers/me trả object
+// phẳng — nhưng endpoint này (theo test thực tế) CŨNG bọc dữ liệu trong
+// "customer" giống login/register. Kết quả: customer state vẫn là 1 object
+// có thật (nên isAuthenticated=true, vào được Menu) nhưng field cần dùng
+// (fullName, phone) nằm sai 1 cấp -> rỗng, khiến tab Tài khoản trống và ô
+// SĐT khoá ở Checkout cũng rỗng theo. Sửa: tự nhận diện nếu response có bọc
+// trong field "customer" thì bóc ra, không thì dùng thẳng — vừa khớp đúng
+// shape thật của BE, vừa không vỡ nếu sau này BE đổi cách bọc.
+function normalizeCustomer(raw) {
+  if (raw && typeof raw === "object" && raw.customer && typeof raw.customer === "object") {
+    return raw.customer;
+  }
+  return raw;
 }
 
 export function useAuth() {

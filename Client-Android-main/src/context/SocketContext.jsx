@@ -41,7 +41,7 @@ const SocketContext = createContext(null);
  * lâu, cần ép reconnect thủ công cho chắc thay vì chờ timeout tự nhiên.
  */
 export function SocketProvider({ children }) {
-  const { accessToken, isAuthenticated } = useAuth();
+  const { accessToken, isAuthenticated, user } = useAuth();
   const { showToast } = useGlobal();
   const socketRef = useRef(null);
   const [connected, setConnected] = useState(false);
@@ -138,29 +138,48 @@ export function SocketProvider({ children }) {
 
   // items: mảng cart context [{ id (foodId), name, price, qty }]
   // customerInfo: { name, phone, address, note }
+  //
+  // BUGFIX (đăng nhập nhanh xong bấm Đặt hàng bị "Chưa kết nối được tới
+  // server"): bản cũ kiểm tra `socketRef.current?.connected` NGAY LẬP TỨC —
+  // đúng lúc vừa đăng nhập nhanh xong, effect ở trên mới vừa tạo `socket`
+  // (io(...)) nhưng handshake còn đang chạy (vài trăm ms tới vài giây tuỳ
+  // mạng di động), nên `connected` vẫn là false dù kết nối chắc chắn sẽ
+  // thành công ngay sau đó. Khi đăng nhập thủ công thì khách còn mất thời
+  // gian gõ SĐT/mật khẩu nên tới lúc bấm Đặt hàng socket luôn đã kết nối
+  // xong từ lâu — đó là lý do lỗi này chỉ lộ ra rõ ở nhánh đăng nhập nhanh.
+  // Sửa: nếu socket đã tồn tại nhưng chưa "connected", đợi thêm tối đa vài
+  // giây cho sự kiện "connect" thay vì từ chối ngay.
   const placeOrder = useCallback((items, customerInfo) => {
-    if (!socketRef.current?.connected) {
-      return Promise.reject(new Error("Chưa kết nối được tới server"));
-    }
     if (!items?.length) {
       return Promise.reject(new Error("Giỏ hàng đang trống"));
     }
-    socketRef.current.emit("place_order", {
-      customerName: (customerInfo?.name || "").trim(),
-      phone: (customerInfo?.phone || "").trim(),
-      address: (customerInfo?.address || "").trim(),
-      note: (customerInfo?.note || "").trim(),
-      items: items.map((i) => ({ foodId: i.id, quantity: i.qty })),
+    return waitForSocketConnected(socketRef).then((socket) => {
+      socket.emit("place_order", {
+        customerName: (customerInfo?.name || "").trim(),
+        phone: (customerInfo?.phone || "").trim(),
+        address: (customerInfo?.address || "").trim(),
+        note: (customerInfo?.note || "").trim(),
+        items: items.map((i) => ({ foodId: i.id, quantity: i.qty })),
+      });
+      return { ok: true };
     });
-    return Promise.resolve({ ok: true });
   }, []);
 
   const sendChatMessage = useCallback((text) => {
     if (!socketRef.current?.connected) return;
     const value = (text || "").trim();
     if (!value) return;
-    socketRef.current.emit("send_chat_message", { text: value });
-  }, []);
+    socketRef.current.emit("send_chat_message", {
+      text: value,
+      // Đặt tên field khớp với "customerName"/"phone" đã dùng ở placeOrder
+      // để đồng bộ quy ước với payload phía admin dashboard.
+      customerName: user?.name || "",
+      phone: user?.phone || "",
+      // Thêm nếu hồ sơ khách có sẵn — bỏ dòng nào không tồn tại
+      address: user?.address || "",
+      email: user?.email || "",
+    });
+  }, [user]);
 
   const value = useMemo(
     () => ({
@@ -176,6 +195,29 @@ export function SocketProvider({ children }) {
   );
 
   return <SocketContext.Provider value={value}>{children}</SocketContext.Provider>;
+}
+
+const CONNECT_WAIT_TIMEOUT_MS = 4000;
+
+function waitForSocketConnected(socketRef) {
+  const socket = socketRef.current;
+  if (!socket) {
+    return Promise.reject(new Error("Chưa kết nối được tới server"));
+  }
+  if (socket.connected) return Promise.resolve(socket);
+
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      socket.off("connect", onConnect);
+      reject(new Error("Chưa kết nối được tới server, vui lòng thử lại"));
+    }, CONNECT_WAIT_TIMEOUT_MS);
+
+    function onConnect() {
+      clearTimeout(timer);
+      resolve(socket);
+    }
+    socket.once("connect", onConnect);
+  });
 }
 
 export function useSocket() {

@@ -9,7 +9,9 @@
 //   import Constants from "expo-constants";
 //   export const API_BASE_URL = Constants.expoConfig?.extra?.apiBaseUrl;
 //
-// Tạm thời khai báo trực tiếp ở đây để bạn điền domain thật vào (xem câu hỏi
-// mở ở mục 8 tài liệu kế hoạch — cần domain backend production thực tế).
-export const API_BASE_URL = "http://192.168.100.18:5000/";
-export const SOCKET_URL = API_BASE_URL;
+// Đọc từ biến môi trường (EXPO_PUBLIC_*) — Expo (SDK 49+) tự nhúng các biến
+// có tiền tố EXPO_PUBLIC_ vào bundle lúc build, không cần cài thêm package
+// dotenv. Đổi giá trị trong file .env ở gốc dự án khi chuyển môi trường
+// (dev/staging/production), KHÔNG sửa trực tiếp ở đây.
+export const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL;
+export const SOCKET_URL = process.env.EXPO_PUBLIC_SOCKET_URL ?? API_BASE_URL;

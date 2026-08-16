@@ -7,6 +7,7 @@ import DashedDivider from "../components/common/DashedDivider";
 import { useAuth } from "../context/AuthContext";
 import { useGlobal } from "../context/GlobalContext";
 import { COLORS } from "../theme/tokens";
+import { SPACING } from "../theme/layout";
 
 // Tab "Tài khoản" thuộc phạm vi Giai đoạn 4 theo tài liệu gốc (hồ sơ, đổi
 // mật khẩu, đăng xuất). Bản chạy độc lập này thêm 1 bản TỐI GIẢN — chỉ hiện
@@ -16,7 +17,7 @@ import { COLORS } from "../theme/tokens";
 export default function AccountScreen() {
   const insets = useSafeAreaInsets();
   const { customer, logout } = useAuth();
-  const { restaurant, showToast } = useGlobal();
+  const { showToast } = useGlobal();
 
   const handleLogout = async () => {
     try {
@@ -26,18 +27,18 @@ export default function AccountScreen() {
     }
   };
 
+  // Trước đây tự vẽ tiêu đề "Tài khoản" riêng (cỡ chữ, vị trí khác hẳn các
+  // tab khác) — giờ tiêu đề trang đã do AppHeader dùng chung đảm nhiệm
+  // (RootNavigator.jsx), nên bỏ khối tiêu đề cũ, chỉ còn nội dung của trang.
   return (
     <ScrollView
       className="flex-1 bg-paper"
       contentContainerStyle={{
-        paddingTop: insets.top + 24,
+        paddingTop: SPACING.lg,
         paddingBottom: insets.bottom + 32,
         paddingHorizontal: 24,
       }}
     >
-      <Text className="font-display text-2xl text-ink mb-1">Tài khoản</Text>
-      <Text className="font-body text-sm text-steel mb-8">{restaurant.name}</Text>
-
       <View className="bg-white rounded-ticket border border-ink/10 p-5 gap-4">
         <View className="flex-row items-center gap-3">
           <View className="w-10 h-10 rounded-full bg-chili-light items-center justify-center">
