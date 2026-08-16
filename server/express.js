@@ -65,7 +65,5 @@ db.connect();
 route(app);
 
 // ❗ Quan trọng: dùng server.listen
-server.listen(port, () => {
-    console.log(`http://localhost:${port}`);
-});
+server.listen(port, () => {});
 
