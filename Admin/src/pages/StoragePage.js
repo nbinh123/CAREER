@@ -58,7 +58,7 @@ const GLOBAL_CSS = `
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
-    --bg:       #EEF0F5;
+    --bg:       #F9FAFB;
     --card:     #FFFFFF;
     --border:   #E4E8EF;
     --text-1:   #0D1117;
@@ -93,14 +93,14 @@ body { font-family: var(--font); background: var(--bg); color: var(--text-1); }
 @keyframes slideUp  { from { opacity:0; transform:translateY(32px) } to { opacity:1; transform:translateY(0) } }
 @keyframes pulse    { 0%,100%{opacity:1} 50%{opacity:.5} }
 
-.sp-page { font-family:var(--font); min-height:100vh; background:var(--bg); padding:28px 24px; animation:fadeUp .4s ease both; }
+.sp-page { font-family:var(--font); min-height:100vh; background:var(--bg); padding:0 0 40px; animation:fadeUp .4s ease both; }
 .sp-page * { font-family:var(--font); }
 
 /* ── Header (colors/layout matched to the Order page header) ── */
 .sp-header { display:flex; justify-content:space-between; align-items:flex-start; gap:16px; flex-wrap:wrap; margin-bottom:24px; }
-.sp-title  { font-size:27px; font-weight:800; color:var(--title); letter-spacing:-.5px; }
-.sp-sub-row { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-top:5px; }
-.sp-sub    { font-size:13px; color:#6B7280; font-weight:500; }
+.sp-title  { font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; font-size:24px; font-weight:900; color:#14532d; letter-spacing:normal; margin:0; }
+.sp-sub-row { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-top:0; }
+.sp-sub    { font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; font-size:14px; color:#6B7280; font-weight:400; margin-top:2px; }
 .sp-period-badge {
     display:inline-flex; align-items:center; gap:4px;
     background:#DCFCE7; color:#166534;

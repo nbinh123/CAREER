@@ -16,3 +16,8 @@ export async function getTopFruitCombos(limit = 6) {
   const res = await axiosClient.get("/api/fruit-orders/top-combos", { params: { limit } });
   return res.data?.data ?? [];
 }
+
+export async function getFruitMixOptions() {
+    const res = await axiosClient.get("/api/fruits/mix");
+    return res.data?.data ?? { fruits: [], combos: [] };
+}

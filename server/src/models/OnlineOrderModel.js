@@ -10,6 +10,12 @@
 // các tên: customerId, customerName, phone, address, note,
 // items[].foodId/foodName/unitPrice/quantity, totalPrice, status,
 // createdAt, updatedAt.
+//
+// ❗ MỚI (mục 3.2 kế hoạch chuyển đổi RN): thêm field accountId (optional,
+// default null) để phân biệt đơn từ app mobile (đã đăng nhập qua
+// CustomerModel) hay từ web (ẩn danh). Field này KHÔNG nằm trong hợp đồng
+// cũ nên không phá gì bên web — client-online cũ không gửi/không cần biết
+// field này.
 
 const mongoose = require("mongoose");
 const Schema = mongoose.Schema;
@@ -32,7 +38,20 @@ const onlineOrderSchema = new Schema(
     {
         // UUID ẩn danh frontend tự sinh, lưu localStorage — KHÔNG phải _id của
         // 1 user/account nào (dự án chưa có xác thực, xem README).
+        //
+        // ❗ MỚI (mục 3.2 kế hoạch RN): với đơn tới từ app mobile (đã đăng
+        // nhập), field này vẫn được set = accountId dạng string, để tương
+        // thích ngược với mọi đoạn code đang lọc/group theo customerId (báo
+        // cáo admin, cache RAM socket.js...). Muốn biết đơn có phải từ tài
+        // khoản mobile hay không, kiểm tra field accountId bên dưới thay vì
+        // đoán qua customerId.
         customerId: { type: String, required: true, index: true },
+
+        // ❗ MỚI (mục 3.2 kế hoạch RN): có giá trị nếu đơn đặt từ app mobile
+        // (đã đăng nhập qua CustomerModel) — null nếu đến từ web (ẩn danh,
+        // hành vi y hệt trước giờ, không đổi gì). KHÔNG required để không phá
+        // hợp đồng hiện có với web.
+        accountId: { type: Schema.Types.ObjectId, ref: "Customer", default: null, index: true },
 
         customerName: { type: String, required: true, trim: true },
         phone: { type: String, required: true, trim: true },

@@ -6,6 +6,8 @@ const FruitOrder = require("../src/models/FruitOrderModel"); // ← THIẾU: sen
 const OnlineOrder = require("../src/models/OnlineOrderModel"); // ← MỚI: đơn online (dự án "Quán Ba Miền · Đặt món online") — đổi path nếu bạn đặt model ở chỗ khác
 const CustomerChat = require("../src/models/CustomerChatModel"); // ← MỚI: chat hỗ trợ của luồng online, gắn theo customerId
 const { notifyNewOnlineOrder } = require("../telegram/bot"); // ← MỚI: bắn thông báo Telegram ngay khi có đơn online mới — đổi path nếu socket.js không nằm cùng cấp thư mục với telegram/ (xem README trong telegram/)
+const Customer = require("../src/models/CustomerModel"); // ← MỚI (mục 3.5 kế hoạch RN): tài khoản khách hàng app mobile — dùng để auto-join phòng đã xác thực, KHÔNG liên quan gì tới luồng web ẩn danh phía dưới
+const { verifyCustomerAccessToken } = require("../src/utils/customerToken"); // ← MỚI (mục 3.5 kế hoạch RN): verify access token khách hàng lúc socket connect
 
 const TABLE_COUNT = 12;
 
@@ -308,6 +310,52 @@ function initSocket(server) {
     })();
 
     io.on("connection", (socket) => {
+
+        // ══════════════════════════════════════════════════════════════════
+        // ❗ MỚI (mục 3.5 kế hoạch RN) — Khách (mobile, đã đăng nhập) tự động
+        // join phòng riêng bằng access token gửi kèm lúc connect
+        // (io-client: `auth: { token }`), KHÔNG chờ client tự bắn sự kiện gì.
+        //
+        // Tách biệt HOÀN TOÀN với "join_customer" của web ở mục 16 bên dưới —
+        // web GIỮ NGUYÊN 100%, không đổi gì cả. accountId lấy từ token ĐÃ
+        // VERIFY (KHÔNG lấy customerId client tự khai) nên mobile không dính
+        // lỗ hổng "đoán customerId người khác" như thiết kế ẩn danh của web.
+        //
+        // Không có token (mọi socket web/ẩn danh hiện tại) → bỏ qua hoàn
+        // toàn, không ảnh hưởng gì tới hành vi đang chạy.
+        // ══════════════════════════════════════════════════════════════════
+        (async () => {
+            try {
+                const token = socket.handshake.auth && socket.handshake.auth.token;
+                if (!token) return;
+
+                const decoded = verifyCustomerAccessToken(token);
+
+                const customer = await Customer.findById(decoded.accountId);
+                if (!customer) return;
+                if (decoded.tokenVersion !== customer.tokenVersion) return;
+                if (customer.isLocked) return;
+
+                const accountId = String(customer._id);
+                socket.data.customerAccountId = accountId; // đánh dấu socket đã xác thực, phòng khi chỗ khác cần dùng sau này
+
+                socket.join(`customer:${accountId}`);
+                socket.emit("customer_orders_state", getCustomerOrders(accountId));
+
+                const chatDoc = await CustomerChat.findOne({ customerId: accountId });
+                const history = ((chatDoc && chatDoc.messages) || []).map((m) => ({
+                    id: String(m._id),
+                    from: m.from,
+                    text: m.text,
+                    at: m.at,
+                }));
+                socket.emit("chat_history", history);
+            } catch (err) {
+                // Token sai/hết hạn lúc connect — KHÔNG chặn kết nối socket, chỉ
+                // đơn giản là không tự join phòng khách hàng nào cả.
+                console.error("[socket] auto-join khách hàng (mobile) lỗi:", err.message);
+            }
+        })();
 
         // ── 1. Admin: join để thấy TOÀN BỘ bàn, đơn online, danh sách chat ──
         socket.on("join_admin", () => {

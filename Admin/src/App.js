@@ -28,6 +28,7 @@ import ProtectedRoute from "./components/ProtectedRoute";
 import StaffManager from "./pages/StaffManager";
 import ShiftPage from "./pages/ShiftPage";
 import CashFlowPage from "./pages/CashFlow";
+import CustomerManager from "./pages/CustomerManager";
 
 const AppCtx = createContext(null);
 
@@ -257,6 +258,10 @@ export default function App() {
                   <Route path="/online" element={
                     <ProtectedRoute isAdmin={false}>
                       <OnlineOrderPage />
+                    </ProtectedRoute>} />
+                  <Route path="/customers" element={
+                    <ProtectedRoute isAdmin={true}>
+                      <CustomerManager />
                     </ProtectedRoute>} />
                 </Route>
                 <Route path="*" element={<Navigate to="/" replace />} />

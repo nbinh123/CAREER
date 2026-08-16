@@ -5,9 +5,10 @@ const orderRoute = require("../routes/route/orderRoute")
 const analystRoute = require("../routes/route/analystRoute")
 const ingredientRoute = require("../routes/route/ingredientRoute")
 const ingredientTracsactionRoute = require("../routes/route/ingredientTransactionRoutes")
-const tableRoute = require("../routes/route/tableRoute") // ❗ MỚI
-const fruitRoute = require("../routes/route/fruitRoute") // ❗ MỚI
-const fruitOrderRoute = require("../routes/route/fruitOrderRoute") // ❗ MỚI
+const tableRoute = require("../routes/route/tableRoute") 
+const fruitRoute = require("../routes/route/fruitRoute") 
+const fruitOrderRoute = require("../routes/route/fruitOrderRoute") 
+const customerRoute = require("../routes/route/customerRoute") 
 
 function router(app){ 
     app.use("/api/users",  userRoute)
@@ -16,9 +17,10 @@ function router(app){
     app.use("/api/analyst", analystRoute)
     app.use("/api/ingredients", ingredientRoute)
     app.use("/api/ingredient-transactions", ingredientTracsactionRoute)
-    app.use("/api/tables", tableRoute) // ❗ MỚI
-    app.use("/api/fruits", fruitRoute) // ❗ MỚI
-    app.use("/api/fruit-orders", fruitOrderRoute) // ❗ MỚI
+    app.use("/api/tables", tableRoute) 
+    app.use("/api/fruits", fruitRoute) 
+    app.use("/api/fruit-orders", fruitOrderRoute) 
+    app.use("/api/customers", customerRoute) 
 }
 
 module.exports = router

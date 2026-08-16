@@ -1,4 +1,4 @@
-import { Home, Package, UtensilsCrossed, ShoppingCart, GiftIcon, CherryIcon, TrendingUpIcon, ChefHatIcon, UserCogIcon, ChartColumnBigIcon } from "lucide-react";
+import { Home, Package, UtensilsCrossed, ShoppingCart, GiftIcon, CherryIcon, TrendingUpIcon, ChefHatIcon, UserCogIcon, ChartColumnBigIcon, UserIcon } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import useAuthZustand from "../zustand/useAuthZustand";
 
@@ -37,6 +37,12 @@ const NAV = [
     roles: ["admin", "staff", "chef"],
   },
   {
+    path: "/online",
+    label: "Đơn hàng online",
+    icon: ShoppingCart,
+    roles: ["admin"],
+  },
+  {
     path: "/analyst",
     label: "Phân tích",
     icon: ChartColumnBigIcon,
@@ -49,7 +55,12 @@ const NAV = [
     icon: GiftIcon,
     roles: ["admin"],
   },
-
+  {
+    path: "/customers",
+    label: "Khách hàng",
+    icon: UserIcon,
+    roles: ["admin"],
+  },
   {
     path: "/staff-manager",
     label: "Quản lý nhân viên",
@@ -60,12 +71,6 @@ const NAV = [
     path: "/cash-flow",
     label: "Dòng tiền",
     icon: TrendingUpIcon,
-    roles: ["admin"],
-  },
-  {
-    path: "/online",
-    label: "Đơn hàng online",
-    icon: ShoppingCart,
     roles: ["admin"],
   },
   {

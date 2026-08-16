@@ -5,6 +5,7 @@ const FruitController = require("../../controllers/FruitController")
 
 router.get("/search", FruitController.searchFruits) // đặt TRƯỚC "/:id", không thì "search" bị hiểu nhầm thành :id
 router.get("/combo", FruitController.getComboFruits) // đặt TRƯỚC "/:id", không thì "combo" bị hiểu nhầm thành :id
+router.get("/mix", FruitController.getMixOptions);
 router.get("/", FruitController.getAllFruits)
 router.get("/:id", FruitController.getFruitById)
 

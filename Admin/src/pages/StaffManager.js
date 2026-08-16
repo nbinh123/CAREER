@@ -22,9 +22,7 @@ const STYLE = `
 /* ── main layout ── */
 .sm-wrap {
   position: relative; z-index: 1;
-  max-width: 1200px;
-  margin: 0 auto;
-  padding: 32px 24px 60px;
+  padding: 0 0 40px;
 }
 
 /* ── header ── */
@@ -35,16 +33,19 @@ const STYLE = `
   animation: sm-fade-down 0.5s ease both;
 }
 .sm-header-left h1 {
-  font-size: 28px; font-weight: 900;
-  color: #064e3b; margin: 0 0 6px;
-  letter-spacing: -0.5px;
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  font-size: 24px; font-weight: 900;
+  color: #14532d; margin: 0;
+  letter-spacing: normal;
+  line-height: 2rem;
 }
 .sm-header-sub-row {
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
 }
 .sm-header-left p {
-  font-size: 13px; font-weight: 600;
-  color: #6b7280; margin: 0;
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  font-size: 14px; font-weight: 400;
+  color: #6b7280; margin: 2px 0 0;
 }
 .sm-live-badge {
   display: inline-flex; align-items: center; gap: 4px;

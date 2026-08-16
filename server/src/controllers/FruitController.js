@@ -4,11 +4,27 @@ const Fruit = require("../models/FruitModel");
 const Food = require("../models/FoodModel");
 const cloudinary = require("../config/cloudinary");
 const uploadBufferToCloudinary = require("../utils/uploadToCloudinary");
-
+const MIX_CATEGORY = "Trái cây mix";
 // ─── Multer ───────────────────────────────────────────────────────────────
 // memoryStorage — không ghi file ra ổ đĩa, buffer nhận từ multer được đẩy
 // thẳng lên Cloudinary trong createFruit/updateFruit. Giống hệt FoodController.
 const storage = multer.memoryStorage();
+
+const normalizeText = (str) => {
+    return (str || "")
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .trim()
+        .toLowerCase();
+};
+
+const parseComboParts = (foodName) => {
+    return (foodName || "")
+        .split("-")
+        .map((part) => part.trim())
+        .filter(Boolean);
+};
+
 const fileFilter = (req, file, cb) => {
     /jpeg|jpg|png|webp/.test(path.extname(file.originalname).toLowerCase())
         ? cb(null, true)
@@ -143,6 +159,65 @@ class FruitController {
             });
         }
     }
+
+    // [GET] /fruits/mix
+    // Dữ liệu dành riêng cho trang khách chọn combo trái cây
+    getMixOptions = async (req, res) => {
+        try {
+            // Lấy song song vì 2 collection độc lập
+            const [fruits, foods] = await Promise.all([
+                Fruit.find().sort({ createdAt: -1 }),
+                Food.find({
+                    categoryId: MIX_CATEGORY,
+                    isAvailable: true,
+                }).sort({ createdAt: -1 }),
+            ]);
+
+            // Set tên các loại trái cây ĐANG BÁN
+            const availableFruitNames = new Set(
+                fruits
+                    .filter((fruit) => fruit.isAvailable)
+                    .map((fruit) => normalizeText(fruit.fruitName))
+            );
+
+            // Chỉ giữ combo:
+            // 1. Food thuộc category "Trái cây mix"
+            // 2. Food đang bán
+            // 3. Có đúng 3 thành phần
+            // 4. Cả 3 thành phần đều tồn tại
+            // 5. Cả 3 thành phần đều đang bán
+            const combos = foods
+                .map((food) => ({
+                    ...food.toObject(),
+                    id: food._id,
+                    comboParts: parseComboParts(food.foodName),
+                }))
+                .filter((food) => {
+                    if (food.comboParts.length !== 3) {
+                        return false;
+                    }
+
+                    return food.comboParts.every((part) =>
+                        availableFruitNames.has(normalizeText(part))
+                    );
+                });
+
+            res.status(200).json({
+                success: true,
+                data: {
+                    fruits,
+                    combos,
+                },
+            });
+        } catch (error) {
+            console.error("[FruitController] getMixOptions:", error);
+
+            res.status(500).json({
+                success: false,
+                message: "Lỗi khi lấy dữ liệu mix trái cây",
+            });
+        }
+    };
 }
 
 // ─── Helper ───────────────────────────────────────────────────────────────
