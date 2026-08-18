@@ -29,6 +29,7 @@ import StaffManager from "./pages/StaffManager";
 import ShiftPage from "./pages/ShiftPage";
 import CashFlowPage from "./pages/CashFlow";
 import CustomerManager from "./pages/CustomerManager";
+import VoucherPage from "./pages/VoucherPage";
 
 const AppCtx = createContext(null);
 
@@ -262,6 +263,10 @@ export default function App() {
                   <Route path="/customers" element={
                     <ProtectedRoute isAdmin={true}>
                       <CustomerManager />
+                    </ProtectedRoute>} />
+                  <Route path="/voucher" element={
+                    <ProtectedRoute isAdmin={true}>
+                      <VoucherPage />
                     </ProtectedRoute>} />
                 </Route>
                 <Route path="*" element={<Navigate to="/" replace />} />

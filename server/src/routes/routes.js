@@ -9,6 +9,7 @@ const tableRoute = require("../routes/route/tableRoute")
 const fruitRoute = require("../routes/route/fruitRoute") 
 const fruitOrderRoute = require("../routes/route/fruitOrderRoute") 
 const customerRoute = require("../routes/route/customerRoute") 
+const voucherRoute = require("../routes/route/voucherRoute")
 
 function router(app){ 
     app.use("/api/users",  userRoute)
@@ -21,6 +22,7 @@ function router(app){
     app.use("/api/fruits", fruitRoute) 
     app.use("/api/fruit-orders", fruitOrderRoute) 
     app.use("/api/customers", customerRoute) 
+    app.use("/api/vouchers", voucherRoute)
 }
 
 module.exports = router

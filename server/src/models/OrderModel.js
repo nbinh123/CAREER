@@ -140,6 +140,8 @@ const orderSchema = new Schema(
             default: 0
         },
 
+        netGrossProfit: { type: Number, default: 0 }, // = totalGrossProfit - discountAmount
+
         // Đã thanh toán chưa
         isPaid: {
             type: Boolean,
@@ -158,8 +160,15 @@ const orderSchema = new Schema(
             type: String,
             // ref: 'User'
         },
+        voucherCode: { type: String, default: null, trim: true },
+        voucherId: { type: Schema.Types.ObjectId, ref: "Voucher", default: null },
 
-
+        // đặt cạnh field cancelledAt hiện có
+        cancelReason: {
+            type: String,
+            default: ''
+        },
+        
         // Thời gian hoàn tất
         completedAt: {
             type: Date
@@ -220,6 +229,7 @@ orderSchema.pre('save', function (next) {
             ),
         0
     );
+    this.netGrossProfit = this.totalGrossProfit - this.discountAmount;
 
     next();
 });

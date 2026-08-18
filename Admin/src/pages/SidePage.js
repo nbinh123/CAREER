@@ -62,6 +62,12 @@ const NAV = [
     roles: ["admin"],
   },
   {
+    path: "/voucher",
+    label: "Voucher",
+    icon: GiftIcon,
+    roles: ["admin"],
+  },
+  {
     path: "/staff-manager",
     label: "Quản lý nhân viên",
     icon: UserCogIcon,

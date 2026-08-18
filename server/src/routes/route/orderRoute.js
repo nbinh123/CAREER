@@ -6,5 +6,5 @@ const authMiddleware = require("../middleware/auth.middleware")
 
 router.get("/", OrderController.getOrders)
 router.post("/", OrderController.createOrder)
-
+// cập nhật thêm cancel order
 module.exports = router

@@ -100,6 +100,10 @@ const onlineOrderSchema = new Schema(
         deliveringAt: { type: Date, default: null },
         completedAt: { type: Date, default: null },
         cancelledAt: { type: Date, default: null },
+        subtotal: { type: Number, default: null }, // tổng trước giảm — optional vì client cũ không gửi
+        discountAmount: { type: Number, default: 0, min: 0 },
+        voucherCode: { type: String, default: null, trim: true },
+        voucherId: { type: Schema.Types.ObjectId, ref: "Voucher", default: null },
     },
     { timestamps: true } // createdAt / updatedAt tự động — đúng tên field frontend cần đọc
 );

@@ -10,47 +10,6 @@ const SocketContext = createContext(null);
 // Phải khớp với SOCKET_URL cấu hình bên admin/bếp.
 const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || "http://localhost:5000";
 
-/**
- * Bản gốc (gọi món tại bàn) join phòng theo BÀN (`join_table` / tableId) vì
- * đơn vị "sự thật" là cái bàn — nhiều khách cùng bàn cùng xem chung 1 trạng
- * thái. Bản đặt online không còn bàn, đơn vị "sự thật" đổi thành MỘT KHÁCH
- * (nhận diện ẩn danh qua `customerId` — xem CustomerContext) và khách đó có
- * thể có NHIỀU đơn cùng lúc, nên thay vì 1 object `tableState` ta có 1 mảng
- * `orders`.
- *
- * Luồng dự kiến với backend (áp dụng tương tự initSocket.js của bản gốc,
- * cần người viết backend hiện thực đúng các sự kiện sau):
- *
- * 1. Khách kết nối -> emit "join_customer" { customerId } để vào phòng riêng
- *    `customer:<customerId>`.
- * 2. Server trả ngay "customer_orders_state": mảng TẤT CẢ đơn (mọi trạng
- *    thái, mới nhất trước) thuộc customerId này — tương đương "tables_state"
- *    của bản gốc nhưng phát cho từng khách thay vì từng bàn.
- * 3. Khách đặt đơn mới (giỏ hàng + thông tin giao hàng) -> emit "place_order"
- *    { customerId, customerName, phone, address, note,
- *      items: [{ foodId, quantity }] }.
- *    Server tự tra giá từ DB (KHÔNG tin đơn giá/tổng tiền do client gửi lên,
- *    giống hệt nguyên tắc giá cố định ở "send_fruit_order" bản gốc), tạo
- *    Order mới với status "pending", rồi bắn lại "customer_orders_state" cho
- *    đúng room khách này — khách thấy đơn mới xuất hiện trong /orders ngay
- *    lập tức mà không cần tự thêm optimistic vào state ở client.
- * 4. Phía quán (trang admin, không nằm trong dự án Client này) xác nhận /
- *    chuyển trạng thái đơn (pending -> confirmed -> preparing -> delivering
- *    -> completed, hoặc -> cancelled) -> mỗi lần đổi, server bắn lại
- *    "customer_orders_state" cho room khách đó -> khách thấy trạng thái cập
- *    nhật realtime trên /orders, kèm toast báo (xử lý ở dưới).
- * 5. Chat hỗ trợ (ChatWidget.jsx): ngay sau "join_customer", server còn bắn
- *    thêm "chat_history" (mảng toàn bộ tin nhắn cũ của customerId này, nạp
- *    đúng 1 lần). Khách gửi tin: emit "send_chat_message" { customerId,
- *    text } -> server lưu DB rồi bắn lại "chat_message" (1 tin) cho đúng
- *    room khách này + phòng admin, để tin của chính mình cũng vòng lại (đồng
- *    bộ nếu khách mở nhiều tab) và admin trả lời cũng đi qua cùng kênh này.
- *    Khác bản gốc: không có "chat_cleared" (không có sự kiện "thanh toán
- *    bàn" nào để gắn vào) — lịch sử chat tồn tại lâu dài theo customerId.
- *
- * `stateReceived` giữ đúng vai trò như bản gốc: phân biệt "chưa có dữ liệu vì
- * còn đang tải" với "đã tải xong và khách chưa có đơn nào" (mảng rỗng).
- */
 export function SocketProvider({ children }) {
   const { customerId } = useCustomer();
   const { showToast } = useGlobal();
@@ -120,6 +79,10 @@ export function SocketProvider({ children }) {
       setMessages((prev) => [...prev, message]);
     });
 
+    socket.on("order_voucher_rejected", ({ message } = {}) => {
+      showToast(message || "Mã giảm giá không còn hiệu lực, vui lòng thử lại", "error");
+    });
+
     return () => {
       socket.disconnect();
       socketRef.current = null;
@@ -130,7 +93,7 @@ export function SocketProvider({ children }) {
   // items: mảng cart context [{ id (foodId), name, price, qty }]
   // customerInfo: { name, phone, address, note }
   const placeOrder = useCallback(
-    (items, customerInfo) => {
+    (items, customerInfo, voucherCode) => {
       if (!socketRef.current || !customerId) {
         return Promise.reject(new Error("Chưa kết nối được tới server"));
       }
@@ -144,6 +107,7 @@ export function SocketProvider({ children }) {
         address: (customerInfo?.address || "").trim(),
         note: (customerInfo?.note || "").trim(),
         items: items.map((i) => ({ foodId: i.id, quantity: i.qty })),
+        ...(voucherCode ? { voucherCode: voucherCode.trim() } : {}),
       });
       // Không optimistic-update `orders` ở đây: đơn mới sẽ tự xuất hiện qua
       // "customer_orders_state" server bắn lại ngay sau đó (thường vài chục
@@ -153,6 +117,36 @@ export function SocketProvider({ children }) {
     [customerId]
   );
 
+  // items: mảng cart context [{ id (foodId), name, price, qty }]. Dùng ack
+  // callback để lấy kết quả TRỰC TIẾP cho đúng lần gọi này, không qua state
+  // broadcast như các sự kiện khác — không claim lượt dùng, chỉ tính thử.
+  const validateVoucher = useCallback(
+    (code, items) => {
+      return new Promise((resolve, reject) => {
+        if (!socketRef.current) {
+          reject(new Error("Chưa kết nối được tới server"));
+          return;
+        }
+        if (!code?.trim()) {
+          reject(new Error("Vui lòng nhập mã voucher"));
+          return;
+        }
+        socketRef.current.emit(
+          "validate_voucher",
+          {
+            code: code.trim(),
+            customerId,
+            items: items.map((i) => ({ foodId: i.id, quantity: i.qty })),
+          },
+          (response) => {
+            if (response?.success) resolve(response);
+            else reject(new Error(response?.message || "Voucher không hợp lệ"));
+          }
+        );
+      });
+    },
+    [customerId]
+  );
   // Gửi tin nhắn cho quán. Không tự thêm vào `messages` ở đây — chờ server
   // vòng lại qua "chat_message" (cùng room customer:<customerId>), để tin
   // hiện lên đồng nhất trên mọi tab của khách, giống hệt nguyên tắc
@@ -173,6 +167,7 @@ export function SocketProvider({ children }) {
       stateReceived,
       orders,
       placeOrder,
+      validateVoucher,
       messages,
       chatHistoryReceived,
       sendChatMessage,

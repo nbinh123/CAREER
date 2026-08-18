@@ -20,7 +20,11 @@ const PHONE_RE = /^(0|\+84)\d{9,10}$/;
 //   2) "checkout" - nhập tên, SĐT, địa chỉ, ghi chú rồi mới thật sự đặt hàng
 export default function CartDrawer({ open, onClose }) {
   const { items, updateQty, totalPrice, totalCount, clearCart } = useCart();
-  const { placeOrder } = useSocket();
+  const { placeOrder, validateVoucher } = useSocket();
+  const [voucherInput, setVoucherInput] = useState("");
+  const [appliedVoucher, setAppliedVoucher] = useState(null); // { code, discountAmount, finalTotal }
+  const [voucherChecking, setVoucherChecking] = useState(false);
+  const [voucherError, setVoucherError] = useState("");
   const { profile, saveProfile } = useCustomer();
   const { showToast } = useGlobal();
   const navigate = useNavigate();
@@ -46,6 +50,9 @@ export default function CartDrawer({ open, onClose }) {
     });
   }, [open, profile]);
 
+  useEffect(() => {
+    setAppliedVoucher(null);
+  }, [items]);
   // Khoá scroll nền khi giỏ hàng đang mở
   useEffect(() => {
     if (!open) return;
@@ -68,7 +75,26 @@ export default function CartDrawer({ open, onClose }) {
     if (items.length === 0) return;
     setStep("checkout");
   };
+  const handleApplyVoucher = async () => {
+    if (!voucherInput.trim()) return;
+    setVoucherChecking(true);
+    setVoucherError("");
+    try {
+      const result = await validateVoucher(voucherInput, items);
+      setAppliedVoucher(result);
+    } catch (err) {
+      setAppliedVoucher(null);
+      setVoucherError(err.message);
+    } finally {
+      setVoucherChecking(false);
+    }
+  };
 
+  const handleRemoveVoucher = () => {
+    setAppliedVoucher(null);
+    setVoucherInput("");
+    setVoucherError("");
+  };
   // Lưu hồ sơ (tên/SĐT/địa chỉ) là hành động RIÊNG, khách chủ động bấm —
   // không còn tự lưu ngầm mỗi khi đặt hàng xong như trước, để khách dùng
   // máy chung (vd tablet ở quầy) không bị lộ thông tin cho người đặt sau.
@@ -84,9 +110,7 @@ export default function CartDrawer({ open, onClose }) {
     if (!validate()) return;
     setSubmitting(true);
     try {
-      // Server tự tra lại foodName/unitPrice từ DB theo foodId, không tin số
-      // liệu FE gửi lên - nên ở đây chỉ cần gửi foodId + quantity là đủ.
-      await placeOrder(items, form);
+      await placeOrder(items, form, appliedVoucher?.code); // ❗ SỬA — thêm voucherCode
       clearCart();
       onClose();
       showToast("Đã gửi đơn, đang chờ quán xác nhận!");
@@ -164,8 +188,46 @@ export default function CartDrawer({ open, onClose }) {
         {/* Footer — pb dùng max() để không bị .safe-bottom đè về 0px */}
         {step === "cart" && items.length > 0 && (
           <div className="px-6 pt-4 pb-[max(1.5rem,env(safe-area-inset-bottom))] dashed-divider">
+            {/* ❗ MỚI — nhập mã voucher */}
+            <div className="mb-3">
+              {!appliedVoucher ? (
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={voucherInput}
+                    onChange={(e) => setVoucherInput(e.target.value.toUpperCase())}
+                    placeholder="Nhập mã giảm giá"
+                    className="flex-1 min-w-0 px-3 py-2 rounded-xl border border-ink/10 text-sm uppercase focus:outline-none focus:ring-2 focus:ring-ink/20"
+                  />
+                  <Button
+                    variant="outline"
+                    onClick={handleApplyVoucher}
+                    disabled={voucherChecking || !voucherInput.trim()}
+                  >
+                    {voucherChecking ? "Đang kiểm tra..." : "Áp dụng"}
+                  </Button>
+                </div>
+              ) : (
+                <div className="flex items-center justify-between bg-paper-dim rounded-xl px-3 py-2">
+                  <span className="text-sm text-ink">
+                    Đã áp {appliedVoucher.code} · -{formatCurrency(appliedVoucher.discountAmount)}
+                  </span>
+                  <button
+                    onClick={handleRemoveVoucher}
+                    aria-label="Bỏ mã giảm giá"
+                    className="p-1 rounded-full text-steel hover:bg-ink/5 transition"
+                  >
+                    <X size={16} />
+                  </button>
+                </div>
+              )}
+              {voucherError && <p className="text-chili-dark text-xs mt-1.5">{voucherError}</p>}
+            </div>
+
             <Button fullWidth onClick={handleContinue}>
-              {`Tiếp tục · ${formatCurrency(totalPrice)}`}
+              {appliedVoucher
+                ? `Tiếp tục · ${formatCurrency(appliedVoucher.finalTotal)}`
+                : `Tiếp tục · ${formatCurrency(totalPrice)}`}
             </Button>
           </div>
         )}
@@ -173,7 +235,9 @@ export default function CartDrawer({ open, onClose }) {
         {step === "checkout" && (
           <div className="px-6 pt-4 pb-[max(1.5rem,env(safe-area-inset-bottom))] dashed-divider">
             <Button fullWidth onClick={handleSubmit} disabled={submitting}>
-              {submitting ? "Đang gửi..." : `Đặt hàng · ${formatCurrency(totalPrice)}`}
+              {submitting
+                ? "Đang gửi..."
+                : `Đặt hàng · ${formatCurrency(appliedVoucher ? appliedVoucher.finalTotal : totalPrice)}`}
             </Button>
           </div>
         )}

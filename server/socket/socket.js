@@ -2,13 +2,22 @@ const { Server } = require("socket.io");
 const Table = require("../src/models/TableModel");
 const Food = require("../src/models/FoodModel"); // đổi path nếu FoodModel của bạn nằm chỗ khác
 const Fruit = require("../src/models/FruitModel"); // ← THIẾU: send_fruit_order dùng Fruit.find() nhưng chưa từng require — đổi path nếu FruitModel của bạn nằm chỗ khác
+const Voucher = require("../src/models/VoucherModel")
+const VoucherRedemption = require("../src/models/VoucherRedemptionModel")
 const FruitOrder = require("../src/models/FruitOrderModel"); // ← THIẾU: send_fruit_order dùng FruitOrder.create() nhưng chưa từng require — đổi path nếu FruitOrderModel của bạn nằm chỗ khác
 const OnlineOrder = require("../src/models/OnlineOrderModel"); // ← MỚI: đơn online (dự án "Quán Ba Miền · Đặt món online") — đổi path nếu bạn đặt model ở chỗ khác
 const CustomerChat = require("../src/models/CustomerChatModel"); // ← MỚI: chat hỗ trợ của luồng online, gắn theo customerId
 const { notifyNewOnlineOrder } = require("../telegram/bot"); // ← MỚI: bắn thông báo Telegram ngay khi có đơn online mới — đổi path nếu socket.js không nằm cùng cấp thư mục với telegram/ (xem README trong telegram/)
 const Customer = require("../src/models/CustomerModel"); // ← MỚI (mục 3.5 kế hoạch RN): tài khoản khách hàng app mobile — dùng để auto-join phòng đã xác thực, KHÔNG liên quan gì tới luồng web ẩn danh phía dưới
 const { verifyCustomerAccessToken } = require("../src/utils/customerToken"); // ← MỚI (mục 3.5 kế hoạch RN): verify access token khách hàng lúc socket connect
-
+const {
+    VoucherError,
+    computeVoucherDiscount,
+    redeemVoucher,
+    rollbackVoucherClaim,
+    recordVoucherRedemption,
+    releaseVoucherForOrder,
+} = require("../src/controllers/service/voucherService"); // ❗ MỚI — đổi path nếu bạn đặt khác
 const TABLE_COUNT = 12;
 
 let ioInstance = null;
@@ -973,21 +982,11 @@ function initSocket(server) {
         // ── 17. Khách (online) đặt đơn — server luôn tự tra Food trong DB để
         // tính lại foodName/unitPrice, KHÔNG tin số liệu client gửi lên, cùng
         // nguyên tắc bảo mật với "send_to_kitchen" ở bản tại bàn.
-        socket.on("place_order", async ({ customerId, customerName, phone, address, note, items } = {}) => {
+        socket.on("place_order", async ({ customerId, customerName, phone, address, note, items, voucherCode } = {}) => {
+            // ❗ MỚI — rollback nếu OnlineOrder.create thất bại sau khi voucher đã claim
+            let claimedVoucherId = null;
+
             try {
-                // ❗ SỬA (bug chính — app RN đặt đơn không tới server) — app
-                // React Native (SocketContext.jsx, mục 3.5) CỐ Ý không gửi
-                // customerId trong payload "place_order": danh tính khách đã
-                // được xác thực bằng access token ngay lúc connect (khối
-                // auto-join ở đầu "connection" phía trên set
-                // socket.data.customerAccountId từ token ĐÃ VERIFY). Trước đây
-                // dòng "if (!customerId) return;" chỉ đọc từ payload — với
-                // socket mobile customerId luôn undefined nên MỌI đơn từ app bị
-                // bỏ qua âm thầm (không lỗi, không log, vì đây là emit 1 chiều
-                // không có ack). Ưu tiên accountId đã verify qua token (an toàn
-                // hơn, không tin client tự khai); chỉ dùng customerId từ
-                // payload khi socket CHƯA xác thực qua token — tức luồng web
-                // ẩn danh cũ, giữ nguyên hành vi cũ 100%.
                 const resolvedCustomerId = socket.data.customerAccountId || customerId;
                 if (!resolvedCustomerId) return;
 
@@ -1002,9 +1001,6 @@ function initSocket(server) {
                 const foodsInDb = await Food.find({ _id: { $in: foodIds } });
 
                 const cleanItems = [];
-                // ❗ MỚI — cùng nguyên tắc với send_to_kitchen: món tắt "Đang bán"
-                // giữa lúc khách xem giỏ (cache cũ trên máy khách) và lúc bấm đặt bị
-                // loại khỏi đơn tại đây, gom lại để báo cho đúng khách đó.
                 const rejectedItems = [];
 
                 for (const { foodId, quantity } of items) {
@@ -1032,7 +1028,37 @@ function initSocket(server) {
 
                 if (cleanItems.length === 0) return;
 
-                const totalPrice = cleanItems.reduce((s, i) => s + i.unitPrice * i.quantity, 0);
+                // ❗ SỬA — đổi tên biến cho rõ nghĩa: đây là số TRƯỚC giảm giá
+                const subtotal = cleanItems.reduce((s, i) => s + i.unitPrice * i.quantity, 0);
+
+                // ❗ MỚI — áp voucher, optional. Client cũ (không gửi voucherCode) đi
+                // thẳng qua nhánh này mà không đổi hành vi gì cả.
+                let discountAmount = 0;
+                let voucherInfo = null;
+
+                if (voucherCode) {
+                    try {
+                        const eligibilityItems = cleanItems.map((i) => {
+                            const food = foodsInDb.find((f) => String(f._id) === String(i.foodId));
+                            return { foodId: i.foodId, categoryId: food ? food.categoryId : null, total: i.unitPrice * i.quantity };
+                        });
+
+                        const { voucher, discountAmount: voucherDiscount } = await redeemVoucher(voucherCode, {
+                            channel: "ONLINE",
+                            items: eligibilityItems,
+                            subtotal,
+                            customerKey: resolvedCustomerId,
+                        });
+                        claimedVoucherId = voucher._id;
+                        discountAmount = voucherDiscount;
+                        voucherInfo = voucher;
+                    } catch (voucherErr) {
+                        io.to(`customer:${resolvedCustomerId}`).emit("order_voucher_rejected", { message: voucherErr.message });
+                        return; // không tạo đơn nếu voucher lỗi
+                    }
+                }
+
+                const totalPrice = Math.max(0, subtotal - discountAmount);
 
                 const created = await OnlineOrder.create({
                     customerId: resolvedCustomerId,
@@ -1041,45 +1067,98 @@ function initSocket(server) {
                     address: cleanAddress,
                     note: cleanNote,
                     items: cleanItems,
+                    subtotal, // ❗ MỚI
+                    discountAmount, // ❗ MỚI
                     totalPrice,
+                    ...(voucherInfo ? { voucherId: voucherInfo._id, voucherCode: voucherInfo.code } : {}), // ❗ MỚI
                     status: "pending",
                 });
 
-                // ❗ SỬA (lỗi realtime) — trước đây handler dừng ngay sau
-                // OnlineOrder.create(...): đơn ĐÃ nằm trong MongoDB nhưng
-                // onlineOrdersCache (RAM) không được cập nhật và không ai được
-                // emit gì cả, nên admin chỉ thấy đơn sau khi restart server
-                // (lúc đó loadOnlineOrdersCache() chạy lại từ đầu). Từ đây
-                // đồng bộ cache + báo cho cả khách lẫn admin ngay lập tức,
-                // đúng nguyên tắc "ghi DB xong → update cache → emit" đang
-                // dùng nhất quán ở mọi handler khác trong file này.
+                if (voucherInfo) { // ❗ MỚI
+                    await recordVoucherRedemption({
+                        voucherId: voucherInfo._id,
+                        code: voucherInfo.code,
+                        onlineOrderId: created._id,
+                        customerKey: resolvedCustomerId,
+                        discountApplied: discountAmount,
+                    });
+                }
+
                 const clientOrder = toClientOnlineOrder(created);
                 upsertOnlineOrderCache(clientOrder);
 
-                // Khách vừa đặt: đơn mới xuất hiện ngay trong /orders, không
-                // cần refresh (đúng hợp đồng "customer_orders_state" = mảng
-                // đầy đủ, mới nhất trước — xem getCustomerOrders()).
-                io.to(`customer:${resolvedCustomerId}`).emit(
-                    "customer_orders_state",
-                    getCustomerOrders(resolvedCustomerId)
-                );
-
-                // Admin: đồng bộ lại toàn bộ cache (để refresh/mở tab mới vẫn
-                // đúng) VÀ bắn riêng 1 sự kiện "online_order_created" — đây là
-                // sự kiện OnlineOrdersPage.jsx đang lắng nghe (handleOrderCreated)
-                // để bắn toast "Đơn online mới", trước đây chưa từng được emit.
+                io.to(`customer:${resolvedCustomerId}`).emit("customer_orders_state", getCustomerOrders(resolvedCustomerId));
                 io.to("admin_room").emit("online_orders_state", onlineOrdersCache);
                 io.to("admin_room").emit("online_order_created", clientOrder);
 
-                // Báo Telegram — tách try/catch riêng để lỗi gửi Telegram (mạng,
-                // token sai...) không làm crash cả handler đặt đơn của khách.
                 try {
                     await notifyNewOnlineOrder(clientOrder);
                 } catch (notifyErr) {
                     console.error("[socket] notifyNewOnlineOrder lỗi:", notifyErr.message);
                 }
             } catch (err) {
+                if (claimedVoucherId) await rollbackVoucherClaim(claimedVoucherId); // ❗ MỚI
                 console.error("[socket] place_order lỗi:", err.message);
+            }
+        });
+
+        // ── 17b. Khách (online) xin preview giảm giá TRƯỚC khi đặt — dùng ack
+        // callback (KHÁC các handler khác trong file toàn broadcast state), vì đây
+        // cần trả lời ĐÚNG 1 lần cho ĐÚNG request đó. KHÔNG claim lượt dùng ở đây —
+        // chỉ tính thử, lượt dùng chỉ thật sự bị trừ lúc "place_order" (redeemVoucher).
+        socket.on("validate_voucher", async ({ code, items, customerId } = {}, callback) => {
+            if (typeof callback !== "function") return; // client cũ không gửi callback → bỏ qua an toàn
+
+            try {
+                const resolvedCustomerId = socket.data.customerAccountId || customerId;
+
+                if (!code || !Array.isArray(items) || items.length === 0) {
+                    return callback({ success: false, message: "Thiếu thông tin để kiểm tra voucher" });
+                }
+
+                const foodIds = items.map((i) => i.foodId).filter(Boolean);
+                const foodsInDb = await Food.find({ _id: { $in: foodIds } });
+
+                let subtotal = 0;
+                const eligibilityItems = [];
+                for (const { foodId, quantity } of items) {
+                    const food = foodsInDb.find((f) => String(f._id) === String(foodId));
+                    const qty = Number(quantity);
+                    if (!food || !qty || qty <= 0) continue;
+                    const total = food.originalPrice * qty;
+                    subtotal += total;
+                    eligibilityItems.push({ foodId: food._id, categoryId: food.categoryId, total });
+                }
+
+                const voucher = await Voucher.findOne({ code: String(code).toUpperCase().trim() });
+                if (!voucher) return callback({ success: false, message: "Voucher không tồn tại" });
+
+                if (resolvedCustomerId && voucher.usageLimitPerCustomer !== null) {
+                    const usedByCustomer = await VoucherRedemption.countDocuments({
+                        voucherId: voucher._id,
+                        customerKey: resolvedCustomerId,
+                        released: false,
+                    });
+                    if (usedByCustomer >= voucher.usageLimitPerCustomer) {
+                        return callback({ success: false, message: "Bạn đã dùng hết lượt cho voucher này" });
+                    }
+                }
+
+                const discountAmount = await computeVoucherDiscount(voucher, {
+                    channel: "ONLINE",
+                    items: eligibilityItems,
+                    subtotal,
+                });
+
+                callback({
+                    success: true,
+                    code: voucher.code,
+                    discountAmount,
+                    finalTotal: Math.max(0, subtotal - discountAmount),
+                });
+            } catch (err) {
+                const message = err instanceof VoucherError ? err.message : "Không kiểm tra được voucher, vui lòng thử lại";
+                callback({ success: false, message });
             }
         });
 
@@ -1104,6 +1183,10 @@ function initSocket(server) {
 
                 const updated = await OnlineOrder.findByIdAndUpdate(orderId, update, { new: true });
                 if (!updated) return;
+
+                if (status === "cancelled") { // ❗ MỚI — hoàn lượt voucher nếu đơn có dùng
+                    await releaseVoucherForOrder({ onlineOrderId: updated._id });
+                }
 
                 const clientOrder = toClientOnlineOrder(updated);
                 upsertOnlineOrderCache(clientOrder);
