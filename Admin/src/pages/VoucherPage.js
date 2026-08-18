@@ -819,15 +819,13 @@ function SearchableMultiSelect({
         return () => document.removeEventListener("mousedown", handleClickOutside);
     }, [open]);
 
-    const safeOptions = Array.isArray(options) ? options : [];
     const safeSelectedIds = Array.isArray(selectedIds) ? selectedIds : [];
-
     const filtered = useMemo(() => {
+        const safeOptions = Array.isArray(options) ? options : [];
         const q = query.trim().toLowerCase();
         if (!q) return safeOptions;
         return safeOptions.filter((o) => (o.label || "").toLowerCase().includes(q));
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [safeOptions, query]);
+    }, [options, query]);
 
     const summary = safeSelectedIds.length === 0 ? placeholder : `Đã chọn ${safeSelectedIds.length}`;
 
