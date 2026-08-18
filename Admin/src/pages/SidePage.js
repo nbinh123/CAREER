@@ -1,4 +1,7 @@
-import { Home, Package, UtensilsCrossed, ShoppingCart, GiftIcon, CherryIcon, TrendingUpIcon, ChefHatIcon, UserCogIcon, ChartColumnBigIcon, UserIcon } from "lucide-react";
+import {
+  Home, Package, UtensilsCrossed, ShoppingCart, GiftIcon, CherryIcon,
+  TrendingUpIcon, ChefHatIcon, UserCogIcon, ChartColumnBigIcon, UserIcon, Ticket
+} from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import useAuthZustand from "../zustand/useAuthZustand";
 
@@ -64,7 +67,7 @@ const NAV = [
   {
     path: "/voucher",
     label: "Voucher",
-    icon: GiftIcon,
+    icon: Ticket,
     roles: ["admin"],
   },
   {

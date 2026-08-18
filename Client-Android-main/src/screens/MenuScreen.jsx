@@ -163,58 +163,80 @@ export default function MenuScreen() {
           >
             {selectedItem && (
               <>
-                <View className="flex-row items-center justify-between px-6 pt-6 pb-4">
-                  <Text className="font-display font-semibold text-lg text-ink flex-shrink pr-3">
+                {/* Header */}
+                <View className="flex-row items-center justify-between px-6 pt-5 pb-3">
+                  <Text className="font-display font-semibold text-lg text-ink flex-1 pr-3">
                     {selectedItem.foodName}
                   </Text>
+
                   <Pressable
                     onPress={() => setSelectedItem(null)}
                     accessibilityLabel="Đóng"
-                    className="p-1.5 rounded-full"
+                    className="w-9 h-9 rounded-full items-center justify-center"
                   >
-                    <X size={20} color={COLORS.steel} />
+                    <X size={22} color={COLORS.steel} />
                   </Pressable>
                 </View>
 
-                <ScrollView className="px-6" contentContainerStyle={{ paddingBottom: 24 }}>
+                {/* Nội dung */}
+                <ScrollView
+                  className="px-6"
+                  showsVerticalScrollIndicator={false}
+                  contentContainerStyle={{ paddingBottom: 8 }}
+                >
                   <FoodThumbnail
                     src={selectedItem.imageUrl}
                     alt={selectedItem.foodName}
-                    className="w-full h-44 rounded-2xl mb-5"
+                    className="w-full h-44 rounded-2xl"
                   />
-                  <Text className="text-steel text-sm leading-relaxed mb-5">
-                    {selectedItem.description}
-                  </Text>
 
-                  <View className="flex-row items-center justify-between mt-6">
+                  {!!selectedItem.description && (
+                    <Text className="text-steel text-sm leading-relaxed mt-4">
+                      {selectedItem.description}
+                    </Text>
+                  )}
+                </ScrollView>
+
+                {/* Giá + số lượng */}
+                <View className="px-6 pt-3">
+                  <View className="flex-row items-center justify-between">
                     <Text className="font-mono text-xl font-semibold text-chili-dark">
                       {formatCurrency(selectedItem.originalPrice)}
                     </Text>
 
                     {!unavailable && (
-                      <View className="flex-row items-center gap-3 bg-paper-dim rounded-full px-2 py-1.5">
+                      <View className="flex-row items-center bg-paper-dim rounded-full p-1">
                         <Pressable
                           onPress={() => setQty((q) => Math.max(1, q - 1))}
                           accessibilityLabel="Giảm số lượng"
                           className="w-9 h-9 rounded-full bg-paper items-center justify-center"
                         >
-                          <Minus size={16} color={COLORS.ink} />
+                          <Minus size={16} color={COLORS.ink} strokeWidth={2.5} />
                         </Pressable>
-                        <Text className="font-mono w-8 text-center font-semibold text-base">{qty}</Text>
+
+                        <Text className="font-mono w-10 text-center font-semibold text-base text-ink">
+                          {qty}
+                        </Text>
+
                         <Pressable
                           onPress={() => setQty((q) => q + 1)}
                           accessibilityLabel="Tăng số lượng"
                           className="w-9 h-9 rounded-full bg-ink items-center justify-center"
                         >
-                          <Plus size={16} color={COLORS.paper} />
+                          <Plus size={16} color={COLORS.paper} strokeWidth={2.5} />
                         </Pressable>
                       </View>
                     )}
                   </View>
-                </ScrollView>
+                </View>
 
-                <View className="px-6 pt-4" style={{ paddingBottom: Math.max(24, insets.bottom) }}>
-                  <DashedDivider className="mb-4" />
+                {/* Footer */}
+                <View
+                  className="px-6 pt-3"
+                  style={{ paddingBottom: Math.max(20, insets.bottom) }}
+                >
+                  <DashedDivider className="mb-3" />
+
                   <Button
                     fullWidth
                     disabled={unavailable}
@@ -226,7 +248,9 @@ export default function MenuScreen() {
                   >
                     {unavailable
                       ? "Món hiện đang hết hàng"
-                      : `Thêm vào giỏ · ${formatCurrency(selectedItem.originalPrice * qty)}`}
+                      : `Thêm vào giỏ · ${formatCurrency(
+                        selectedItem.originalPrice * qty
+                      )}`}
                   </Button>
                 </View>
               </>

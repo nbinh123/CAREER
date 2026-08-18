@@ -209,9 +209,20 @@ export default function CartDrawer({ open, onClose }) {
                 </div>
               ) : (
                 <div className="flex items-center justify-between bg-paper-dim rounded-xl px-3 py-2">
-                  <span className="text-sm text-ink">
-                    Đã áp {appliedVoucher.code} · -{formatCurrency(appliedVoucher.discountAmount)}
-                  </span>
+                  <div className="flex flex-col gap-0.5">
+                    <span className="text-sm text-ink">
+                      Đã áp mã
+                    </span>
+                    <span className="font-semibold">{appliedVoucher.code}</span>
+                    <span className="flex items-center gap-2">
+                      <span className="text-xs text-steel line-through">
+                        {formatCurrency(totalPrice)}
+                      </span>
+                      <span className="text-sm font-semibold text-green-600">
+                        {formatCurrency(appliedVoucher.finalTotal)}
+                      </span>
+                    </span>
+                  </div>
                   <button
                     onClick={handleRemoveVoucher}
                     aria-label="Bỏ mã giảm giá"
