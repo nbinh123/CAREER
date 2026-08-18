@@ -10,7 +10,7 @@ router.get("/stats", authMiddleware, VoucherController.getVoucherStats);
 router.get("/:id", authMiddleware, VoucherController.getVoucherById);
 router.post("/", authMiddleware, VoucherController.createVoucher);
 router.get("/", authMiddleware, VoucherController.getVouchers);
-router.patch("/:id", authMiddleware, VoucherController.updateVoucher);
+router.put("/:id", authMiddleware, VoucherController.updateVoucher);
 router.delete("/:id", authMiddleware, VoucherController.deleteVoucher);
 
 module.exports = router;
