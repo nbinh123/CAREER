@@ -1,10 +1,10 @@
 {
   "expo": {
-    "name": "Ăn thỏa thích",
+    "name": "NFood",
     "slug": "an-thoa-thich-app",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
+    "icon": "./assets/logo.png",
     "userInterfaceStyle": "light",
     "ios": {
       "supportsTablet": true

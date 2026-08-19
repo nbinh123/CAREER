@@ -1,4 +1,4 @@
-# Ăn thỏa thích — RN app (bản chạy độc lập)
+# NFood — RN app (bản chạy độc lập)
 
 Dự án Expo/React Native **chạy độc lập**, đóng gói từ bộ mã Giai đoạn 5
 (`Client-Online-RN-GiaiDoan5.zip`) + phần Auth (Đăng nhập/Đăng ký/Tài khoản)

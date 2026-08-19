@@ -7,8 +7,8 @@ const GlobalContext = createContext(null);
 // câu trả lời, đổi ở ĐÚNG 1 chỗ này (và app.json/app.config.js cho tên
 // hiển thị ngoài Home Screen).
 export const RESTAURANT = {
-  name: "Ăn thỏa thích",
-  tagline: "Nguyên Bình nấu ăn ngon nhất thế giới",
+  name: "NFood",
+  tagline: "Đồ ăn ngon hơn người yêu cũ của bạn",
 };
 
 export function GlobalProvider({ children }) {
