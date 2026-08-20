@@ -6,33 +6,57 @@ import { useEffect, useState } from "react";
 
 const fmtVND = n => (n || 0).toLocaleString("vi-VN") + "₫";
 
+const DEFAULT_TOP_DISHES = [{ name: "Chưa có dữ liệu", sold: 0 }];
+
 export default function HomePage() {
   const [miniRev, setMiniRev] = useState([]);
   const [todayData, setTodayData] = useState({});
-  const [topDishes, setTopDishes] = useState([{
-    name: "Chưa có dữ liệu",
-    sold: 0,
-  }]);
+  const [topDishes, setTopDishes] = useState(DEFAULT_TOP_DISHES);
 
   useEffect(() => {
     getData({ url: "/analyst/stats" })
       .then(response => {
-        setTodayData(response.data.data);
+        const data = response?.data?.data;
+        setTodayData(data && typeof data === "object" ? data : {});
       })
-      .catch(err => console.error("Failed to fetch today's data:", err));
+      .catch(err => {
+        console.error("Failed to fetch today's data:", err);
+        setTodayData({});
+      });
   }, []);
 
   useEffect(() => {
     getData({ url: "/analyst/week-revenue" })
       .then(response => {
-        setMiniRev(response.data.data)
-        // setTodayData(response.data.data);
+        const data = response?.data?.data;
+        setMiniRev(Array.isArray(data) ? data : []);
       })
-      .catch(err => console.error("Failed to fetch week's data:", err));
+      .catch(err => {
+        console.error("Failed to fetch week's data:", err);
+        setMiniRev([]);
+      });
   }, []);
 
-  const maxRevenue = Math.max(...miniRev.map(i => i.v), 0);
+  useEffect(() => {
+    getData({ url: "/analyst/top-dishes?period=week" })
+      .then(response => {
+        const data = response?.data?.data;
+        const filteredData = Array.isArray(data)
+          ? data.filter(item => item?.name !== "Các món khác")
+          : [];
+        setTopDishes(filteredData.length > 0 ? filteredData : DEFAULT_TOP_DISHES);
+      })
+      .catch(err => {
+        console.error("Failed to fetch top 5 dishes:", err);
+        setTopDishes(DEFAULT_TOP_DISHES);
+      });
+  }, []);
 
+  // Luôn đảm bảo đây là mảng hợp lệ trước khi tính toán / render
+  const safeMiniRev = Array.isArray(miniRev) ? miniRev : [];
+  const safeTopDishes = Array.isArray(topDishes) && topDishes.length > 0 ? topDishes : DEFAULT_TOP_DISHES;
+
+  const maxRevenue = Math.max(...safeMiniRev.map(i => Number(i?.v) || 0), 0);
   const maxYAxis = maxRevenue * 2;
 
   const ticks = Array.from(
@@ -40,16 +64,6 @@ export default function HomePage() {
     (_, i) => Math.round((maxYAxis / 5) * i)
   );
 
-  useEffect(() => {
-    // Giả sử bạn có một API để lấy dữ liệu doanh thu 7 ngày qua
-    getData({ url: "/analyst/top-dishes?period=week" })
-      .then(response => {
-        const data = response.data.data;
-        const filteredData = data.filter(item => item.name !== "Các món khác");
-        setTopDishes(filteredData);
-      })
-      .catch(err => console.error("Failed to fetch top 5 dishes:", err));
-  }, []);
   return (
     <div className="space-y-6">
       <div>
@@ -58,18 +72,18 @@ export default function HomePage() {
       </div>
       <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
         <StatCard icon={DollarSign} label="Doanh thu" value={fmtVND(todayData?.totalRev)} sub="+12% so với hôm qua" color="green" />
-        <StatCard icon={ShoppingCart} label="Số đơn" value={todayData?.totalBills} sub="Đang xử lý: 3" color="blue" />
+        <StatCard icon={ShoppingCart} label="Số đơn" value={todayData?.totalBills ?? 0} sub="Đang xử lý: 3" color="blue" />
         <StatCard icon={Users} label="Tổng chi phí" value={fmtVND(todayData?.totalCost)} sub="Giờ cao điểm: 12h" color="amber" />
         <StatCard icon={TrendingUp} label="Bill trung bình" value={fmtVND(todayData?.avgBill)} sub="↑ 8% so với tuần trước" color="rose" />
       </div>
       <div className="grid grid-cols-1 gap-6">
         <div className="bg-white rounded-2xl p-5 border border-gray-100">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="font-bold text-gray-700">Doanh thu 7 ngày qua</h3> 
+            <h3 className="font-bold text-gray-700">Doanh thu 7 ngày qua</h3>
             <span className="text-xs text-green-600 font-semibold flex items-center gap-1"><ArrowUpRight size={14} />+9.4%</span>
           </div>
           <ResponsiveContainer width="100%" height={320}>
-            <AreaChart data={miniRev}>
+            <AreaChart data={safeMiniRev}>
               <defs>
                 <linearGradient id="gHome" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="5%" stopColor="#22c55e" stopOpacity={0.25} />
@@ -86,11 +100,9 @@ export default function HomePage() {
                 tickLine={false}
                 tickFormatter={(v) => {
                   if (v === 0) return "";
-
                   if (v >= 1_000_000) {
                     return `${(v / 1_000_000).toFixed(1)}M`;
                   }
-
                   return `${Math.round(v / 1000)}K`;
                 }}
               />
@@ -99,7 +111,6 @@ export default function HomePage() {
             </AreaChart>
           </ResponsiveContainer>
         </div>
-
       </div>
       <div className="bg-white rounded-2xl p-5 border border-gray-100">
         <div className="flex items-center gap-2 mb-4">
@@ -107,17 +118,13 @@ export default function HomePage() {
           <h3 className="font-bold text-gray-700">Bán chạy tuần này</h3>
         </div>
         <div className="space-y-4">
-          {topDishes.map((item, i) => {
-            // Ưu tiên dùng sold, nếu không có thì dùng value, mặc định là 0
+          {safeTopDishes.map((item, i) => {
             const currentValue = item?.sold || item?.value || 0;
-            // Lấy giá trị lớn nhất từ item đầu tiên để làm mốc 100%
-            const maxValue = topDishes[0]?.sold || topDishes[0]?.value || 1;
-            // Tính phần trăm width
+            const maxValue = safeTopDishes[0]?.sold || safeTopDishes[0]?.value || 1;
             const percent = (currentValue / maxValue) * 100;
 
             return (
               <div key={i} className="flex items-center gap-3">
-                {/* <span className="text-2xl">{item.emoji}</span> */}
                 <div className="flex-1 min-w-0">
                   <div className="flex justify-between mb-1">
                     <p className="text-sm font-semibold text-gray-700 truncate">{item?.name}</p>
@@ -143,15 +150,6 @@ export default function HomePage() {
           </div>
           <span className="bg-white/20 rounded-xl px-3 py-1.5 text-sm font-bold backdrop-blur-sm">Đang mở</span>
         </div>
-        {/* <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          {cats.map((c, i) => (
-            <div key={i} className="bg-white/20 backdrop-blur-sm rounded-xl p-3 text-center">
-              <div className="text-3xl mb-1">{c.emoji}</div>
-              <p className="text-sm font-bold">{c.cat}</p>
-              <p className="text-xs text-green-100">{c.n} món</p>
-            </div>
-          ))}
-        </div> */}
       </div>
     </div>
   );

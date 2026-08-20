@@ -18,7 +18,8 @@ import { addEMA, fmtK, TIP } from "./helpers/mathHelpers";
  *   emaPeriod {number} — số kỳ EMA (mặc định 5, được quản lý ở AnalystPage)
  */
 export default function Chart01({ data = [], emaPeriod = 5 }) {
-    const chart = useMemo(() => addEMA(data, "revenue", emaPeriod), [data, emaPeriod]);
+    const safeData = Array.isArray(data) ? data : [];
+    const chart = useMemo(() => addEMA(safeData, "revenue", emaPeriod), [safeData, emaPeriod]);
     // 1. Tìm doanh thu lớn nhất, dự phòng giá trị 0 nếu data trống
     const maxRevenue = chart && chart.length > 0
         ? Math.max(...chart.map(item => item.revenue || 0))

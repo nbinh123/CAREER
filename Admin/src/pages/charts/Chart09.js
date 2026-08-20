@@ -17,8 +17,10 @@ import { TIP, PIE_COLORS, DAYS_VN, heatColor, } from "./helpers/mathHelpers";
  *   tfPie       {string}   — "day" | "week"
  *   onTfPie     {Function}
  */
-export default function Chart09({ pieData = [], heatmapData = [], tfPie = "day", onTfPie }) {
-    const pieTotal = pieData.reduce((s, d) => s + d.value, 0);
+export default function Chart09({ pieData: rawPieData = [], heatmapData: rawHeatmapData = [], tfPie = "day", onTfPie }) {
+    const pieData = Array.isArray(rawPieData) ? rawPieData : [];
+    const heatmapData = Array.isArray(rawHeatmapData) ? rawHeatmapData : [];
+    const pieTotal = pieData.reduce((s, d) => s + (Number(d?.value) || 0), 0);
 
     return (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
@@ -107,12 +109,12 @@ export default function Chart09({ pieData = [], heatmapData = [], tfPie = "day",
                                 >
                                     {DAYS_VN[di]}
                                 </div>
-                                {row.map((cell, hi) => (
+                                {(Array.isArray(row) ? row : []).map((cell, hi) => (
                                     <div
                                         key={hi}
-                                        title={`${DAYS_VN[di]} ${cell.hour}h: ${cell.val}`}
+                                        title={`${DAYS_VN[di]} ${cell?.hour}h: ${cell?.val ?? 0}`}
                                         style={{
-                                            backgroundColor: heatColor(cell.val),
+                                            backgroundColor: heatColor(cell?.val ?? 0),
                                             width: 26,
                                             height: 22,
                                             borderRadius: 5,

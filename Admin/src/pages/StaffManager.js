@@ -574,8 +574,11 @@ function avatarColor(id) {
   return AVATAR_COLORS[idx];
 }
 
-function initials(name = "") {
-  return name.split(" ").map((w) => w[0]).join("").slice(0, 2).toUpperCase();
+function initials(name) {
+  // "= \"\"" mặc định chỉ áp dụng khi arg là undefined, không áp dụng khi
+  // API trả về null — ép về "" trước để tránh crash null.split(...).
+  const safeName = name || "";
+  return safeName.split(" ").filter(Boolean).map((w) => w[0]).join("").slice(0, 2).toUpperCase();
 }
 
 function fmtHours(mins) {
@@ -727,7 +730,10 @@ function getWeekDates(offset = 0) {
 }
 
 function classifyShift(start, end) {
-  const h = parseInt(start?.split(":")?.[0] ?? 0, 10);
+  // "?." chỉ chặn null/undefined, không chặn trường hợp API trả về kiểu
+  // khác (số, object...) — ép về string trước khi split để không crash.
+  const h = parseInt(String(start ?? "0").split(":")[0], 10);
+  if (Number.isNaN(h)) return "full";
   if (h < 12) return "morning";
   if (h >= 17) return "evening";
   return "full";
@@ -748,7 +754,10 @@ function ScheduleModal({ staff, onClose }) {
         const from = weekDates[0].toISOString().split("T")[0];
         const to   = weekDates[6].toISOString().split("T")[0];
         const res  = await getData({ url: `/schedules/user/${staff._id}?from=${from}&to=${to}` });
-        setScheduleData(res.success ? (res.data?.shifts ?? []) : []);
+        const shifts = res?.success ? (res.data?.shifts ?? []) : [];
+        // Đảm bảo luôn là mảng — nếu API trả object/null thay vì mảng,
+        // .filter/.reduce phía dưới sẽ crash toàn bộ modal.
+        setScheduleData(Array.isArray(shifts) ? shifts : []);
       } catch {
         setScheduleData([]);
       } finally {
@@ -762,14 +771,17 @@ function ScheduleModal({ staff, onClose }) {
   /* map shifts to day index (0=Mon…6=Sun) */
   function shiftsForDate(date) {
     const key = date.toISOString().split("T")[0];
-    return scheduleData.filter((s) => s.date?.startsWith(key));
+    return scheduleData.filter((s) => typeof s?.date === "string" && s.date.startsWith(key));
   }
 
   const totalShifts = scheduleData.length;
   const totalHours  = scheduleData.reduce((acc, s) => {
-    const [sh, sm] = (s.startTime || "00:00").split(":").map(Number);
-    const [eh, em] = (s.endTime   || "00:00").split(":").map(Number);
-    return acc + (eh * 60 + em - sh * 60 - sm) / 60;
+    // Ép về string trước khi split — startTime/endTime từ API có thể là
+    // số, null, hoặc thiếu hẳn field, không chỉ là chuỗi "HH:mm" như kỳ vọng.
+    const [sh, sm] = String(s?.startTime ?? "00:00").split(":").map(Number);
+    const [eh, em] = String(s?.endTime   ?? "00:00").split(":").map(Number);
+    const diff = (eh * 60 + em - sh * 60 - sm) / 60;
+    return acc + (Number.isFinite(diff) ? diff : 0);
   }, 0);
 
   const weekLabel = `${weekDates[0].getDate()}/${weekDates[0].getMonth()+1} — ${weekDates[6].getDate()}/${weekDates[6].getMonth()+1}/${weekDates[6].getFullYear()}`;
@@ -1046,7 +1058,16 @@ export default function StaffManager() {
     silent ? setRefreshing(true) : setLoading(true);
     try {
       const res = await getData({ url: "/users" }); // adjust endpoint
-      if (res.success) setStaffList(res.data?.users ?? res.data ?? []);
+      if (res?.success) {
+        const list = res.data?.users ?? res.data ?? [];
+        // Nếu API trả object đơn (thiếu field .users, hoặc lỗi trả về
+        // {message:"..."}) thay vì mảng, .filter phía dưới sẽ crash cả
+        // trang — luôn ép về mảng rỗng trong trường hợp đó.
+        setStaffList(Array.isArray(list) ? list : []);
+      } else {
+        setStaffList([]);
+        showToast("❌ Không thể tải danh sách nhân viên");
+      }
     } catch {
       showToast("❌ Không thể tải danh sách nhân viên");
     } finally {

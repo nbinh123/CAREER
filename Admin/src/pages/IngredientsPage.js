@@ -25,6 +25,8 @@ const EMPTY_ING = {
     needContinuousRestock: false,
 };
 
+const EMPTY_PENDING = { added: [], updated: [], deleted: [] };
+
 export default function IngredientsPage() {
     // ─── Selectors Zustand ─────────────────────────────────
     // Mỗi field/action được lấy riêng bằng selector, thay vì
@@ -44,6 +46,16 @@ export default function IngredientsPage() {
     const saveAllChanges = useIngredientZustand((s) => s.saveAllChanges);
     const discardChanges = useIngredientZustand((s) => s.discardChanges);
     const clearSaveError = useIngredientZustand((s) => s.clearSaveError);
+
+    // ─── Dữ liệu store, ép kiểu an toàn ─────────────────────
+    // Backend/store có thể trả về dữ liệu sai dạng (null, object lỗi...)
+    // thay vì mảng/khung pendingChanges chuẩn. Chuẩn hoá ngay tại đây
+    // để mọi .filter/.map/.length phía dưới không bao giờ crash UI.
+    const safeIngredients = Array.isArray(ingredients) ? ingredients : [];
+    const safePending = pendingChanges && Array.isArray(pendingChanges.added) &&
+        Array.isArray(pendingChanges.updated) && Array.isArray(pendingChanges.deleted)
+        ? pendingChanges
+        : EMPTY_PENDING;
 
     const fileInputRef = useRef(null);
     const [isImporting, setIsImporting] = useState(false);
@@ -66,14 +78,14 @@ export default function IngredientsPage() {
 
     // ─── Thống kê pending ─────────────────────────────────
     const pendingCount =
-        pendingChanges.added.length +
-        pendingChanges.updated.length +
-        pendingChanges.deleted.length;
+        safePending.added.length +
+        safePending.updated.length +
+        safePending.deleted.length;
     const hasPending = pendingCount > 0;
 
     // ─── Search ───────────────────────────────────────────
-    const filtered = ingredients.filter((i) =>
-        i.ingredientName.toLowerCase().includes(search.toLowerCase())
+    const filtered = safeIngredients.filter((i) =>
+        (i.ingredientName || "").toLowerCase().includes(search.toLowerCase())
     );
 
     // ─── Helpers form ─────────────────────────────────────
@@ -110,7 +122,9 @@ export default function IngredientsPage() {
     };
 
     const openEdit = (ing) => {
-        setForm({ ...ing });
+        // Merge với EMPTY_ING để field thiếu (dữ liệu API không đầy đủ)
+        // không biến input thành uncontrolled.
+        setForm({ ...EMPTY_ING, ...ing });
         setEditId(ing._id);
         setModal("edit");
     };
@@ -147,8 +161,8 @@ export default function IngredientsPage() {
 
     // ─── Trạng thái của từng hàng ─────────────────────────
     const getRowStatus = (ing) => {
-        if (pendingChanges.added.some((i) => i._id === ing._id)) return "added";
-        if (pendingChanges.updated.some((i) => i._id === ing._id)) return "updated";
+        if (safePending.added.some((i) => i._id === ing._id)) return "added";
+        if (safePending.updated.some((i) => i._id === ing._id)) return "updated";
         return "normal";
     };
 
@@ -173,7 +187,7 @@ export default function IngredientsPage() {
                 <div>
                     <h1 className="text-2xl font-black text-green-900">Nguyên liệu</h1>
                     <p className="text-gray-500 text-sm">
-                        {ingredients.length} nguyên liệu trong kho
+                        {safeIngredients.length} nguyên liệu trong kho
                         {hasPending && (
                             <span className="ml-2 text-amber-600 font-semibold">
                                 • {pendingCount} thay đổi chưa lưu
@@ -257,14 +271,14 @@ export default function IngredientsPage() {
                     <span className="font-semibold text-gray-600">Trạng thái chưa lưu:</span>
                     <span className="flex items-center gap-1.5">
                         <span className="w-3 h-3 rounded border-l-2 border-green-400 bg-green-50 inline-block" />
-                        Mới thêm ({pendingChanges.added.length})
+                        Mới thêm ({safePending.added.length})
                     </span>
                     <span className="flex items-center gap-1.5">
                         <span className="w-3 h-3 rounded border-l-2 border-amber-400 bg-amber-50 inline-block" />
-                        Đã sửa ({pendingChanges.updated.length})
+                        Đã sửa ({safePending.updated.length})
                     </span>
                     <span className="flex items-center gap-1.5 text-red-500">
-                        Sẽ xóa ({pendingChanges.deleted.length})
+                        Sẽ xóa ({safePending.deleted.length})
                     </span>
                 </div>
             )}
@@ -302,11 +316,20 @@ export default function IngredientsPage() {
                                 </tr>
                             </thead>
                             <tbody>
-                                {filtered.map((ing) => {
+                                {filtered.map((ing, idx) => {
                                     const status = getRowStatus(ing);
+                                    const quantity = ing.quantity ?? 0;
+                                    const expiryDays = ing.expiryDays;
+                                    const expiryBadge = expiryDays === null || expiryDays === undefined
+                                        ? "bg-gray-100 text-gray-500"
+                                        : expiryDays <= 1
+                                            ? "bg-red-100 text-red-600"
+                                            : expiryDays <= 7
+                                                ? "bg-amber-100 text-amber-700"
+                                                : "bg-green-100 text-green-700";
                                     return (
                                         <tr
-                                            key={ing._id}
+                                            key={ing._id || idx}
                                             className={`border-t border-gray-50 hover:brightness-95 transition-all ${rowStatusStyle[status]}`}
                                         >
                                             <td className="px-4 py-3 text-gray-400 font-mono text-xs">
@@ -315,19 +338,14 @@ export default function IngredientsPage() {
                                                     {rowStatusBadge[status]}
                                                 </div>
                                             </td>
-                                            <td className="px-4 py-3 font-semibold text-gray-800">{ing.ingredientName}</td>
-                                            <td className="px-4 py-3 text-right font-mono text-gray-700">{ing.quantity.toLocaleString()}</td>
+                                            <td className="px-4 py-3 font-semibold text-gray-800">{ing.ingredientName || "—"}</td>
+                                            <td className="px-4 py-3 text-right font-mono text-gray-700">{quantity.toLocaleString()}</td>
                                             <td className="px-4 py-3 text-gray-500">{ing.smallUnit}</td>
                                             <td className="px-4 py-3 text-gray-500">{ing.largeUnit}</td>
                                             <td className="px-4 py-3 font-mono text-right text-gray-700">{fmtVND(ing.pricePerLargeUnit)}</td>
                                             <td className="px-4 py-3">
-                                                <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${ing.expiryDays <= 1
-                                                    ? "bg-red-100 text-red-600"
-                                                    : ing.expiryDays <= 7
-                                                        ? "bg-amber-100 text-amber-700"
-                                                        : "bg-green-100 text-green-700"
-                                                    }`}>
-                                                    {ing.expiryDays}d
+                                                <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${expiryBadge}`}>
+                                                    {expiryDays === null || expiryDays === undefined ? "—" : `${expiryDays}d`}
                                                 </span>
                                             </td>
                                             <td className="px-4 py-3 text-gray-400 text-xs max-w-32 truncate">{ing.note || "—"}</td>

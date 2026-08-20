@@ -1,29 +1,9 @@
-// pages/admin/CustomerManager.js
-//
-// Trang Admin — Quản lý khách hàng (mục 4 của kế hoạch).
-// Kế thừa tiêu đề / font chữ / khoảng cách từ pages/StaffManager.js (đổi prefix class
-// "sm-" → "cm-" để không đụng CSS khi 2 trang cùng tồn tại trong SPA).
-//
-// ⚠️ GIẢ ĐỊNH CẦN ĐỐI CHIẾU LẠI VỚI BACKEND THỰC TẾ (xem thêm trong tin nhắn trả lời):
-//   1. Vị trí file giả định pages/admin/CustomerManager.js → API_URL import "../../config/api.js".
-//      Nếu vị trí thực tế khác, chỉ cần sửa 1 dòng import bên dưới.
-//   2. GET /customers hỗ trợ query ?search=&status=&page=&limit=, trả về dạng:
-//      { success, data: { customers:[...], total, page, totalPages }, message }
-//      → nếu backend trả field khác tên (vd "items" thay vì "customers"), sửa ở fetchCustomers().
-//   3. Field "số đơn đã đặt" giả định tên orderCount trên mỗi customer (mục 3.3 chưa định nghĩa
-//      rõ field này) — nếu backend chưa có, cột sẽ tự hiển thị "—".
-//   4. Endpoint xem đơn theo khách GET /customers/:id/orders CHƯA có trong mục 3.3 (tài liệu chỉ có
-//      /customers/me/orders cho chính khách hàng) — bạn đã chọn "làm giao diện trước, bổ sung backend
-//      sau" nên OrdersModal gọi thẳng endpoint này, nếu 404 sẽ hiện trạng thái rỗng kèm ghi chú.
-//   5. POST /customers/:id/reset-password giả định trả mật khẩu tạm ở data.tempPassword
-//      (có fallback newPassword/password nếu backend đặt tên khác).
-//
 import { useState, useEffect, useRef, useCallback } from "react";
 import {
   Search, RefreshCw, Lock, LockOpen, KeyRound, History,
   X, Copy, Check, ChevronLeft, ChevronRight, ShieldAlert,
 } from "lucide-react";
-import { API_URL } from "../config/api";
+import { getData, patchData, postData } from "../utils/callAPI";
 
 const LIMIT = 10;
 
@@ -211,39 +191,38 @@ const STYLE = `
 `;
 
 /* ════════════════════════════════════════════════════════════
-   API HELPERS (dùng trực tiếp API_URL theo yêu cầu)
+   API HELPERS (dùng chung utils/callAPI.js — có sẵn interceptor gắn token)
 ════════════════════════════════════════════════════════════ */
+function normalizeResponse(data) {
+  if (data && typeof data.success === "boolean") return data;
+  return { success: true, data };
+}
+
 async function apiGet(url, params) {
-  try {
-    const res = await API_URL.get(url, { params });
-    return res.data;
-  } catch (err) {
-    return { success: false, message: err?.response?.data?.message || "Lỗi kết nối server" };
-  }
+  const res = await getData({ url, params });
+  return res.success
+    ? normalizeResponse(res.data)
+    : { success: false, message: res.message || "Lỗi kết nối server" };
 }
 async function apiPatch(url, data) {
-  try {
-    const res = await API_URL.patch(url, data);
-    return res.data;
-  } catch (err) {
-    return { success: false, message: err?.response?.data?.message || "Lỗi kết nối server" };
-  }
+  const res = await patchData({ url, data });
+  return res.success
+    ? normalizeResponse(res.data)
+    : { success: false, message: res.message || "Lỗi kết nối server" };
 }
 async function apiPost(url, data) {
-  try {
-    const res = await API_URL.post(url, data);
-    return res.data;
-  } catch (err) {
-    return { success: false, message: err?.response?.data?.message || "Lỗi kết nối server" };
-  }
+  const res = await postData({ url, data });
+  return res.success
+    ? normalizeResponse(res.data)
+    : { success: false, message: res.message || "Lỗi kết nối server" };
 }
 
 /* ════════════════════════════════════════════════════════════
    HELPERS
 ════════════════════════════════════════════════════════════ */
 const AVATAR_COLORS = [
-  ["#059669","#34d399"], ["#7c3aed","#a78bfa"], ["#ea580c","#fb923c"],
-  ["#0284c7","#38bdf8"], ["#be123c","#fb7185"], ["#0f766e","#2dd4bf"],
+  ["#059669", "#34d399"], ["#7c3aed", "#a78bfa"], ["#ea580c", "#fb923c"],
+  ["#0284c7", "#38bdf8"], ["#be123c", "#fb7185"], ["#0f766e", "#2dd4bf"],
 ];
 function avatarColor(seed = "") {
   const idx = seed ? seed.charCodeAt(seed.length - 1) % AVATAR_COLORS.length : 0;
@@ -254,20 +233,25 @@ function initials(name = "") {
 }
 function fmtDate(d) {
   if (!d) return "—";
-  return new Date(d).toLocaleDateString("vi-VN", { day: "2-digit", month: "2-digit", year: "numeric" });
+  const date = new Date(d);
+  if (isNaN(date.getTime())) return "—";
+  return date.toLocaleDateString("vi-VN", { day: "2-digit", month: "2-digit", year: "numeric" });
 }
 function fmtDateTime(d) {
   if (!d) return "Chưa đăng nhập";
-  return new Date(d).toLocaleDateString("vi-VN", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  const date = new Date(d);
+  if (isNaN(date.getTime())) return "Chưa đăng nhập";
+  return date.toLocaleDateString("vi-VN", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 function fmtMoney(n) {
   if (!n && n !== 0) return "—";
   return new Intl.NumberFormat("vi-VN", { style: "currency", currency: "VND" }).format(n);
 }
-/** active | locked (admin khoá) | templock (tự khoá tạm do sai mật khẩu nhiều lần) */
 function statusOf(c) {
+  if (!c) return "active";
   if (c.isLocked) return "locked";
-  if (c.lockedUntil && new Date(c.lockedUntil) > new Date()) return "templock";
+  const until = c.lockedUntil ? new Date(c.lockedUntil) : null;
+  if (until && !isNaN(until.getTime()) && until > new Date()) return "templock";
   return "active";
 }
 const STATUS_TABS = [
@@ -302,7 +286,7 @@ function StatusBadge({ customer }) {
 }
 
 /* ── Generic confirm modal (Khoá / Mở khoá / Reset mật khẩu — bước 1) ── */
-function ConfirmModal({ tone, icon, title, sub, message, confirmLabel, loading, onConfirm, onClose }) {
+function ConfirmModal({ tone, icon, title, sub, children, confirmLabel, loading, onConfirm, onClose }) {
   return (
     <div className="cm-overlay" onClick={onClose}>
       <div className="cm-modal cm-confirm-modal" onClick={(e) => e.stopPropagation()}>
@@ -315,7 +299,7 @@ function ConfirmModal({ tone, icon, title, sub, message, confirmLabel, loading, 
         </div>
         <div className="cm-confirm-body">
           <div className={`cm-confirm-icon ${tone}`}>{icon}</div>
-          <p className="cm-confirm-text" dangerouslySetInnerHTML={{ __html: message }} />
+          <p className="cm-confirm-text">{children}</p>
           <div className="cm-confirm-actions">
             <button className="cm-cancel-btn" onClick={onClose} disabled={loading}>Huỷ</button>
             <button className={`cm-confirm-btn ${tone}`} onClick={onConfirm} disabled={loading}>
@@ -331,11 +315,20 @@ function ConfirmModal({ tone, icon, title, sub, message, confirmLabel, loading, 
 /* ── Reset password result (bước 2, sau khi confirm) ── */
 function ResetResultModal({ customer, tempPassword, onClose }) {
   const [copied, setCopied] = useState(false);
+  const [copyError, setCopyError] = useState(false);
+
   function copy() {
-    navigator.clipboard?.writeText(tempPassword || "").then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    });
+    if (!navigator.clipboard) {
+      setCopyError(true);
+      return;
+    }
+    navigator.clipboard.writeText(tempPassword || "")
+      .then(() => {
+        setCopied(true);
+        setCopyError(false);
+        setTimeout(() => setCopied(false), 1500);
+      })
+      .catch(() => setCopyError(true));
   }
   return (
     <div className="cm-overlay" onClick={onClose}>
@@ -358,6 +351,11 @@ function ResetResultModal({ customer, tempPassword, onClose }) {
               </button>
             )}
           </div>
+          {copyError && (
+            <p className="cm-reset-hint" style={{ color: "#b91c1c" }}>
+              Không thể sao chép tự động, vui lòng bôi đen và copy thủ công.
+            </p>
+          )}
           <p className="cm-reset-hint">
             {tempPassword
               ? <>Đọc mã này cho khách qua điện thoại/chat hỗ trợ. Khách sẽ được yêu cầu đổi mật khẩu ở lần đăng nhập kế tiếp.</>
@@ -370,7 +368,7 @@ function ResetResultModal({ customer, tempPassword, onClose }) {
   );
 }
 
-/* ── Orders modal (mục tuỳ chọn — làm giao diện trước) ── */
+/* ── Orders modal ── */
 function OrdersModal({ customer, onClose }) {
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -380,12 +378,11 @@ function OrdersModal({ customer, onClose }) {
     let alive = true;
     (async () => {
       setLoading(true);
-      // Endpoint giả định — mục 3.3 chưa định nghĩa GET /customers/:id/orders cho admin,
-      // cần bổ sung ở backend (đã thống nhất "làm giao diện trước").
       const res = await apiGet(`/customers/${customer._id}/orders`);
       if (!alive) return;
       if (res.success) {
-        setOrders(res.data?.orders ?? res.data ?? []);
+        const rawOrders = res.data?.orders ?? res.data;
+        setOrders(Array.isArray(rawOrders) ? rawOrders : []);
         setFailed(false);
       } else {
         setOrders([]);
@@ -413,9 +410,6 @@ function OrdersModal({ customer, onClose }) {
             <div className="cm-empty">
               <div className="cm-empty-icon">🛠️</div>
               <p>Chưa lấy được dữ liệu đơn hàng.</p>
-              <p style={{ fontSize: 12, fontWeight: 600, color: "#cbd5e1", marginTop: 6 }}>
-                API <code>GET /customers/:id/orders</code> cần được bổ sung ở backend.
-              </p>
             </div>
           ) : orders.length === 0 ? (
             <div className="cm-empty">
@@ -423,10 +417,10 @@ function OrdersModal({ customer, onClose }) {
               <p>Khách hàng chưa có đơn hàng nào.</p>
             </div>
           ) : (
-            orders.map((o, i) => (
+            orders.filter(Boolean).map((o, i) => (
               <div key={o._id || i} className="cm-order-row">
                 <div>
-                  <p className="cm-order-code">#{o.orderCode || o._id?.slice(-6) || i + 1}</p>
+                  <p className="cm-order-code">#{o.orderCode || (typeof o._id === "string" ? o._id.slice(-6) : o._id) || i + 1}</p>
                   <p className="cm-order-date">{fmtDateTime(o.createdAt)}</p>
                 </div>
                 <span className="cm-order-amt">{fmtMoney(o.totalAmount ?? o.total)}</span>
@@ -476,6 +470,7 @@ export default function CustomerManager() {
   const [toast, setToast] = useState(null);
   const toastTimer = useRef(null);
   const searchDebounce = useRef(null);
+  const fetchIdRef = useRef(0);
 
   /* inject CSS */
   useEffect(() => {
@@ -498,6 +493,7 @@ export default function CustomerManager() {
   }, [searchInput]);
 
   const fetchCustomers = useCallback(async (silent = false) => {
+    const fetchId = ++fetchIdRef.current;
     silent ? setRefreshing(true) : setLoading(true);
     const res = await apiGet("/customers", {
       page,
@@ -505,9 +501,11 @@ export default function CustomerManager() {
       search: search || undefined,
       status: statusFilter !== "all" ? statusFilter : undefined,
     });
+    if (fetchIdRef.current !== fetchId) return; // request cũ hơn đã bị request mới ghi đè, bỏ qua
     if (res.success) {
       const payload = res.data ?? {};
-      const items = payload.customers ?? payload.items ?? (Array.isArray(payload) ? payload : []);
+      const rawItems = payload.customers ?? payload.items ?? (Array.isArray(payload) ? payload : []);
+      const items = Array.isArray(rawItems) ? rawItems.filter(Boolean) : [];
       setList(items);
       setTotal(payload.total ?? items.length);
       setTotalPages(payload.totalPages ?? Math.max(1, Math.ceil((payload.total ?? items.length) / LIMIT)));
@@ -644,8 +642,8 @@ export default function CustomerManager() {
                   </td>
                 </tr>
               ) : (
-                list.map((c) => (
-                  <tr key={c._id}>
+                list.map((c, i) => (
+                  <tr key={c._id || c.phone || i}>
                     <td>
                       <div className="cm-cust-cell">
                         <Avatar name={c.fullName} seed={c._id} />
@@ -711,28 +709,31 @@ export default function CustomerManager() {
         <ConfirmModal
           tone="rose" icon={<Lock size={24} />}
           title="Khoá tài khoản khách hàng" sub={confirmAction.customer.fullName}
-          message={`Khách hàng <b>${confirmAction.customer.fullName}</b> (${confirmAction.customer.phone}) sẽ không thể đăng nhập cho tới khi được mở khoá lại. Bạn có chắc chắn?`}
           confirmLabel="Khoá tài khoản" loading={confirmLoading}
           onConfirm={runConfirmAction} onClose={() => setConfirmAction(null)}
-        />
+        >
+          Khách hàng <b>{confirmAction.customer.fullName}</b> ({confirmAction.customer.phone}) sẽ không thể đăng nhập cho tới khi được mở khoá lại. Bạn có chắc chắn?
+        </ConfirmModal>
       )}
       {confirmAction?.type === "unlock" && (
         <ConfirmModal
           tone="green" icon={<LockOpen size={24} />}
           title="Mở khoá tài khoản" sub={confirmAction.customer.fullName}
-          message={`Khách hàng <b>${confirmAction.customer.fullName}</b> (${confirmAction.customer.phone}) sẽ có thể đăng nhập lại bình thường. Xác nhận mở khoá?`}
           confirmLabel="Mở khoá" loading={confirmLoading}
           onConfirm={runConfirmAction} onClose={() => setConfirmAction(null)}
-        />
+        >
+          Khách hàng <b>{confirmAction.customer.fullName}</b> ({confirmAction.customer.phone}) sẽ có thể đăng nhập lại bình thường. Xác nhận mở khoá?
+        </ConfirmModal>
       )}
       {confirmAction?.type === "reset" && (
         <ConfirmModal
           tone="amber" icon={<ShieldAlert size={24} />}
           title="Reset mật khẩu" sub={confirmAction.customer.fullName}
-          message={`Hệ thống sẽ tạo mật khẩu tạm 6 số mới cho <b>${confirmAction.customer.fullName}</b> và buộc đổi mật khẩu ở lần đăng nhập kế tiếp. Mật khẩu cũ sẽ không còn dùng được.`}
           confirmLabel="Reset mật khẩu" loading={confirmLoading}
           onConfirm={runConfirmAction} onClose={() => setConfirmAction(null)}
-        />
+        >
+          Hệ thống sẽ tạo mật khẩu tạm 6 số mới cho <b>{confirmAction.customer.fullName}</b> và buộc đổi mật khẩu ở lần đăng nhập kế tiếp. Mật khẩu cũ sẽ không còn dùng được.
+        </ConfirmModal>
       )}
       {resetResult && (
         <ResetResultModal

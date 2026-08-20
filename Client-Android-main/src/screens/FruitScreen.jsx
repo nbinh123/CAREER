@@ -36,6 +36,17 @@ const GRID_COLUMNS = 3;
  *     fetch() trực tiếp như bản web, cho nhất quán với các hàm api khác.
  *   - Hành vi cuối (thêm vào giỏ hàng chung, KHÔNG gửi thẳng đơn) giữ nguyên
  *     y hệt bản web — chỉ khác cách port ở trên.
+ *
+ * FIX: FlatList numColumns bị "mất hàng" khi chọn trái cây.
+ *   Nguyên nhân: trạng thái tô đậm/disable của từng thẻ (FruitPickCard) phụ
+ *   thuộc vào state `selected`, nhưng `selected` nằm ngoài `data={fruits}`
+ *   nên FlatList không biết cần re-layout khi `selected` đổi. Do
+ *   removeClippedSubviews mặc định bật (đặc biệt trên Android), FlatList
+ *   dùng layout cache cũ để quyết định clip view ngoài màn hình -> clip
+ *   nhầm luôn cả hàng còn lại thành view rỗng ngay sau khi bấm chọn.
+ *   Sửa bằng cách: (1) truyền `extraData` để ép FlatList nhận biết thay đổi
+ *   liên quan tới lựa chọn, và (2) tắt `removeClippedSubviews` cho list này
+ *   (danh sách trái cây ngắn nên không ảnh hưởng hiệu năng).
  */
 export default function FruitScreen() {
   const insets = useSafeAreaInsets();
@@ -89,6 +100,14 @@ export default function FruitScreen() {
   };
 
   const selectedNames = useMemo(() => selected.map((s) => s.fruitName), [selected]);
+
+  // Set các id đang được chọn, dùng để so khớp nhanh trong renderItem và
+  // để làm khoá ổn định cho `extraData` (chỉ đổi identity khi lựa chọn
+  // thực sự thay đổi).
+  const selectedIds = useMemo(
+    () => new Set(selected.map((s) => s.id || s._id)),
+    [selected]
+  );
 
   const availableFruitNames = useMemo(
     () => new Set(fruits.filter((f) => f.isAvailable).map((f) => normalizeText(f.fruitName))),
@@ -210,6 +229,13 @@ export default function FruitScreen() {
         numColumns={GRID_COLUMNS}
         columnWrapperStyle={{ gap: 12, paddingHorizontal: 16 }}
         contentContainerStyle={{ gap: 12, paddingBottom: 240 + insets.bottom }}
+        // FIX: bắt buộc phải có extraData khi phần hiển thị của renderItem
+        // phụ thuộc vào state nằm ngoài `data` (ở đây là `selected`). Thiếu
+        // extraData khiến FlatList không re-layout đúng, kết hợp với
+        // removeClippedSubviews mặc định bật -> gây mất hẳn hàng còn lại
+        // mỗi khi chọn 1 trái cây.
+        extraData={selectedIds}
+        removeClippedSubviews={false}
         ListHeaderComponent={
           <View className="px-4 pt-4 pb-3">
             <View className="flex-row items-center gap-2 mb-1.5">
@@ -228,7 +254,7 @@ export default function FruitScreen() {
         }
         renderItem={({ item }) => {
           const itemId = item.id || item._id;
-          const isSelected = selected.some((s) => (s.id || s._id) === itemId);
+          const isSelected = selectedIds.has(itemId);
           return (
             <View style={{ flex: 1 / GRID_COLUMNS }}>
               <FruitPickCard

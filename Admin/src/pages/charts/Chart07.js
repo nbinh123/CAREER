@@ -72,12 +72,13 @@ export default function Chart07({
 
     // ── Chuẩn hoá dữ liệu: ngày 31 → ngày 1, lấp đầy 1-30 ──
     const chartData = useMemo(() => {
+        const safeData = Array.isArray(data) ? data : [];
         const now = new Date();
         const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
 
         const filled = Array.from({ length: daysInMonth }, (_, i) => {
             const day = i + 1;
-            const found = data.find(d => d.day === day);
+            const found = safeData.find(d => d?.day === day);
             return found ? { ...found, day } : { day, cumulativeProfit: null };
         });
 

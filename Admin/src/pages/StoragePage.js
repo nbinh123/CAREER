@@ -471,6 +471,9 @@ function ImportModal({ open, onClose, onSuccess, ingredients }) {
         if (!ing || !form.quantity) return 0;
         const qty = parseFloat(form.quantity);
         if (isNaN(qty) || qty <= 0) return 0;
+        // Chặn chia cho 0/undefined — nếu tồn kho hoặc đơn giá thiếu/bằng 0,
+        // phép tính dưới sẽ ra Infinity hoặc NaN và hiển thị vỡ UI.
+        if (!ing.quantity || ing.quantity <= 0 || !ing.pricePerLargeUnit) return 0;
         return Math.round(qty / (ing.quantity) * ing.pricePerLargeUnit);
     })();
 
@@ -726,7 +729,11 @@ function ExportModal({ open, onClose, onSuccess, ingredients }) {
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
 export default function StoragePage() {
-    const { ingredients } = useIngredientZustand();
+    const { ingredients: rawIngredients } = useIngredientZustand();
+    // Nếu store chưa init xong hoặc API nền trả về null thay vì mảng rỗng,
+    // mọi .find/.filter/.map trong ImportModal, ExportModal,
+    // IngredientSearchSelect bên dưới sẽ crash toàn trang — chặn ở nguồn.
+    const ingredients = Array.isArray(rawIngredients) ? rawIngredients : [];
 
     const [rows, setRows] = useState([]);
     const [stats, setStats] = useState({ importCount: 0, importTotal: 0, exportCount: 0, exportTotal: 0 });
@@ -765,10 +772,14 @@ export default function StoragePage() {
             if (filters.fromDate) p.fromDate = filters.fromDate;
             if (filters.toDate) p.toDate = filters.toDate;
             const res = await txService.list(p);
-            const { transactions, pagination, stats: st } = res.data.data;
-            setRows(transactions);
-            setPager(pagination);
-            setStats(st);
+            // Không destructure trực tiếp — nếu backend đổi shape hoặc
+            // res.data.data thiếu field (pagination/stats), destructure sẽ
+            // ra undefined và làm pager.total / stats.importCount crash
+            // ngay khi render. Luôn có fallback hợp lệ cho từng phần.
+            const data = res?.data?.data || {};
+            setRows(Array.isArray(data.transactions) ? data.transactions : []);
+            setPager(data.pagination || { page: 1, totalPages: 1, total: 0 });
+            setStats(data.stats || { importCount: 0, importTotal: 0, exportCount: 0, exportTotal: 0 });
         } catch (e) {
             setError(e.response?.data?.message || 'Không thể tải dữ liệu');
         } finally {

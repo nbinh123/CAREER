@@ -19,7 +19,8 @@ import { TIP } from "./helpers/mathHelpers";
  * tf    {string}   — "hour" | "day"
  * onTf  {Function}
  */
-export default function Chart08({ data = [], tf = "hour", onTf }) {
+export default function Chart08({ data: rawData = [], tf = "hour", onTf }) {
+    const data = Array.isArray(rawData) ? rawData : [];
     // --- LOGIC TÍNH TOÁN TRỤC Y ---
     // 1. Tìm Max cho từng loại dữ liệu
     const maxBills = data.length > 0 ? Math.max(...data.map(item => item.bills || 0)) : 0;

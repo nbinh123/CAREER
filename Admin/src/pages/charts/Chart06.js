@@ -22,7 +22,8 @@ const bs = (tf, lg = 18, md = 14, sm = 7) =>
  * tf    {string}   — "day" | "week" | "month"
  * onTf  {Function}
  */
-export default function Chart06({ data = [], tf = "week", onTf }) {
+export default function Chart06({ data: rawData = [], tf = "week", onTf }) {
+    const data = Array.isArray(rawData) ? rawData : [];
     // --- LOGIC TÍNH TOÁN TRỤC Y ---
     // 1. Tìm giá trị lớn nhất trong cả revenue, cost và profit
     const maxVal = data.length > 0 

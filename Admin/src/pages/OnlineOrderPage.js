@@ -65,6 +65,83 @@ function shortCustomerLabel(customerId) {
     return `Khách #${(customerId || "").slice(0, 8)}`;
 }
 
+// fmtDate/fmtVND là util bên ngoài — không kiểm soát được chúng throw gì khi
+// gặp giá trị null/undefined/sai định dạng (rất hay xảy ra với các field
+// ngày tháng khi API trả thiếu). Bọc lại kiểu safeCall để 1 giá trị xấu
+// không làm crash cả cây render.
+function safeFmtDate(value) {
+    if (!value) return "—";
+    try {
+        return fmtDate(value);
+    } catch (err) {
+        console.error("[fmtDate]", err);
+        return "—";
+    }
+}
+
+function safeFmtVND(value) {
+    try {
+        return fmtVND(Number(value) || 0);
+    } catch (err) {
+        console.error("[fmtVND]", err);
+        return "0₫";
+    }
+}
+
+// ─── Chuẩn hoá dữ liệu từ server ───────────────────────────────────────────
+// API/socket đôi khi trả về field bị thiếu, sai kiểu, hoặc cả object null
+// (đơn lỗi, race condition lúc server đang ghi DB...). Toàn bộ phần render
+// bên dưới giả định field luôn tồn tại đúng kiểu (order.items.map, v.v.),
+// nên chuẩn hoá NGAY LÚC NHẬN — 1 chỗ duy nhất — để tránh phải rải optional
+// chaining khắp nơi và lỡ sót gây crash UI (màn hình trắng).
+function normalizeOnlineOrder(raw) {
+    if (!raw || typeof raw !== "object") return null;
+    const items = Array.isArray(raw.items)
+        ? raw.items.map((i) => ({
+              foodId: i?.foodId ?? null,
+              foodName: i?.foodName ?? "Món (không rõ tên)",
+              quantity: Number(i?.quantity) || 0,
+              unitPrice: Number(i?.unitPrice) || 0,
+          }))
+        : [];
+    return {
+        id: raw.id ?? raw._id ?? "",
+        customerId: raw.customerId ?? null,
+        status: raw.status ?? "pending",
+        customerName: raw.customerName || "Khách hàng",
+        phone: raw.phone ?? "",
+        address: raw.address ?? "",
+        note: raw.note ?? "",
+        items,
+        totalPrice: Number(raw.totalPrice) || 0,
+        createdAt: raw.createdAt ?? null,
+        completedAt: raw.completedAt ?? null,
+        cancelReason: raw.cancelReason ?? "",
+    };
+}
+
+function normalizeChatThread(raw) {
+    if (!raw || typeof raw !== "object") return null;
+    return {
+        customerId: raw.customerId ?? null,
+        customerName: raw.customerName ?? "",
+        phone: raw.phone ?? "",
+        lastMessage: raw.lastMessage ?? "",
+        lastAt: raw.lastAt ?? null,
+        unreadCount: Number(raw.unreadCount) || 0,
+    };
+}
+
+function normalizeChatMessage(raw) {
+    if (!raw || typeof raw !== "object") return null;
+    return {
+        id: raw.id ?? null,
+        from: raw.from === "admin" ? "admin" : "customer",
+        text: raw.text ?? "",
+        at: raw.at ?? null,
+    };
+}
+
 export default function OnlineOrdersPage() {
     // ── State ─────────────────────────────────────────────────────────────────
     const [connected, setConnected] = useState(false);
@@ -149,17 +226,28 @@ export default function OnlineOrdersPage() {
         };
         const handleDisconnect = () => setConnected(false);
 
-        const handleOrdersState = (list) => setOrders(list || []);
+        // Lọc bỏ phần tử null/undefined/sai kiểu ngay khi nhận — 1 đơn lỗi lẫn
+        // trong mảng (do server race condition, DB write dở...) sẽ không còn
+        // làm crash toàn bộ danh sách nữa.
+        const handleOrdersState = (list) =>
+            setOrders(Array.isArray(list) ? list.map(normalizeOnlineOrder).filter(Boolean) : []);
         const handleOrderCreated = (order) => {
-            const toastId = `${order.id}-${Date.now()}`;
-            setOrderToasts((prev) => [...prev, { toastId, order }]);
+            const normalized = normalizeOnlineOrder(order);
+            if (!normalized || !normalized.id) return; // đơn lỗi từ server → bỏ qua thay vì crash toast
+            const toastId = `${normalized.id}-${Date.now()}`;
+            setOrderToasts((prev) => [...prev, { toastId, order: normalized }]);
             const timeoutId = setTimeout(() => dismissOrderToast(toastId), NEW_ORDER_TOAST_DURATION);
             orderToastTimers.set(toastId, timeoutId); // dùng biến local thay vì .current
         };
 
-        const handleChatThreadsState = (list) => setChatThreads(list || []);
-        const handleChatHistory = (history) => setChatMessages(history || []);
-        const handleCustomerChatMessage = ({ customerId, message }) => {
+        const handleChatThreadsState = (list) =>
+            setChatThreads(Array.isArray(list) ? list.map(normalizeChatThread).filter(Boolean) : []);
+        const handleChatHistory = (history) =>
+            setChatMessages(Array.isArray(history) ? history.map(normalizeChatMessage).filter(Boolean) : []);
+        const handleCustomerChatMessage = (payload) => {
+            const customerId = payload?.customerId;
+            const message = normalizeChatMessage(payload?.message);
+            if (!customerId || !message) return; // payload thiếu field quan trọng → bỏ qua an toàn
             if (activeChatCustomerIdRef.current === customerId) {
                 setChatMessages((prev) => [...prev, message]);
                 return;
@@ -361,7 +449,7 @@ export default function OnlineOrdersPage() {
                     <p className="font-bold text-sm text-gray-800 truncate">{order.customerName}</p>
                     <p className="text-[11px] text-gray-400 flex items-center gap-1 mt-0.5"><Phone size={10} /> {order.phone}</p>
                 </div>
-                <span className="text-[10px] text-gray-400 whitespace-nowrap">{fmtDate(order.createdAt)}</span>
+                <span className="text-[10px] text-gray-400 whitespace-nowrap">{safeFmtDate(order.createdAt)}</span>
             </div>
 
             <p className="text-[11px] text-gray-400 flex items-start gap-1"><MapPin size={10} className="mt-0.5 shrink-0" /> {order.address}</p>
@@ -376,7 +464,7 @@ export default function OnlineOrdersPage() {
             </div>
 
             <div className="flex items-center justify-between">
-                <span className="font-black text-sm text-green-600">{fmtVND(order.totalPrice)}</span>
+                <span className="font-black text-sm text-green-600">{safeFmtVND(order.totalPrice)}</span>
             </div>
 
             <div className="flex gap-1.5">
@@ -412,7 +500,7 @@ export default function OnlineOrdersPage() {
                                 <Bell size={13} /> Đơn online mới
                             </p>
                             <p className="text-sm font-bold text-gray-700 truncate">{order.customerName}</p>
-                            <p className="text-xs text-gray-400">{fmtVND(order.totalPrice)} · {order.items.length} món</p>
+                            <p className="text-xs text-gray-400">{safeFmtVND(order.totalPrice)} · {order.items.length} món</p>
                         </button>
                     ))}
                     {hiddenOrderToastCount > 0 && (
@@ -487,7 +575,7 @@ export default function OnlineOrdersPage() {
                         </div>
                         <div className="bg-white rounded-2xl border border-gray-100 border-l-4 border-l-green-500 p-4">
                             <p className="text-xs font-bold text-gray-400 uppercase tracking-wide">Doanh thu hôm nay</p>
-                            <p className="text-2xl font-black text-green-600 mt-1">{fmtVND(todayRevenue)}</p>
+                            <p className="text-2xl font-black text-green-600 mt-1">{safeFmtVND(todayRevenue)}</p>
                         </div>
                     </div>
 
@@ -580,10 +668,10 @@ export default function OnlineOrdersPage() {
                                                 <div className="min-w-0">
                                                     <p className="font-semibold text-gray-700 text-sm truncate">{order.customerName}</p>
                                                     <p className="text-xs text-gray-400">{order.phone}</p>
-                                                    <p className="text-[11px] text-gray-400 mt-0.5">{order.items.length} món · {fmtDate(order.createdAt)}</p>
+                                                    <p className="text-[11px] text-gray-400 mt-0.5">{order.items.length} món · {safeFmtDate(order.createdAt)}</p>
                                                 </div>
                                                 <div className="text-right shrink-0">
-                                                    <p className="font-bold text-green-600 text-sm">{fmtVND(order.totalPrice)}</p>
+                                                    <p className="font-bold text-green-600 text-sm">{safeFmtVND(order.totalPrice)}</p>
                                                     <div className="mt-1"><OnlineStatusBadge status={order.status} /></div>
                                                 </div>
                                             </button>
@@ -621,8 +709,8 @@ export default function OnlineOrdersPage() {
                                                         </div>
                                                     </td>
                                                     <td className="px-4 py-3"><OnlineStatusBadge status={order.status} /></td>
-                                                    <td className="px-4 py-3 font-bold text-green-600 whitespace-nowrap">{fmtVND(order.totalPrice)}</td>
-                                                    <td className="px-4 py-3 text-xs text-gray-400 whitespace-nowrap">{fmtDate(order.createdAt)}</td>
+                                                    <td className="px-4 py-3 font-bold text-green-600 whitespace-nowrap">{safeFmtVND(order.totalPrice)}</td>
+                                                    <td className="px-4 py-3 text-xs text-gray-400 whitespace-nowrap">{safeFmtDate(order.createdAt)}</td>
                                                 </tr>
                                             ))}
                                         </tbody>
@@ -665,7 +753,7 @@ export default function OnlineOrdersPage() {
                                         <p className="text-xs text-gray-400 truncate">{t.lastMessage}</p>
                                     </div>
                                     <div className="flex flex-col items-end gap-1 shrink-0">
-                                        <span className="text-[10px] text-gray-400">{fmtDate(t.lastAt)}</span>
+                                        <span className="text-[10px] text-gray-400">{safeFmtDate(t.lastAt)}</span>
                                         {t.unreadCount > 0 && (
                                             <span className="text-[10px] font-bold text-white bg-red-500 rounded-full min-w-[18px] h-[18px] px-1 flex items-center justify-center">
                                                 {t.unreadCount}
@@ -726,7 +814,7 @@ export default function OnlineOrdersPage() {
                     <div className="space-y-3">
                         <div className="flex items-center justify-between">
                             <OnlineStatusBadge status={detailOrder.status} />
-                            <span className="text-xs text-gray-400">{fmtDate(detailOrder.createdAt)}</span>
+                            <span className="text-xs text-gray-400">{safeFmtDate(detailOrder.createdAt)}</span>
                         </div>
                         <div className="text-xs text-gray-500 space-y-1">
                             <p className="flex items-center gap-1.5"><Phone size={12} /> {detailOrder.phone}</p>
@@ -736,7 +824,7 @@ export default function OnlineOrdersPage() {
                             {detailOrder.items.map((item, idx) => (
                                 <div key={idx} className="flex justify-between text-sm">
                                     <span className="text-gray-700">{item.foodName} × {item.quantity}</span>
-                                    <span className="font-semibold text-gray-600">{fmtVND(item.unitPrice * item.quantity)}</span>
+                                    <span className="font-semibold text-gray-600">{safeFmtVND(item.unitPrice * item.quantity)}</span>
                                 </div>
                             ))}
                         </div>
@@ -746,7 +834,7 @@ export default function OnlineOrdersPage() {
                         )}
                         <div className="flex justify-between items-center pt-2 border-t border-gray-100">
                             <span className="font-bold text-gray-700 text-sm">Tổng cộng</span>
-                            <span className="font-black text-lg text-green-600">{fmtVND(detailOrder.totalPrice)}</span>
+                            <span className="font-black text-lg text-green-600">{safeFmtVND(detailOrder.totalPrice)}</span>
                         </div>
                         {chatThreads.some((t) => t.customerId === detailOrder.customerId) && (
                             <Button variant="outline" className="w-full justify-center"
@@ -768,12 +856,12 @@ export default function OnlineOrdersPage() {
                                     <span className="text-gray-700">
                                         {item.foodName} × {item.quantity}
                                     </span>
-                                    <span className="font-semibold">{fmtVND(item.unitPrice * item.quantity)}</span>
+                                    <span className="font-semibold">{safeFmtVND(item.unitPrice * item.quantity)}</span>
                                 </div>
                             ))}
                             <div className="border-t border-green-200 pt-2 mt-2 flex justify-between items-center">
                                 <span className="font-bold text-gray-700">Tổng cộng</span>
-                                <span className="font-black text-lg text-green-600">{fmtVND(checkoutTarget.totalPrice)}</span>
+                                <span className="font-black text-lg text-green-600">{safeFmtVND(checkoutTarget.totalPrice)}</span>
                             </div>
                         </div>
 
@@ -849,7 +937,7 @@ export default function OnlineOrdersPage() {
                                     ${m.from === "admin" ? "bg-green-500 text-white rounded-br-md" : "bg-gray-100 text-gray-700 rounded-bl-md"}`}>
                                     <p>{m.text}</p>
                                     <p className={`text-[10px] mt-1 ${m.from === "admin" ? "text-green-100" : "text-gray-400"}`}>
-                                        {fmtDate(m.at instanceof Date ? m.at.toISOString() : m.at)}
+                                        {safeFmtDate(m.at instanceof Date ? m.at.toISOString() : m.at)}
                                     </p>
                                 </div>
                             </div>

@@ -32,6 +32,19 @@ export default function AnalystPage() {
         setTimeout(() => setIsRefreshing(false), 800);
     }, []);
 
+    // Thêm gần đầu file (ngoài component, hoặc đầu component đều được)
+    const toArray = (data) => (Array.isArray(data) ? data : []);
+
+    const toStats = (data) =>
+        data && typeof data === "object" && !Array.isArray(data)
+            ? {
+                totalRevenue: Number(data.totalRevenue) || 0,
+                totalBills: Number(data.totalBills) || 0,
+                avgBill: Number(data.avgBill) || 0,
+                totalCost: Number(data.totalCost) || 0,
+            }
+            : { totalRevenue: 0, totalBills: 0, avgBill: 0, totalCost: 0 };
+
     // Auto-poll every 60 seconds
     useEffect(() => {
         const id = setInterval(refresh, 60_000);
@@ -39,13 +52,13 @@ export default function AnalystPage() {
     }, [refresh]);
 
     // ── Timeframe states ──────────────────────────────────────────────────────
-    const [tf2, setTf2]             = useState("week");
-    const [tf4, setTf4]             = useState("day");
-    const [tf5, setTf5]             = useState("day");
-    const [tf6, setTf6]             = useState("week");
-    const [tfPie, setTfPie]         = useState("day");
+    const [tf2, setTf2] = useState("week");
+    const [tf4, setTf4] = useState("day");
+    const [tf5, setTf5] = useState("day");
+    const [tf6, setTf6] = useState("week");
+    const [tfPie, setTfPie] = useState("day");
     const [tfCustomer, setTfCustomer] = useState("hour");
-    const [tfPid, setTfPid]         = useState("day");
+    const [tfPid, setTfPid] = useState("day");
 
     // ── EMA / MA period states ────────────────────────────────────────────────
     const [c3MaPeriod, setC3MaPeriod] = useState(7);
@@ -56,76 +69,75 @@ export default function AnalystPage() {
     const today = new Date();
     const fmtDate = d => d.toISOString().split("T")[0];
     const [dateFrom, setDateFrom] = useState(fmtDate(new Date(today.getFullYear(), today.getMonth(), 1)));
-    const [dateTo, setDateTo]     = useState(fmtDate(today));
+    const [dateTo, setDateTo] = useState(fmtDate(today));
 
     // ── Chart 7 breakeven ─────────────────────────────────────────────────────
-    const [breakeven, setBreakeven]           = useState(300_000);
+    const [breakeven, setBreakeven] = useState(300_000);
     const [breakevenInput, setBreakevenInput] = useState("300000");
 
     // ── Fetched data ──────────────────────────────────────────────────────────
-    const [statsData, setStatsData]       = useState({ totalRevenue: 0, totalBills: 0, avgBill: 0, totalCost: 0 });
-    const [chart1Data, setChart1Data]     = useState([]);
-    const [chart2Data, setChart2Data]     = useState([]);
-    const [chart3Data, setChart3Data]     = useState([]);
-    const [chart4Data, setChart4Data]     = useState([]);
-    const [chart5Data, setChart5Data]     = useState([]);
-    const [chart6Data, setChart6Data]     = useState([]);
+    const [statsData, setStatsData] = useState({ totalRevenue: 0, totalBills: 0, avgBill: 0, totalCost: 0 });
+    const [chart1Data, setChart1Data] = useState([]);
+    const [chart2Data, setChart2Data] = useState([]);
+    const [chart3Data, setChart3Data] = useState([]);
+    const [chart4Data, setChart4Data] = useState([]);
+    const [chart5Data, setChart5Data] = useState([]);
+    const [chart6Data, setChart6Data] = useState([]);
     const [cumulativeData, setCumulativeData] = useState([]);
     const [customerData, setCustomerData] = useState([]);
-    const [pieData, setPieData]           = useState([]);
-    const [heatmapData, setHeatmapData]   = useState([]);
-    const [pidRows, setPidRows]           = useState([]);
+    const [pieData, setPieData] = useState([]);
+    const [heatmapData, setHeatmapData] = useState([]);
+    const [pidRows, setPidRows] = useState([]);
 
     // ── API effects ───────────────────────────────────────────────────────────
-
     useEffect(() => {
-        apiFetch("/weekly?offset=0").then(setStatsData).catch(console.error);
+        apiFetch("/weekly?offset=0").then(data => setStatsData(toStats(data))).catch(console.error);
     }, [refreshKey]);
 
     useEffect(() => {
-        apiFetch("/chart-data?tf=day").then(setChart1Data).catch(console.error);
+        apiFetch("/chart-data?tf=day").then(data => setChart1Data(toArray(data))).catch(console.error);
     }, [refreshKey]);
 
     useEffect(() => {
-        apiFetch(`/${tf2 !== "month" ? "weekly?offset=0" : "monthly?offset=0"}`).then(setChart2Data).catch(console.error);
+        apiFetch(`/${tf2 !== "month" ? "weekly?offset=0" : "monthly?offset=0"}`).then(data => setChart2Data(toArray(data))).catch(console.error);
     }, [tf2, refreshKey]);
 
     useEffect(() => {
         if (!dateFrom || !dateTo) return;
-        apiFetch(`/range?from=${dateFrom}&to=${dateTo}`).then(setChart3Data).catch(console.error);
+        apiFetch(`/range?from=${dateFrom}&to=${dateTo}`).then(data => setChart3Data(toArray(data))).catch(console.error);
     }, [dateFrom, dateTo, refreshKey]);
 
     useEffect(() => {
-        apiFetch(`/chart-data?tf=${tf4}`).then(setChart4Data).catch(console.error);
+        apiFetch(`/chart-data?tf=${tf4}`).then(data => setChart4Data(toArray(data))).catch(console.error);
     }, [tf4, refreshKey]);
 
     useEffect(() => {
-        apiFetch(`/chart-data?tf=${tf5}`).then(setChart5Data).catch(console.error);
+        apiFetch(`/chart-data?tf=${tf5}`).then(data => setChart5Data(toArray(data))).catch(console.error);
     }, [tf5, refreshKey]);
 
     useEffect(() => {
-        apiFetch(`/chart-data?tf=${tf6}`).then(setChart6Data).catch(console.error);
+        apiFetch(`/chart-data?tf=${tf6}`).then(data => setChart6Data(toArray(data))).catch(console.error);
     }, [tf6, refreshKey]);
 
     useEffect(() => {
-        apiFetch("/cumulative").then(setCumulativeData).catch(console.error);
+        apiFetch("/cumulative").then(data => setCumulativeData(toArray(data))).catch(console.error);
     }, [refreshKey]);
 
     useEffect(() => {
         const tf = tfCustomer === "hour" ? "day" : "week";
-        apiFetch(`/chart-data?tf=${tf}`).then(setCustomerData).catch(console.error);
+        apiFetch(`/chart-data?tf=${tf}`).then(data => setCustomerData(toArray(data))).catch(console.error);
     }, [tfCustomer, refreshKey]);
 
     useEffect(() => {
-        apiFetch(`/top-dishes?period=${tfPie}&top=7`).then(setPieData).catch(console.error);
+        apiFetch(`/top-dishes?period=${tfPie}&top=7`).then(data => setPieData(toArray(data))).catch(console.error);
     }, [tfPie, refreshKey]);
 
     useEffect(() => {
-        apiFetch("/heatmap").then(setHeatmapData).catch(console.error);
+        apiFetch("/heatmap").then(data => setHeatmapData(toArray(data))).catch(console.error);
     }, [refreshKey]);
 
     useEffect(() => {
-        apiFetch(`/pid?tf=${tfPid}`).then(setPidRows).catch(console.error);
+        apiFetch(`/pid?tf=${tfPid}`).then(data => setPidRows(toArray(data))).catch(console.error);
     }, [tfPid, refreshKey]);
 
     // ── Render ────────────────────────────────────────────────────────────────
@@ -166,10 +178,10 @@ export default function AnalystPage() {
 
             {/* ── Stat cards ── */}
             <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
-                <StatCard icon={DollarSign} label="Doanh thu hôm nay"   value={fmtVND(statsData.totalRevenue)} color="green" />
-                <StatCard icon={ShoppingCart} label="Tổng số bill"        value={statsData.totalBills.toLocaleString()} color="blue" />
-                <StatCard icon={Users}        label="Bill trung bình"     value={fmtVND(statsData.avgBill)} color="amber" />
-                <StatCard icon={TrendingUp}   label="Chi phí nguyên liệu" value={fmtVND(Math.round(statsData.totalCost))} color="rose" />
+                <StatCard icon={DollarSign} label="Doanh thu hôm nay" value={fmtVND(statsData.totalRevenue)} color="green" />
+                <StatCard icon={ShoppingCart} label="Tổng số bill" value={statsData.totalBills.toLocaleString()} color="blue" />
+                <StatCard icon={Users} label="Bill trung bình" value={fmtVND(statsData.avgBill)} color="amber" />
+                <StatCard icon={TrendingUp} label="Chi phí nguyên liệu" value={fmtVND(Math.round(statsData.totalCost))} color="rose" />
             </div>
 
             {/* ── Chart 01: Revenue by hour + EMA ── */}

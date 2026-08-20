@@ -38,6 +38,55 @@ const EMPTY_FOOD = {
   ingredients: [],
 };
 
+// fmtVND là util bên ngoài — bọc lại kiểu safeCall (giống FoodService) để 1
+// giá trị NaN/undefined lọt qua (do API trả thiếu field) không làm crash
+// cả cây render.
+function safeFmtVND(value) {
+  try {
+    return fmtVND(Number(value) || 0);
+  } catch (err) {
+    console.error("[fmtVND]", err);
+    return "0₫";
+  }
+}
+
+// ─── Chuẩn hoá dữ liệu món ăn từ API ────────────────────────────────────────
+// API/DB đôi khi trả record thiếu field, sai kiểu, hoặc cả phần tử null
+// (record lỗi, đang ghi dở...). Toàn bộ phần render bên dưới giả định
+// food.foodName là string, food.ingredients là mảng, giá luôn là số...
+// nên chuẩn hoá NGAY LÚC NHẬN — 1 chỗ duy nhất — thay vì rải fallback khắp
+// nơi và lỡ sót gây crash UI (màn hình trắng khi mở Sửa/Chi tiết).
+// Món không có _id thì không thể sửa/xoá/toggle nên loại bỏ luôn (drop).
+function normalizeFood(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const id = raw._id ?? raw.id;
+  if (!id) return null;
+
+  const ingredients = Array.isArray(raw.ingredients)
+    ? raw.ingredients.filter(Boolean).map(i => ({
+      ...i,
+      ingredientName: i.ingredientName ?? "Nguyên liệu (không rõ tên)",
+      quantity: Number(i.quantity) || 0,
+      cost: Number(i.cost) || 0,
+      price: Number(i.price) || 0,
+      smallUnit: i.smallUnit ?? "",
+    }))
+    : [];
+
+  return {
+    ...raw,
+    _id: id,
+    foodName: raw.foodName || "Món chưa đặt tên",
+    categoryId: raw.categoryId ?? CAT_OPTIONS[0],
+    costPrice: Number(raw.costPrice) || 0,
+    originalPrice: Number(raw.originalPrice) || 0,
+    aiTrainingWeight: Number(raw.aiTrainingWeight) || 0,
+    isAvailable: raw.isAvailable !== false,
+    note: raw.note ?? "",
+    ingredients,
+  };
+}
+
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
 function StatusBadge({ isAvailable }) {
@@ -136,11 +185,11 @@ function FoodCard({ food, onEdit, onInfo, onRemove, onEditNote, isPending, onTog
         <div className="space-y-1.5 text-xs">
           <div className="flex justify-between">
             <span className="text-gray-500">Giá bán</span>
-            <span className="font-bold text-green-600">{fmtVND(food.originalPrice)}</span>
+            <span className="font-bold text-green-600">{safeFmtVND(food.originalPrice)}</span>
           </div>
           <div className="flex justify-between">
             <span className="text-gray-500">Giá vốn</span>
-            <span className="text-gray-600">{fmtVND(food.costPrice)}</span>
+            <span className="text-gray-600">{safeFmtVND(food.costPrice)}</span>
           </div>
           <div className="flex justify-between items-center">
             <span className="text-gray-500">Biên LN</span>
@@ -189,12 +238,12 @@ function InfoModal({ food, open, onClose }) {
     ["Tên món", food.foodName],
     ["Danh mục", catName || "—"],
     ["Trạng thái", food.isAvailable ? "Đang bán" : "Tạm nghỉ"],
-    ["Giá bán gốc", fmtVND(food.originalPrice)],
-    ["Giá vốn", fmtVND(food.costPrice)],
+    ["Giá bán gốc", safeFmtVND(food.originalPrice)],
+    ["Giá vốn", safeFmtVND(food.costPrice)],
     ["Giảm %", `${pct}%`],
-    ["Giảm cố định", fmtVND(fixed)],
-    ["Giá sau ưu đãi", fmtVND(disc)],
-    ["Lợi nhuận gộp", fmtVND(profit)],
+    ["Giảm cố định", safeFmtVND(fixed)],
+    ["Giá sau ưu đãi", safeFmtVND(disc)],
+    ["Lợi nhuận gộp", safeFmtVND(profit)],
     ["Biên lợi nhuận", `${margin}%`],
     ["Trọng số AI", food.aiTrainingWeight ?? 0],
   ];
@@ -221,7 +270,7 @@ function InfoModal({ food, open, onClose }) {
             {food.ingredients.map((ing, i) => (
               <div key={i} className="flex justify-between text-xs bg-gray-50 rounded-lg px-3 py-2">
                 <span className="text-gray-700 font-medium">{ing.ingredientName}</span>
-                <span className="text-gray-500">{ing.quantity} {ing.smallUnit} — {fmtVND(ing.price)}</span>
+                <span className="text-gray-500">{ing.quantity} {ing.smallUnit} — {safeFmtVND(ing.price)}</span>
               </div>
             ))}
           </div>
@@ -279,10 +328,17 @@ export default function MenuPage() {
 
   const pendingCount = pendingChanges.size;
 
+  // Chuẩn hoá 1 lần duy nhất — mọi chỗ dưới đây đọc từ đây, không đọc `foods`
+  // thô nữa, để không phải lo record lỗi/thiếu field từ API.
+  const normalizedFoods = useMemo(
+    () => (Array.isArray(foods) ? foods.map(normalizeFood).filter(Boolean) : []),
+    [foods]
+  );
+
   // Món hiển thị ở thực đơn — loại trừ các combo "Trái cây mix" (quản lý riêng ở trang Trái cây)
   const visibleFoods = useMemo(
-    () => foods.filter(fd => extractCatName(fd.categoryId) !== MIX_CATEGORY),
-    [foods]
+    () => normalizedFoods.filter(fd => extractCatName(fd.categoryId) !== MIX_CATEGORY),
+    [normalizedFoods]
   );
 
   // Giá vốn tự tính từ nguyên liệu
@@ -391,7 +447,7 @@ export default function MenuPage() {
   const handleRefreshCosts = async () => {
     try {
       const data = await refreshCosts();
-      setRefreshMsg(`Đã cập nhật giá cho ${data.updatedCount} món`);
+      setRefreshMsg(`Đã cập nhật giá cho ${data?.updatedCount ?? 0} món`);
     } catch {
       setRefreshMsg("Cập nhật giá thất bại");
     } finally {
@@ -597,7 +653,7 @@ export default function MenuPage() {
               <label className="text-xs font-bold text-gray-500 uppercase tracking-wide block mb-1.5">Giá vốn (₫)</label>
               {hasIngredients ? (
                 <div className="w-full border border-green-200 bg-green-50 rounded-xl px-3 py-2.5 text-sm font-semibold text-green-700">
-                  {fmtVND(computedCostPrice)}
+                  {safeFmtVND(computedCostPrice)}
                   <span className="text-xs font-normal text-green-500 ml-1">(tự tính)</span>
                 </div>
               ) : (

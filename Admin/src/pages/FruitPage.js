@@ -434,7 +434,7 @@ export default function FruitPage() {
   );
 
   const filtered = useMemo(() =>
-    fruits.filter(fr => fr.fruitName.toLowerCase().includes(search.toLowerCase())),
+    fruits.filter(fr => (fr?.fruitName || "").toLowerCase().includes(search.toLowerCase())),
     [fruits, search]
   );
 
@@ -555,7 +555,7 @@ export default function FruitPage() {
   const comboHasIngredients = comboForm.ingredients.length > 0;
 
   const filteredCombos = useMemo(() =>
-    comboFoods.filter(cb => cb.foodName.toLowerCase().includes(comboSearch.toLowerCase())),
+    comboFoods.filter(cb => (cb?.foodName || "").toLowerCase().includes(comboSearch.toLowerCase())),
     [comboFoods, comboSearch]
   );
 

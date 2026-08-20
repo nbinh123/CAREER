@@ -184,7 +184,20 @@ export default function VoucherPage() {
         const query = search.trim() ? `?search=${encodeURIComponent(search.trim())}` : "";
         getData({ url: `/vouchers${query}` })
             .then((res) => {
-                setVouchers(Array.isArray(res?.data) ? res.data : []);
+                // callAPI ở các nơi khác trong file này (fetchStats,
+                // handleSubmit) đều kỳ vọng response dạng {success, data}.
+                // Nếu /vouchers cũng theo dạng đó, res.data sẽ là OBJECT
+                // {success, data:[...]}, không phải mảng — Array.isArray(res.data)
+                // luôn false và danh sách sẽ luôn rỗng dù server có dữ liệu,
+                // mà không có lỗi nào hiển thị ra ngoài để biết vì sao.
+                // Chấp nhận cả 2 dạng: res.data là mảng trực tiếp, HOẶC
+                // res.data.data là mảng (bọc trong {success,data}).
+                const list = Array.isArray(res?.data)
+                    ? res.data
+                    : Array.isArray(res?.data?.data)
+                        ? res.data.data
+                        : [];
+                setVouchers(list);
             })
             .catch((err) => {
                 console.error("Failed to fetch vouchers:", err);

@@ -15,6 +15,16 @@ function urgencyOf(mins) {
     return "fresh";
 }
 
+// Server (qua HTTP fetch ban đầu hoặc socket event) có thể gửi sai định dạng —
+// ép kiểu mảng tường minh ở đây để .map/.filter/.reduce phía dưới không bao giờ crash.
+function safeQueue(data) {
+    if (!Array.isArray(data)) return [];
+    return data.map((t) => ({
+        ...t,
+        items: Array.isArray(t?.items) ? t.items : [],
+    }));
+}
+
 const URGENCY_STYLE = {
     fresh: {
         card: "border-gray-100",
@@ -72,7 +82,7 @@ export default function KitchenPage() {
 
         socket.on("disconnect", () => setConnected(false));
 
-        socket.on("kitchen_state", (data) => setQueue(data || []));
+        socket.on("kitchen_state", (data) => setQueue(safeQueue(data)));
 
         return () => {
             socket.disconnect();
@@ -87,7 +97,9 @@ export default function KitchenPage() {
 
     const waitMinutes = useCallback((confirmedAt) => {
         if (!confirmedAt) return 0;
-        return Math.max(0, Math.floor((now - new Date(confirmedAt).getTime()) / 60000));
+        const ts = new Date(confirmedAt).getTime();
+        if (isNaN(ts)) return 0;
+        return Math.max(0, Math.floor((now - ts) / 60000));
     }, [now]);
 
     // ─── Đánh dấu đã nấu xong ────────────────────────────────────────────────────
@@ -99,13 +111,13 @@ export default function KitchenPage() {
     }, [showToast]);
 
     const markAllReady = useCallback((table) => {
-        table.items.forEach((item) => {
+        (table.items || []).forEach((item) => {
             socketRef.current?.emit("mark_item_ready", { tableId: table.tableId, itemId: item.id });
         });
         showToast("success", `${table.tableName} — đã xong toàn bộ`);
     }, [showToast]);
 
-    const totalDishes = queue.reduce((s, t) => s + t.items.reduce((a, i) => a + i.quantity, 0), 0);
+    const totalDishes = queue.reduce((s, t) => s + t.items.reduce((a, i) => a + (i.quantity || 0), 0), 0);
     const urgentCount = queue.filter((t) =>
         t.items.some((i) => waitMinutes(i.confirmedAt) >= URGENT_MINUTES)
     ).length;
@@ -150,13 +162,13 @@ export default function KitchenPage() {
                 </div>
             ) : (
                 <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
-                    {queue.map((t) => {
+                    {queue.map((t, tIdx) => {
                         const oldestMins = t.items.length ? waitMinutes(t.items[0].confirmedAt) : 0;
                         const level = urgencyOf(oldestMins);
                         const style = URGENCY_STYLE[level];
 
                         return (
-                            <div key={t.tableId}
+                            <div key={t.tableId ?? tIdx}
                                 className={`bg-white rounded-2xl border-2 overflow-hidden ${style.card} ${style.pulse ? "animate-pulse" : ""}`}>
 
                                 {/* Vạch màu trạng thái ở đỉnh phiếu */}
@@ -175,13 +187,13 @@ export default function KitchenPage() {
 
                                 {/* Danh sách món */}
                                 <div className="px-3 pb-3 space-y-1.5">
-                                    {t.items.map((item) => {
+                                    {t.items.map((item, iIdx) => {
                                         const mins = waitMinutes(item.confirmedAt);
                                         const itemLevel = urgencyOf(mins);
-                                        const key = `${t.tableId}:${item.id}`;
+                                        const key = `${t.tableId}:${item.id ?? iIdx}`;
                                         const isFlashing = doneFlash.has(key);
                                         return (
-                                            <div key={item.id}
+                                            <div key={key}
                                                 className={`flex items-center gap-2.5 rounded-xl px-2.5 py-2.5 bg-gray-50 transition-opacity
                                                     ${isFlashing ? "opacity-40" : "opacity-100"}`}>
                                                 <span className="text-xl leading-none">{item.emoji}</span>
@@ -212,7 +224,7 @@ export default function KitchenPage() {
                                     <button
                                         onClick={() => markAllReady(t)}
                                         className="w-full py-2.5 text-xs font-bold text-gray-400 hover:text-gray-600 hover:bg-gray-50 border-t border-gray-100 transition-colors">
-                                        Hoàn thành cả phiếu ({t.items.reduce((s, i) => s + i.quantity, 0)} món)
+                                        Hoàn thành cả phiếu ({t.items.reduce((s, i) => s + (i.quantity || 0), 0)} món)
                                     </button>
                                 )}
                             </div>

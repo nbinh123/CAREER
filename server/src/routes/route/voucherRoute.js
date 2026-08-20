@@ -9,8 +9,10 @@ router.post("/validate", VoucherController.validateVoucher); // public, giống 
 router.get("/stats", authMiddleware, VoucherController.getVoucherStats);
 router.get("/:id", authMiddleware, VoucherController.getVoucherById);
 router.post("/", authMiddleware, VoucherController.createVoucher);
+router.post("/batch", authMiddleware, VoucherController.createVoucherBatch);
 router.get("/", authMiddleware, VoucherController.getVouchers);
 router.put("/:id", authMiddleware, VoucherController.updateVoucher);
 router.delete("/:id", authMiddleware, VoucherController.deleteVoucher);
+
 
 module.exports = router;

@@ -138,18 +138,22 @@ export default function Chart10({ pidRows = [], tf = "day", onTf, onRowsChange }
             {/* ── Ingredient cards ── */}
             <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
                 {pidRows.map((ing, idx) => {
-                    const hist  = tf === "day" ? ing.dayHistory : ing.weekHistory;
-                    const exp   = tf === "day" ? ing.dayExpected : ing.weekExpected;
+                    const rawHist = tf === "day" ? ing.dayHistory : ing.weekHistory;
+                    const hist  = Array.isArray(rawHist) ? rawHist : [];
+                    const exp   = (tf === "day" ? ing.dayExpected : ing.weekExpected) || 0;
                     const { pred, pTerm, iTerm, dTerm, e } = pidCalc(hist, exp, ing.Kp, ing.Ki, ing.Kd);
                     const predR   = r1(pred);
-                    const lastAct = hist[hist.length - 1];
+                    const lastAct = hist.length > 0 ? hist[hist.length - 1] : 0;
                     const delta   = r1(pred - lastAct);
                     const isExpand = expandedRow === idx;
 
-                    const statusColor = Math.abs(delta / lastAct) < 0.03
+                    const changeRatio = lastAct !== 0
+                        ? Math.abs(delta / lastAct)
+                        : (delta === 0 ? 0 : Infinity);
+                    const statusColor = changeRatio < 0.03
                         ? "bg-gray-100 text-gray-500"
                         : delta > 0 ? "bg-orange-100 text-orange-600" : "bg-green-100 text-green-600";
-                    const statusLabel = Math.abs(delta / lastAct) < 0.03
+                    const statusLabel = changeRatio < 0.03
                         ? "Ổn định"
                         : delta > 0 ? `+${r1(delta)} ${ing.unit}` : `${r1(delta)} ${ing.unit}`;
 

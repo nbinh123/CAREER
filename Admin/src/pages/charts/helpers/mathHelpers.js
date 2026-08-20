@@ -1,5 +1,5 @@
 export function addEMA(data, key, period = 5) {
-    if (!data.length) return data;
+    if (!Array.isArray(data) || data.length === 0) return Array.isArray(data) ? data : [];
     const alpha = 2 / (period + 1);
     const emaRolling = [];
     data.forEach((d, i) => {
@@ -14,6 +14,7 @@ export function addEMA(data, key, period = 5) {
 }
 
 export function addMA(data, key, period = 7) {
+    if (!Array.isArray(data)) return [];
     return data.map((d, i) => {
         if (i === 0) return { ...d, ma: null };
         const slice = data.slice(Math.max(0, i - period), i);
@@ -27,10 +28,12 @@ export function addMA(data, key, period = 7) {
 }
 
 export function pidCalc(history, expected, Kp, Ki, Kd) {
-    const n = history.length;
+    const safeHistory = Array.isArray(history) ? history : [];
+    const safeExpected = Number(expected) || 0;
+    const n = safeHistory.length;
     if (n === 0)
         return {
-            pred: expected,
+            pred: safeExpected,
             pTerm: 0,
             iTerm: 0,
             dTerm: 0,
@@ -39,18 +42,18 @@ export function pidCalc(history, expected, Kp, Ki, Kd) {
             dE: 0,
         };
 
-    const errors = history.map((h) => expected - h);
+    const errors = safeHistory.map((h) => safeExpected - (Number(h) || 0));
     const e = errors[n - 1];
     const sumE = errors.reduce((s, x) => s + x, 0);
     const dE = n >= 2 ? errors[n - 1] - errors[n - 2] : 0;
 
-    const pTerm = Kp * e;
-    const iTerm = Ki * sumE;
-    const dTerm = Kd * dE;
+    const pTerm = (Number(Kp) || 0) * e;
+    const iTerm = (Number(Ki) || 0) * sumE;
+    const dTerm = (Number(Kd) || 0) * dE;
 
     const pred = Math.max(
         0,
-        history[n - 1] + pTerm + iTerm + dTerm
+        (Number(safeHistory[n - 1]) || 0) + pTerm + iTerm + dTerm
     );
 
     return { pred, pTerm, iTerm, dTerm, e, sumE, dE };

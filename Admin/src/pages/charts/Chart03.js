@@ -33,8 +33,9 @@ export default function Chart03({
     onMaPeriod,
 }) {
     const chart = useMemo(() => {
-        if (!data.length) return [];
-        return addMA(data, "revenue", maPeriod);
+        const safeData = Array.isArray(data) ? data : [];
+        if (!safeData.length) return [];
+        return addMA(safeData, "revenue", maPeriod);
     }, [data, maPeriod]);
 
     const c3Interval = Math.max(0, Math.floor(chart.length / 9) - 1);

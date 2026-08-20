@@ -4,6 +4,7 @@ import { View } from "react-native";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { useFonts } from "expo-font";
+import { ActiveRouteProvider } from "./src/context/ActiveRouteContext";
 import {
   SpaceGrotesk_500Medium,
   SpaceGrotesk_600SemiBold,
@@ -49,9 +50,11 @@ export default function App() {
     <SafeAreaProvider>
       <View className="flex-1 bg-paper">
         <AuthProvider>
-          <AppProviders>
-            <NavigationRoot />
-          </AppProviders>
+          <ActiveRouteProvider>
+            <AppProviders>
+              <NavigationRoot />
+            </AppProviders>
+          </ActiveRouteProvider>
         </AuthProvider>
         <StatusBar style="dark" />
       </View>
