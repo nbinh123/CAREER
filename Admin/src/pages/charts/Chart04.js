@@ -25,8 +25,10 @@ const bs = (tf, lg = 18, md = 14, sm = 7) =>
  * onEma     {Function}
  */
 export default function Chart04({ data = [], tf = "day", emaPeriod = 5, onTf, onEma }) {
-    const safeData = Array.isArray(data) ? data : [];
-    const chart = useMemo(() => addEMA(safeData, "bills", emaPeriod), [safeData, emaPeriod]);
+    const chart = useMemo(() => {
+        const safeData = Array.isArray(data) ? data : [];
+        return addEMA(safeData, "bills", emaPeriod);
+    }, [data, emaPeriod]);
 
     // --- LOGIC TÍNH TOÁN TRỤC Y ---
     // 1. Tìm giá trị lớn nhất (so sánh cả bills và ema)

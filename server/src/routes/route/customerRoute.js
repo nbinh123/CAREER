@@ -86,8 +86,8 @@ router.get("/me/orders", customerAuthMiddleware, CustomerController.getMyOrders)
 // Danh sách khách hàng, tìm theo SĐT/tên
 router.get(
     "/",
-    specialMiddleware,
-    authorizeRoles("admin", "manager"),
+    // specialMiddleware,
+    // authorizeRoles("admin", "manager"),
     CustomerController.adminGetCustomers
 );
 

@@ -163,11 +163,19 @@ const STYLE = `
 /* ── orders modal ── */
 .cm-orders-modal { max-width: 560px; }
 .cm-orders-body { padding: 16px 24px 24px; }
-.cm-order-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 13px; margin-bottom: 8px; }
+.cm-order-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 12px 14px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 13px; margin-bottom: 8px; }
 .cm-order-code { font-size: 13px; font-weight: 900; color: #064e3b; margin: 0 0 2px; }
 .cm-order-date { font-size: 11px; font-weight: 600; color: #9ca3af; margin: 0; }
-.cm-order-amt { font-size: 14px; font-weight: 900; color: #059669; }
-.cm-order-status { font-size: 10px; font-weight: 800; padding: 3px 9px; border-radius: 100px; text-transform: uppercase; }
+.cm-order-amt { font-size: 14px; font-weight: 900; color: #059669; white-space: nowrap; padding-top: 1px; }
+.cm-order-status { font-size: 10px; font-weight: 800; padding: 3px 9px; border-radius: 100px; text-transform: uppercase; white-space: nowrap; }
+.cm-order-status.completed  { background: #dcfce7; color: #166534; }
+.cm-order-status.cancelled  { background: #fee2e2; color: #b91c1c; }
+.cm-order-status.pending    { background: #fef3c7; color: #b45309; }
+.cm-order-status.processing { background: #dbeafe; color: #1d4ed8; }
+.cm-order-status.default    { background: #f3f4f6; color: #4b5563; }
+.cm-order-meta-row { display: flex; align-items: center; gap: 8px; margin: 0 0 2px; }
+.cm-order-items { font-size: 11px; font-weight: 600; color: #6b7280; margin: 3px 0 0; line-height: 1.4; }
+.cm-order-cancel-reason { font-size: 11px; font-weight: 600; color: #b91c1c; margin: 3px 0 0; font-style: italic; }
 .cm-orders-loading { text-align: center; padding: 40px 0; color: #9ca3af; }
 
 /* ── toast ── */
@@ -246,6 +254,32 @@ function fmtDateTime(d) {
 function fmtMoney(n) {
   if (!n && n !== 0) return "—";
   return new Intl.NumberFormat("vi-VN", { style: "currency", currency: "VND" }).format(n);
+}
+const ORDER_STATUS_META = {
+  COMPLETED: { label: "Hoàn thành", cls: "completed" },
+  CANCELLED: { label: "Đã huỷ", cls: "cancelled" },
+  PENDING: { label: "Chờ xử lý", cls: "pending" },
+  PROCESSING: { label: "Đang xử lý", cls: "processing" },
+};
+function orderStatusMeta(status) {
+  return ORDER_STATUS_META[status] || { label: status || "—", cls: "default" };
+}
+const PAYMENT_LABELS = {
+  CASH: "Tiền mặt",
+  CARD: "Thẻ",
+  BANK_TRANSFER: "Chuyển khoản",
+  MOMO: "Momo",
+  VNPAY: "VNPay",
+  ZALOPAY: "ZaloPay",
+};
+function paymentLabel(pm) {
+  return PAYMENT_LABELS[pm] || pm || "—";
+}
+function orderItemsSummary(items) {
+  if (!Array.isArray(items) || items.length === 0) return "";
+  const shown = items.slice(0, 2).map((it) => `${it.foodName || "Món"} ×${it.quantity ?? 1}`);
+  const rest = items.length - shown.length;
+  return rest > 0 ? `${shown.join(", ")} +${rest} món khác` : shown.join(", ");
 }
 function statusOf(c) {
   if (!c) return "active";
@@ -381,7 +415,9 @@ function OrdersModal({ customer, onClose }) {
       const res = await apiGet(`/customers/${customer._id}/orders`);
       if (!alive) return;
       if (res.success) {
-        const rawOrders = res.data?.orders ?? res.data;
+        // BE có thể trả phẳng { success, orders } hoặc bọc { success, data: { orders } }
+        const payload = res.data ?? res;
+        const rawOrders = payload.orders ?? (Array.isArray(payload) ? payload : []);
         setOrders(Array.isArray(rawOrders) ? rawOrders : []);
         setFailed(false);
       } else {
@@ -503,7 +539,9 @@ export default function CustomerManager() {
     });
     if (fetchIdRef.current !== fetchId) return; // request cũ hơn đã bị request mới ghi đè, bỏ qua
     if (res.success) {
-      const payload = res.data ?? {};
+      // BE trả phẳng { success, total, page, limit, customers } — không bọc trong "data",
+      // nên fallback về chính res khi res.data không tồn tại.
+      const payload = res.data ?? res;
       const rawItems = payload.customers ?? payload.items ?? (Array.isArray(payload) ? payload : []);
       const items = Array.isArray(rawItems) ? rawItems.filter(Boolean) : [];
       setList(items);
@@ -545,7 +583,9 @@ export default function CustomerManager() {
     } else if (type === "reset") {
       const res = await apiPost(`/customers/${customer._id}/reset-password`);
       if (res.success) {
-        const tempPassword = res.data?.tempPassword ?? res.data?.newPassword ?? res.data?.password ?? null;
+        // Tương tự: BE có thể trả phẳng { success, tempPassword } thay vì bọc trong "data"
+        const payload = res.data ?? res;
+        const tempPassword = payload.tempPassword ?? payload.newPassword ?? payload.password ?? null;
         setList((prev) => prev.map((c) => (c._id === customer._id ? { ...c, mustChangePassword: true } : c)));
         setConfirmAction(null);
         setResetResult({ customer, tempPassword });

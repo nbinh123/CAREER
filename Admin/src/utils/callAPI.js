@@ -40,6 +40,42 @@ api.interceptors.request.use(
 );
 
 // ======================================================
+// RESPONSE INTERCEPTOR — auto-redirect khi 401
+// ======================================================
+// Bất kỳ request nào (từ mọi trang, vì tất cả đều đi qua
+// instance `api` này) trả về 401 → coi như phiên đăng nhập
+// không còn hợp lệ (token hết hạn / bị thu hồi / sai):
+//   1. Xoá auth state + localStorage (clearAuth).
+//   2. Đưa người dùng về trang đăng nhập.
+// Bỏ qua chính request login (sai mật khẩu cũng trả 401,
+// không nên clear/redirect trong trường hợp đó — trang login
+// tự xử lý message lỗi bằng field `success` như thường lệ).
+api.interceptors.response.use(
+    (response) => response,
+
+    (error) => {
+
+        const status = error.response?.status;
+        const requestUrl = error.config?.url || "";
+        const isLoginRequest = requestUrl.includes("/auth/login") || requestUrl.includes("/login");
+
+        if (status === 401 && !isLoginRequest) {
+
+            useAuthZustand.getState().clearAuth();
+
+            if (
+                typeof window !== "undefined" &&
+                window.location.pathname !== "/login"
+            ) {
+                window.location.href = "/login";
+            }
+        }
+
+        return Promise.reject(error);
+    }
+);
+
+// ======================================================
 // HANDLE RESPONSE
 // ======================================================
 
