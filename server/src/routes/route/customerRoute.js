@@ -115,4 +115,14 @@ router.post(
     CustomerController.adminResetPassword
 );
 
+// Lịch sử đơn hàng của một khách hàng cụ thể (admin xem trên trang quản lý)
+// ⚠️ Khớp theo items.customerPhone — xem ghi chú trong chat về giả định
+// liên kết Order <-> Customer, cần xác nhận lại.
+router.get(
+    "/:id/orders",
+    specialMiddleware,
+    authorizeRoles("admin", "manager"),
+    CustomerController.adminGetCustomerOrders
+);
+
 module.exports = router;

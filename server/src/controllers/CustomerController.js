@@ -6,6 +6,7 @@
 
 const Customer = require("../models/CustomerModel");
 const OnlineOrder = require("../models/OnlineOrderModel");
+const mongoose = require("mongoose");
 const {
     generateCustomerAccessToken,
     generateCustomerRefreshToken,
@@ -809,6 +810,48 @@ class CustomerController {
                 message: "Lỗi server",
             });
 
+        }
+    };
+
+    adminGetCustomerOrders = async (req, res) => {
+        try {
+            const { id } = req.params;
+
+            if (!mongoose.Types.ObjectId.isValid(id)) {
+                return res.status(400).json({
+                    success: false,
+                    message: "ID khách hàng không hợp lệ",
+                });
+            }
+
+            const customer = await Customer.findById(id);
+            if (!customer) {
+                return res.status(404).json({
+                    success: false,
+                    message: "Không tìm thấy khách hàng",
+                });
+            }
+
+            // accountId: đơn đặt qua app mobile lúc đã đăng nhập (khớp chính xác)
+            // phone: đơn đặt ẩn danh trên web bằng cùng số điện thoại
+            const orders = await OnlineOrder.find({
+                $or: [{ accountId: customer._id }, { phone: customer.phone }],
+            })
+                .sort({ createdAt: -1 })
+                .limit(100)
+                .lean();
+
+            return res.status(200).json({
+                success: true,
+                total: orders.length,
+                orders,
+            });
+        } catch (error) {
+            console.error("adminGetCustomerOrders error:", error);
+            return res.status(500).json({
+                success: false,
+                message: "Lỗi server khi lấy lịch sử đơn hàng",
+            });
         }
     };
 }

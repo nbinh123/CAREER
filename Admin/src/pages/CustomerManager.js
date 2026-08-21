@@ -172,6 +172,7 @@ const STYLE = `
 .cm-order-status.cancelled  { background: #fee2e2; color: #b91c1c; }
 .cm-order-status.pending    { background: #fef3c7; color: #b45309; }
 .cm-order-status.processing { background: #dbeafe; color: #1d4ed8; }
+.cm-order-status.delivering { background: #ccfbf1; color: #0f766e; }
 .cm-order-status.default    { background: #f3f4f6; color: #4b5563; }
 .cm-order-meta-row { display: flex; align-items: center; gap: 8px; margin: 0 0 2px; }
 .cm-order-items { font-size: 11px; font-weight: 600; color: #6b7280; margin: 3px 0 0; line-height: 1.4; }
@@ -256,20 +257,20 @@ function fmtMoney(n) {
   return new Intl.NumberFormat("vi-VN", { style: "currency", currency: "VND" }).format(n);
 }
 const ORDER_STATUS_META = {
-  COMPLETED: { label: "Hoàn thành", cls: "completed" },
-  CANCELLED: { label: "Đã huỷ", cls: "cancelled" },
-  PENDING: { label: "Chờ xử lý", cls: "pending" },
-  PROCESSING: { label: "Đang xử lý", cls: "processing" },
+  pending: { label: "Chờ xác nhận", cls: "pending" },
+  confirmed: { label: "Đã xác nhận", cls: "processing" },
+  preparing: { label: "Đang chuẩn bị", cls: "processing" },
+  delivering: { label: "Đang giao", cls: "delivering" },
+  completed: { label: "Hoàn thành", cls: "completed" },
+  cancelled: { label: "Đã huỷ", cls: "cancelled" },
 };
 function orderStatusMeta(status) {
   return ORDER_STATUS_META[status] || { label: status || "—", cls: "default" };
 }
 const PAYMENT_LABELS = {
   CASH: "Tiền mặt",
-  CARD: "Thẻ",
-  BANK_TRANSFER: "Chuyển khoản",
+  BANKING: "Chuyển khoản",
   MOMO: "Momo",
-  VNPAY: "VNPay",
   ZALOPAY: "ZaloPay",
 };
 function paymentLabel(pm) {
@@ -453,15 +454,28 @@ function OrdersModal({ customer, onClose }) {
               <p>Khách hàng chưa có đơn hàng nào.</p>
             </div>
           ) : (
-            orders.filter(Boolean).map((o, i) => (
-              <div key={o._id || i} className="cm-order-row">
-                <div>
-                  <p className="cm-order-code">#{o.orderCode || (typeof o._id === "string" ? o._id.slice(-6) : o._id) || i + 1}</p>
-                  <p className="cm-order-date">{fmtDateTime(o.createdAt)}</p>
+            orders.filter(Boolean).map((o, i) => {
+              const meta = orderStatusMeta(o.status);
+              const itemsLine = orderItemsSummary(o.items);
+              return (
+                <div key={o._id || i} className="cm-order-row">
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div className="cm-order-meta-row">
+                      <p className="cm-order-code" style={{ margin: 0 }}>
+                        #{o.orderCode || (typeof o._id === "string" ? o._id.slice(-6) : o._id) || i + 1}
+                      </p>
+                      <span className={`cm-order-status ${meta.cls}`}>{meta.label}</span>
+                    </div>
+                    <p className="cm-order-date">{fmtDateTime(o.createdAt)} · {paymentLabel(o.paymentMethod)}</p>
+                    {itemsLine && <p className="cm-order-items">{itemsLine}</p>}
+                    {String(o.status).toLowerCase() === "cancelled" && o.cancelReason && (
+                      <p className="cm-order-cancel-reason">Lý do huỷ: {o.cancelReason}</p>
+                    )}
+                  </div>
+                  <span className="cm-order-amt">{fmtMoney(o.totalAmount ?? o.totalPrice ?? o.total)}</span>
                 </div>
-                <span className="cm-order-amt">{fmtMoney(o.totalAmount ?? o.total)}</span>
-              </div>
-            ))
+              );
+            })
           )}
         </div>
       </div>
