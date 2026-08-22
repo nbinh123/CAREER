@@ -5,7 +5,4 @@
 // (app.json > expo.extra.apiUrl) nếu biến môi trường không được set khi build.
 import Constants from "expo-constants";
 
-export const API_URL =
-  process.env.EXPO_PUBLIC_API_URL ||
-  Constants.expoConfig?.extra?.apiUrl ||
-  "http://localhost:5000";
+export const API_URL = "https://career-tf7j.onrender.com"

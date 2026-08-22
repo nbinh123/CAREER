@@ -5,6 +5,7 @@
 import axios from "axios";
 import * as DocumentPicker from "expo-document-picker";
 import * as FileSystem from "expo-file-system";
+import useAuthZustand from "../zustand/useAuthZustand";
 
 /**
  * Mở picker chọn file .json, đọc nội dung và trả về mảng dữ liệu.
@@ -37,7 +38,13 @@ async function importJSON(apiUrl, data, key = "data") {
     throw new Error("File JSON phải là một mảng dữ liệu");
   }
 
-  const res = await axios.post(`${apiUrl}/import`, { [key]: data });
+  // [FIX] Cùng lỗi thiếu Bearer token như exportJSON.js.
+  const token = useAuthZustand.getState().accessToken;
+  const res = await axios.post(
+    `${apiUrl}/import`,
+    { [key]: data },
+    { headers: token ? { Authorization: `Bearer ${token}` } : {} }
+  );
   return res.data;
 }
 

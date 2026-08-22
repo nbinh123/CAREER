@@ -1,9 +1,14 @@
-// [GIU-NGUYEN] copy nguyên vẹn 100% — thuần toán học, dùng chung cho
-// AnalystPage / 10 chart component khi chuyển ở Giai đoạn 5.
+// [GIU-NGUYEN logic, FIX cú pháp module] copy nguyên vẹn 100% phần thuật
+// toán — thuần toán học, dùng chung cho AnalystPage / 10 chart component
+// khi chuyển ở Giai đoạn 5. Đổi `exports.foo = ...` (CommonJS) sang
+// `export const foo = ...` (ES Module) để nhất quán với toàn bộ codebase
+// còn lại (100% dùng import/export) — bản gốc lẫn cú pháp CJS dù các file
+// utils khác đều là ESM, dễ gây nhầm lẫn khi import dù Metro/Babel vẫn
+// resolve đúng nhờ CJS interop.
 // utils/mathUtils.js
 
 // Tính Simple Moving Average (SMA)
-exports.calculateSMA = (data, period) => {
+export const calculateSMA = (data, period) => {
   let sma = [];
   for (let i = 0; i < data.length; i++) {
     if (i < period - 1) {
@@ -20,7 +25,7 @@ exports.calculateSMA = (data, period) => {
 };
 
 // Tính Exponential Moving Average (EMA)
-exports.calculateEMA = (data, period) => {
+export const calculateEMA = (data, period) => {
   let ema = [];
   let multiplier = 2 / (period + 1);
 
@@ -40,7 +45,7 @@ exports.calculateEMA = (data, period) => {
 };
 
 // PID Controller tính toán bù trừ dự đoán nguyên liệu
-exports.calculatePID = (actualDemand, predictedDemand, previousError, integral, Kp = 0.5, Ki = 0.1, Kd = 0.05) => {
+export const calculatePID = (actualDemand, predictedDemand, previousError, integral, Kp = 0.5, Ki = 0.1, Kd = 0.05) => {
   let error = actualDemand - predictedDemand;
   let newIntegral = integral + error;
   let derivative = error - previousError;

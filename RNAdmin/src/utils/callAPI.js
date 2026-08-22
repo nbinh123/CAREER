@@ -9,12 +9,8 @@
 import axios from "axios";
 import { API_URL } from "../config/api";
 import { resetToLogin } from "../navigation/navigationRef";
-// Dùng require() thay vì import ES ở đây (giống bản gốc) để né vòng lặp
-// import: useAuthZustand.js cũng import postData từ chính file này (dùng
-// trong endShift()). Vì cả hai chỉ đọc lẫn nhau bên trong thân hàm (không
-// phải lúc module khởi tạo), việc trì hoãn require tới lúc gọi thực tế giúp
-// tránh lỗi "Cannot access before initialization" khi Metro bundle.
-const useAuthZustand = require("../zustand/useAuthZustand").default;
+
+// ĐÃ XÓA dòng require ở đây để triệt tiêu hoàn toàn Require Cycle (vòng lặp import).
 
 // ======================================================
 // AXIOS INSTANCE
@@ -34,6 +30,8 @@ const api = axios.create({
 
 api.interceptors.request.use(
   (config) => {
+    // REQUIRE được chuyển vào đây: Chỉ gọi khi request chuẩn bị bắn đi
+    const useAuthZustand = require("../zustand/useAuthZustand").default || require("../zustand/useAuthZustand");
     const token = useAuthZustand.getState().accessToken;
 
     if (token) {
@@ -67,6 +65,9 @@ api.interceptors.response.use(
     const isLoginRequest = requestUrl.includes("/auth/login") || requestUrl.includes("/login");
 
     if (status === 401 && !isLoginRequest) {
+      // REQUIRE được chuyển vào đây: Chỉ gọi khi API trả về lỗi 401
+      const useAuthZustand = require("../zustand/useAuthZustand").default || require("../zustand/useAuthZustand");
+      
       useAuthZustand.getState().clearAuth();
       resetToLogin();
     }

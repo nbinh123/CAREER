@@ -22,7 +22,13 @@ const useIngredientZustand = create((set, get) => ({
   saveError: null,
 
   // ─── Getters ───────────────────────────────────────────
-  get hasPendingChanges() {
+  // [FIX] Đổi từ `get propName()` (accessor) sang hàm thường: zustand
+  // dùng Object.assign({}, state, partial) mỗi lần set(), thao tác này đọc
+  // giá trị của getter rồi gắn lại như 1 field tĩnh — kết quả bị "đông
+  // cứng" ngay tại thời điểm set() đầu tiên và không cập nhật nữa. Dùng
+  // hàm (gọi lại get() mỗi lần invoke) để luôn phản ánh state mới nhất,
+  // đồng nhất với useFoodZustand/useFruitZustand.
+  hasPendingChanges: () => {
     const { pendingChanges } = get();
     return (
       pendingChanges.added.length > 0 ||
@@ -31,7 +37,7 @@ const useIngredientZustand = create((set, get) => ({
     );
   },
 
-  get pendingCount() {
+  pendingCount: () => {
     const { pendingChanges } = get();
     return (
       pendingChanges.added.length + pendingChanges.updated.length + pendingChanges.deleted.length

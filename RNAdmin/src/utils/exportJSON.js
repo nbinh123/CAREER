@@ -6,10 +6,18 @@
 import axios from "axios";
 import * as FileSystem from "expo-file-system";
 import * as Sharing from "expo-sharing";
+import useAuthZustand from "../zustand/useAuthZustand";
 
 async function exportUsers(http, name) {
   try {
-    const res = await axios.get(http);
+    // [FIX] Gọi axios trần không gắn Bearer token, khác với phần còn lại
+    // của app (callAPI.js tự gắn token qua interceptor) — nếu route yêu
+    // cầu đăng nhập (nhiều khả năng có, vì các route GET tương đương khác
+    // đều cần token) request này sẽ luôn nhận 401.
+    const token = useAuthZustand.getState().accessToken;
+    const res = await axios.get(http, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
     const users = res.data;
     const json = JSON.stringify(users, null, 2);
 

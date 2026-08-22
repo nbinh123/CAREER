@@ -121,6 +121,11 @@ const useAuthZustand = create(
 
       /* =========================================================
          LOGOUT
+         [FIX] Thêm isWorking: true — trước đó không reset field này, nên
+         nếu 1 nhân viên bấm "tạm dừng ca" (stopWorking()) rồi đăng xuất mà
+         KHÔNG tắt app, người đăng nhập kế tiếp trên cùng thiết bị (rất phổ
+         biến với tablet/điện thoại dùng chung ở quầy) sẽ bị chặn nhầm ở
+         màn Forbidden "đang tạm dừng ca" dù họ chưa từng bấm nút đó.
       ========================================================= */
       logout: () => {
         set({
@@ -130,6 +135,7 @@ const useAuthZustand = create(
           isAuthenticated: false,
           isAdmin: false,
           shiftStartTime: null,
+          isWorking: true,
         });
       },
 
@@ -140,6 +146,7 @@ const useAuthZustand = create(
          để không chặn logic reset state đồng bộ ngay bên dưới — persist
          middleware sẽ tự ghi đè lại storage ngay sau set() nên việc xoá
          chạy nền là an toàn.
+         [FIX] Cùng lý do reset isWorking: true như logout() ở trên.
       ========================================================= */
       clearAuth: () => {
         AsyncStorage.removeItem("auth-storage").catch((err) =>
@@ -152,6 +159,7 @@ const useAuthZustand = create(
           isAuthenticated: false,
           isAdmin: false,
           shiftStartTime: null,
+          isWorking: true,
         });
       },
 

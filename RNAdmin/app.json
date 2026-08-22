@@ -11,7 +11,9 @@
       "resizeMode": "contain",
       "backgroundColor": "#f0fdf4"
     },
-    "assetBundlePatterns": ["**/*"],
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.nguyenbinh.chienthangadmin"
@@ -27,7 +29,14 @@
       "favicon": "./assets/favicon.png"
     },
     "extra": {
-      "apiUrl": "http://localhost:5000"
-    }
+      "apiUrl": "https://career-tf7j.onrender.com"
+    },
+    "plugins": [
+      "@react-native-community/datetimepicker",
+      "expo-font",
+      "expo-sharing",
+      "expo-splash-screen",
+      "expo-status-bar"
+    ]
   }
 }

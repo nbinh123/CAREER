@@ -15,8 +15,12 @@ export const navigationRef = createNavigationContainerRef();
  */
 export function resetToLogin() {
   if (!navigationRef.isReady()) return;
+  // [FIX] RootNavigator.js chỉ đăng ký route "Login" trực tiếp (không có
+  // navigator con lồng tên "Auth") khi !isAuthenticated — route "Auth" cũ
+  // không tồn tại nên resetRoot sẽ báo lỗi "not handled by any navigator"
+  // và không reset được lịch sử điều hướng.
   navigationRef.resetRoot({
     index: 0,
-    routes: [{ name: "Auth", params: { screen: "Login" } }],
+    routes: [{ name: "Login" }],
   });
 }
