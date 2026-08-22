@@ -15,33 +15,55 @@ export default function HomePage() {
   const [todayData, setTodayData] = useState({});
   const [topDishes, setTopDishes] = useState(DEFAULT_TOP_DISHES);
 
+  // Tối ưu: cờ isMounted trong mỗi effect — tránh setState trên component
+  // đã unmount nếu user rời trang trước khi request kịp trả về (dễ xảy ra
+  // vì đây thường là màn hình mở đầu app, user có thể chuyển tab rất nhanh).
   useEffect(() => {
+    let isMounted = true;
+
     getData({ url: "/analyst/stats" })
       .then((response) => {
+        if (!isMounted) return;
         const data = response?.data?.data;
         setTodayData(data && typeof data === "object" ? data : {});
       })
       .catch((err) => {
+        if (!isMounted) return;
         console.error("Failed to fetch today's data:", err);
         setTodayData({});
       });
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   useEffect(() => {
+    let isMounted = true;
+
     getData({ url: "/analyst/week-revenue" })
       .then((response) => {
+        if (!isMounted) return;
         const data = response?.data?.data;
         setMiniRev(Array.isArray(data) ? data : []);
       })
       .catch((err) => {
+        if (!isMounted) return;
         console.error("Failed to fetch week's data:", err);
         setMiniRev([]);
       });
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   useEffect(() => {
+    let isMounted = true;
+
     getData({ url: "/analyst/top-dishes?period=week" })
       .then((response) => {
+        if (!isMounted) return;
         const data = response?.data?.data;
         const filteredData = Array.isArray(data)
           ? data.filter((item) => item?.name !== "Các món khác")
@@ -49,13 +71,23 @@ export default function HomePage() {
         setTopDishes(filteredData.length > 0 ? filteredData : DEFAULT_TOP_DISHES);
       })
       .catch((err) => {
+        if (!isMounted) return;
         console.error("Failed to fetch top 5 dishes:", err);
         setTopDishes(DEFAULT_TOP_DISHES);
       });
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   const safeMiniRev = Array.isArray(miniRev) ? miniRev : [];
   const safeTopDishes = Array.isArray(topDishes) && topDishes.length > 0 ? topDishes : DEFAULT_TOP_DISHES;
+
+  // Tối ưu: tính 1 lần thay vì lặp lại bên trong .map() bên dưới — giá trị
+  // này không đổi giữa các item vì luôn lấy từ item đầu tiên (đã sort giảm
+  // dần theo sold/value từ backend).
+  const topDishMaxValue = safeTopDishes[0]?.sold || safeTopDishes[0]?.value || 1;
 
   const todayLabel = new Date().toLocaleDateString("vi-VN", {
     weekday: "long",
@@ -97,11 +129,10 @@ export default function HomePage() {
         <View style={{ gap: 14 }}>
           {safeTopDishes.map((item, i) => {
             const currentValue = item?.sold || item?.value || 0;
-            const maxValue = safeTopDishes[0]?.sold || safeTopDishes[0]?.value || 1;
-            const percent = (currentValue / maxValue) * 100;
+            const percent = (currentValue / topDishMaxValue) * 100;
 
             return (
-              <View key={i}>
+              <View key={item?.name ?? i}>
                 <View className="flex-row justify-between mb-1">
                   <Text className="text-sm font-semibold text-gray-700 flex-1 mr-2" numberOfLines={1}>
                     {item?.name}

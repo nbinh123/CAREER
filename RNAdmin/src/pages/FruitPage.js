@@ -105,7 +105,12 @@ function MarginBar({ margin }) {
   );
 }
 
-function ItemImage({ src, name, style }) {
+// [PERF] Memo hoá: ItemImage được dùng lặp lại trong mỗi Card của danh sách
+// (và trong 2 modal chi tiết). Khi component cha (FruitPage) re-render vì lý
+// do không liên quan (gõ ô tìm kiếm, gõ trong modal khác...), ItemImage vẫn
+// giữ nguyên nếu props (src, name, style) không đổi — tránh phải tính lại
+// state `errored` và tránh Image bị "nháy"/tải lại không cần thiết.
+const ItemImage = React.memo(function ItemImage({ src, name, style }) {
   const [errored, setErrored] = useState(false);
   if (!src || errored) {
     return (
@@ -125,7 +130,7 @@ function ItemImage({ src, name, style }) {
       resizeMode="cover"
     />
   );
-}
+});
 
 /** Nhãn nhỏ dạng label + input, thay cho <FormInput> chung của bản web
  * (không có trong gói bàn giao) — chỉ dùng nội bộ trang này. */
@@ -207,7 +212,13 @@ function ModalButton({ onPress, label, icon: Icon, variant = "primary", disabled
 
 // ─── Trái cây: Card + Info Modal ───────────────────────────────────────────
 
-function FruitCard({ fruit, onEdit, onInfo, onRemove, onEditNote, isPending, onToggleAvailable }) {
+// [PERF] Memo hoá FruitCard: đây là item được lặp lại nhiều lần trong danh
+// sách. FruitPage re-render liên tục (gõ ô tìm kiếm, gõ trong modal thêm/sửa,
+// đổi trạng thái lưu...) nhưng dữ liệu của từng fruit cụ thể thường KHÔNG đổi.
+// Kết hợp với việc các callback (onEdit/onInfo/onRemove/onEditNote/
+// onToggleAvailable) đã được ổn định bằng useCallback bên dưới, React.memo ở
+// đây sẽ chặn được phần lớn re-render thừa của từng Card.
+const FruitCard = React.memo(function FruitCard({ fruit, onEdit, onInfo, onRemove, onEditNote, isPending, onToggleAvailable }) {
   return (
     <View
       className={`bg-white rounded-2xl overflow-hidden border ${
@@ -287,7 +298,7 @@ function FruitCard({ fruit, onEdit, onInfo, onRemove, onEditNote, isPending, onT
       </View>
     </View>
   );
-}
+});
 
 function FruitInfoModal({ fruit, visible, onClose }) {
   if (!fruit) return null;
@@ -348,7 +359,9 @@ function FruitInfoModal({ fruit, visible, onClose }) {
 
 // ─── Combo trái cây mix: Card + Info Modal ─────────────────────────────────
 
-function ComboCard({ combo, onEdit, onInfo, onRemove, onEditNote, isPending }) {
+// [PERF] Tương tự FruitCard — memo hoá vì đây là item lặp lại trong danh sách
+// combo, và các callback truyền vào đã được ổn định bằng useCallback.
+const ComboCard = React.memo(function ComboCard({ combo, onEdit, onInfo, onRemove, onEditNote, isPending }) {
   const margin =
     combo.originalPrice > 0 ? Math.round(((combo.originalPrice - combo.costPrice) / combo.originalPrice) * 100) : 0;
 
@@ -436,7 +449,7 @@ function ComboCard({ combo, onEdit, onInfo, onRemove, onEditNote, isPending }) {
       </View>
     </View>
   );
-}
+});
 
 function ComboInfoModal({ combo, visible, onClose }) {
   if (!combo) return null;
@@ -570,11 +583,16 @@ export default function FruitPage() {
   const [comboNoteDraft, setComboNoteDraft] = useState("");
 
   // ── Trái cây: handlers [GIU-NGUYEN logic] ──
-  const openNoteEdit = (fr) => {
+  // [PERF] useCallback: các hàm open*/close* này được truyền xuống làm props
+  // của FruitCard (đã React.memo). Nếu không ổn định tham chiếu, mỗi lần
+  // FruitPage re-render (gõ ô tìm kiếm, gõ trong modal khác...) sẽ tạo hàm
+  // mới → phá vỡ React.memo → toàn bộ danh sách vẫn render lại dù dữ liệu
+  // không đổi. Các hàm này chỉ gọi setState nên deps rỗng là an toàn.
+  const openNoteEdit = useCallback((fr) => {
     setNoteFruit(fr);
     setNoteDraft(fr.note || "");
     setModal("note");
-  };
+  }, []);
 
   const handleSaveNote = () => {
     if (!noteFruit) return;
@@ -609,12 +627,12 @@ export default function FruitPage() {
     setImageFieldKey((k) => k + 1);
   };
 
-  const openAdd = () => {
+  const openAdd = useCallback(() => {
     setForm({ ...EMPTY_FRUIT });
     setImageFile(null);
     setImageRemoved(false);
     setModal("add");
-  };
+  }, []);
 
   const exportData = () => {
     exportJSON(`${API_URL}/api/fruits`, "fruits");
@@ -635,7 +653,7 @@ export default function FruitPage() {
     }
   };
 
-  const openEdit = (fr) => {
+  const openEdit = useCallback((fr) => {
     setForm({
       ...fr,
       ingredients: (fr.ingredients || []).map((i) => ({
@@ -647,20 +665,21 @@ export default function FruitPage() {
     setImageRemoved(false);
     setEditId(fr._id);
     setModal("edit");
-  };
+  }, []);
 
-  const openInfo = (fr) => {
+  const openInfo = useCallback((fr) => {
     setInfoFruit(fr);
     setModal("info");
-  };
-  const closeModal = () => {
+  }, []);
+
+  const closeModal = useCallback(() => {
     setModal(null);
     setEditId(null);
     setImageFile(null);
     setImageRemoved(false);
     setNoteFruit(null);
     setNoteDraft("");
-  };
+  }, []);
 
   const handleSave = () => {
     if (!form.fruitName.trim()) return;
@@ -690,11 +709,13 @@ export default function FruitPage() {
   };
 
   // ── Combo: handlers [GIU-NGUYEN logic] ──
-  const openComboNoteEdit = (cb) => {
+  // [PERF] Tương tự nhóm handler của Trái cây ở trên — ổn định tham chiếu để
+  // React.memo trên ComboCard phát huy tác dụng.
+  const openComboNoteEdit = useCallback((cb) => {
     setNoteCombo(cb);
     setComboNoteDraft(cb.note || "");
     setComboModal("note");
-  };
+  }, []);
 
   const handleComboSaveNote = () => {
     if (!noteCombo) return;
@@ -730,14 +751,14 @@ export default function FruitPage() {
     setComboImageFieldKey((k) => k + 1);
   };
 
-  const openComboAdd = () => {
+  const openComboAdd = useCallback(() => {
     setComboForm({ ...EMPTY_COMBO });
     setComboImageFile(null);
     setComboImageRemoved(false);
     setComboModal("add");
-  };
+  }, []);
 
-  const openComboEdit = (cb) => {
+  const openComboEdit = useCallback((cb) => {
     setComboForm({
       ...cb,
       categoryId: MIX_CATEGORY,
@@ -750,20 +771,21 @@ export default function FruitPage() {
     setComboImageRemoved(false);
     setComboEditId(cb._id);
     setComboModal("edit");
-  };
+  }, []);
 
-  const openComboInfo = (cb) => {
+  const openComboInfo = useCallback((cb) => {
     setInfoCombo(cb);
     setComboModal("info");
-  };
-  const closeComboModal = () => {
+  }, []);
+
+  const closeComboModal = useCallback(() => {
     setComboModal(null);
     setComboEditId(null);
     setComboImageFile(null);
     setComboImageRemoved(false);
     setNoteCombo(null);
     setComboNoteDraft("");
-  };
+  }, []);
 
   const handleComboSave = () => {
     if (!comboForm.foodName.trim()) return;
@@ -1073,180 +1095,193 @@ export default function FruitPage() {
       </ScrollView>
 
       {/* ─── Modal thêm / sửa trái cây ─────────────────────────────────────── */}
-      <FormModalCard
-        visible={modal === "add" || modal === "edit"}
-        onClose={closeModal}
-        title={modal === "add" ? "Thêm loại trái cây" : "Chỉnh sửa loại trái cây"}
-        footer={
-          <>
-            <ModalButton onPress={closeModal} label="Hủy" variant="outline" />
-            <ModalButton onPress={handleSave} label="Xác nhận" icon={Check} disabled={!form.fruitName.trim()} />
-          </>
-        }
-      >
-        <View>
-          <Text className="text-xs font-bold text-gray-500 uppercase tracking-wide" style={{ marginBottom: 8 }}>Ảnh</Text>
-          <ImageUploadField
-            key={imageFieldKey}
-            currentUrl={imageRemoved ? null : form.imageUrl ?? null}
-            onSelect={(file) => {
-              setImageFile(file);
-              setImageRemoved(false);
-            }}
-          />
-          {(imageFile || (!imageRemoved && form.imageUrl)) && (
-            <Pressable onPress={handleRemoveImage} style={{ marginTop: 6 }}>
-              <Text className="text-xs text-red-400 font-medium">Xoá ảnh</Text>
-            </Pressable>
-          )}
-        </View>
-
-        <LabeledInput label="Tên loại trái cây *" value={form.fruitName} onChangeText={(t) => ff("fruitName", t)} />
-
-        <IngredientPicker selectedIngredients={form.ingredients} onChange={handleFruitIngredientsChange} />
-
-        <LabeledInput
-          label="Ghi chú"
-          value={form.note}
-          onChangeText={(t) => ff("note", t)}
-          multiline
-          rows={2}
-        />
-
-        <Pressable
-          onPress={() => ff("isAvailable", !form.isAvailable)}
-          className="flex-row items-center"
-          style={{ gap: 8 }}
+      {/* [PERF] Chỉ mount nội dung modal (bao gồm ImageUploadField, IngredientPicker
+          có thể khá nặng) khi thực sự đang mở. Modal của RN chỉ ẩn phần hiển thị
+          native khi visible=false, còn cây React con vẫn được render nếu vẫn nằm
+          trong JSX — nên bọc điều kiện ở đây để tránh re-render "vô hình" mỗi khi
+          FruitPage render lại (gõ ô tìm kiếm, đổi trạng thái lưu...). */}
+      {(modal === "add" || modal === "edit") && (
+        <FormModalCard
+          visible
+          onClose={closeModal}
+          title={modal === "add" ? "Thêm loại trái cây" : "Chỉnh sửa loại trái cây"}
+          footer={
+            <>
+              <ModalButton onPress={closeModal} label="Hủy" variant="outline" />
+              <ModalButton onPress={handleSave} label="Xác nhận" icon={Check} disabled={!form.fruitName.trim()} />
+            </>
+          }
         >
-          <AvailabilityToggle isAvailable={form.isAvailable} onToggle={() => ff("isAvailable", !form.isAvailable)} />
-          <Text className="text-sm font-medium text-gray-600">Đang bán</Text>
-        </Pressable>
-      </FormModalCard>
+          <View>
+            <Text className="text-xs font-bold text-gray-500 uppercase tracking-wide" style={{ marginBottom: 8 }}>Ảnh</Text>
+            <ImageUploadField
+              key={imageFieldKey}
+              currentUrl={imageRemoved ? null : form.imageUrl ?? null}
+              onSelect={(file) => {
+                setImageFile(file);
+                setImageRemoved(false);
+              }}
+            />
+            {(imageFile || (!imageRemoved && form.imageUrl)) && (
+              <Pressable onPress={handleRemoveImage} style={{ marginTop: 6 }}>
+                <Text className="text-xs text-red-400 font-medium">Xoá ảnh</Text>
+              </Pressable>
+            )}
+          </View>
+
+          <LabeledInput label="Tên loại trái cây *" value={form.fruitName} onChangeText={(t) => ff("fruitName", t)} />
+
+          <IngredientPicker selectedIngredients={form.ingredients} onChange={handleFruitIngredientsChange} />
+
+          <LabeledInput
+            label="Ghi chú"
+            value={form.note}
+            onChangeText={(t) => ff("note", t)}
+            multiline
+            rows={2}
+          />
+
+          <Pressable
+            onPress={() => ff("isAvailable", !form.isAvailable)}
+            className="flex-row items-center"
+            style={{ gap: 8 }}
+          >
+            <AvailabilityToggle isAvailable={form.isAvailable} onToggle={() => ff("isAvailable", !form.isAvailable)} />
+            <Text className="text-sm font-medium text-gray-600">Đang bán</Text>
+          </Pressable>
+        </FormModalCard>
+      )}
 
       {/* ─── Modal chi tiết trái cây ────────────────────────────────────────── */}
-      <FruitInfoModal fruit={infoFruit} visible={modal === "info"} onClose={closeModal} />
+      {modal === "info" && <FruitInfoModal fruit={infoFruit} visible onClose={closeModal} />}
 
       {/* ─── Modal sửa ghi chú trái cây ─────────────────────────────────────── */}
-      <FormModalCard
-        visible={modal === "note"}
-        onClose={closeModal}
-        title={`Ghi chú — ${noteFruit?.fruitName ?? ""}`}
-        footer={<ModalButton onPress={handleSaveNote} label="Lưu ghi chú" icon={Check} />}
-      >
-        <LabeledInput label="Ghi chú" value={noteDraft} onChangeText={setNoteDraft} multiline rows={4} />
-      </FormModalCard>
+      {modal === "note" && (
+        <FormModalCard
+          visible
+          onClose={closeModal}
+          title={`Ghi chú — ${noteFruit?.fruitName ?? ""}`}
+          footer={<ModalButton onPress={handleSaveNote} label="Lưu ghi chú" icon={Check} />}
+        >
+          <LabeledInput label="Ghi chú" value={noteDraft} onChangeText={setNoteDraft} multiline rows={4} />
+        </FormModalCard>
+      )}
 
       {/* ─── Modal thêm / sửa combo mix ─────────────────────────────────────── */}
-      <FormModalCard
-        visible={comboModal === "add" || comboModal === "edit"}
-        onClose={closeComboModal}
-        title={comboModal === "add" ? "Thêm combo trái cây mix" : "Chỉnh sửa combo trái cây mix"}
-        footer={
-          <>
-            <ModalButton onPress={closeComboModal} label="Hủy" variant="outline" />
-            <ModalButton onPress={handleComboSave} label="Xác nhận" icon={Check} disabled={!comboForm.foodName.trim()} />
-          </>
-        }
-      >
-        <View>
-          <Text className="text-xs font-bold text-gray-500 uppercase tracking-wide" style={{ marginBottom: 8 }}>
-            Ảnh combo
-          </Text>
-          <ImageUploadField
-            key={comboImageFieldKey}
-            currentUrl={comboImageRemoved ? null : comboForm.imageUrl ?? null}
-            onSelect={(file) => {
-              setComboImageFile(file);
-              setComboImageRemoved(false);
-            }}
-          />
-          {(comboImageFile || (!comboImageRemoved && comboForm.imageUrl)) && (
-            <Pressable onPress={handleComboRemoveImage} style={{ marginTop: 6 }}>
-              <Text className="text-xs text-red-400 font-medium">Xoá ảnh</Text>
-            </Pressable>
-          )}
-        </View>
-
-        <LabeledInput label="Tên combo *" value={comboForm.foodName} onChangeText={(t) => cff("foodName", t)} />
-
-        <View>
-          <Text className="text-xs font-bold text-gray-500 uppercase tracking-wide" style={{ marginBottom: 6 }}>Danh mục</Text>
-          <View className="bg-gray-50 border border-gray-200 rounded-xl" style={{ paddingHorizontal: 12, paddingVertical: 10 }}>
-            <Text className="text-sm text-gray-500 font-medium">Trái cây mix</Text>
-          </View>
-        </View>
-
-        <IngredientPicker selectedIngredients={comboForm.ingredients} onChange={handleComboIngredientsChange} />
-
-        <View>
-          <Text className="text-xs font-bold text-gray-500 uppercase tracking-wide" style={{ marginBottom: 6 }}>Giá vốn (₫)</Text>
-          {comboHasIngredients ? (
-            <View className="bg-green-50 border border-green-200 rounded-xl" style={{ paddingHorizontal: 12, paddingVertical: 10 }}>
-              <Text className="text-sm font-semibold text-green-700">
-                {fmtVND(computedComboCost)} <Text className="text-xs font-normal text-green-500">(tự tính)</Text>
-              </Text>
-            </View>
-          ) : (
-            <LabeledInput
-              value={String(comboForm.costPrice)}
-              onChangeText={(t) => cff("costPrice", Number(t) || 0)}
-              keyboardType="numeric"
-            />
-          )}
-        </View>
-
-        <LabeledInput
-          label="Giá bán (₫)"
-          value={String(comboForm.originalPrice)}
-          onChangeText={(t) => cff("originalPrice", Number(t) || 0)}
-          keyboardType="numeric"
-        />
-
-        <LabeledInput
-          label="Trọng số AI [0–1]"
-          value={String(comboForm.aiTrainingWeight)}
-          onChangeText={(t) => cff("aiTrainingWeight", Number(t) || 0)}
-          keyboardType="decimal-pad"
-        />
-
-        <View>
-          <Text className="text-xs font-bold text-gray-500 uppercase tracking-wide" style={{ marginBottom: 6 }}>Biên LN dự kiến</Text>
-          <MarginBar margin={comboMarginPreview} />
-        </View>
-
-        <LabeledInput
-          label="Ghi chú"
-          value={comboForm.note}
-          onChangeText={(t) => cff("note", t)}
-          multiline
-          rows={2}
-        />
-
-        <Pressable
-          onPress={() => cff("isAvailable", !comboForm.isAvailable)}
-          className="flex-row items-center"
-          style={{ gap: 8 }}
+      {(comboModal === "add" || comboModal === "edit") && (
+        <FormModalCard
+          visible
+          onClose={closeComboModal}
+          title={comboModal === "add" ? "Thêm combo trái cây mix" : "Chỉnh sửa combo trái cây mix"}
+          footer={
+            <>
+              <ModalButton onPress={closeComboModal} label="Hủy" variant="outline" />
+              <ModalButton onPress={handleComboSave} label="Xác nhận" icon={Check} disabled={!comboForm.foodName.trim()} />
+            </>
+          }
         >
-          <AvailabilityToggle
-            isAvailable={comboForm.isAvailable}
-            onToggle={() => cff("isAvailable", !comboForm.isAvailable)}
+          <View>
+            <Text className="text-xs font-bold text-gray-500 uppercase tracking-wide" style={{ marginBottom: 8 }}>
+              Ảnh combo
+            </Text>
+            <ImageUploadField
+              key={comboImageFieldKey}
+              currentUrl={comboImageRemoved ? null : comboForm.imageUrl ?? null}
+              onSelect={(file) => {
+                setComboImageFile(file);
+                setComboImageRemoved(false);
+              }}
+            />
+            {(comboImageFile || (!comboImageRemoved && comboForm.imageUrl)) && (
+              <Pressable onPress={handleComboRemoveImage} style={{ marginTop: 6 }}>
+                <Text className="text-xs text-red-400 font-medium">Xoá ảnh</Text>
+              </Pressable>
+            )}
+          </View>
+
+          <LabeledInput label="Tên combo *" value={comboForm.foodName} onChangeText={(t) => cff("foodName", t)} />
+
+          <View>
+            <Text className="text-xs font-bold text-gray-500 uppercase tracking-wide" style={{ marginBottom: 6 }}>Danh mục</Text>
+            <View className="bg-gray-50 border border-gray-200 rounded-xl" style={{ paddingHorizontal: 12, paddingVertical: 10 }}>
+              <Text className="text-sm text-gray-500 font-medium">Trái cây mix</Text>
+            </View>
+          </View>
+
+          <IngredientPicker selectedIngredients={comboForm.ingredients} onChange={handleComboIngredientsChange} />
+
+          <View>
+            <Text className="text-xs font-bold text-gray-500 uppercase tracking-wide" style={{ marginBottom: 6 }}>Giá vốn (₫)</Text>
+            {comboHasIngredients ? (
+              <View className="bg-green-50 border border-green-200 rounded-xl" style={{ paddingHorizontal: 12, paddingVertical: 10 }}>
+                <Text className="text-sm font-semibold text-green-700">
+                  {fmtVND(computedComboCost)} <Text className="text-xs font-normal text-green-500">(tự tính)</Text>
+                </Text>
+              </View>
+            ) : (
+              <LabeledInput
+                value={String(comboForm.costPrice)}
+                onChangeText={(t) => cff("costPrice", Number(t) || 0)}
+                keyboardType="numeric"
+              />
+            )}
+          </View>
+
+          <LabeledInput
+            label="Giá bán (₫)"
+            value={String(comboForm.originalPrice)}
+            onChangeText={(t) => cff("originalPrice", Number(t) || 0)}
+            keyboardType="numeric"
           />
-          <Text className="text-sm font-medium text-gray-600">Đang bán</Text>
-        </Pressable>
-      </FormModalCard>
+
+          <LabeledInput
+            label="Trọng số AI [0–1]"
+            value={String(comboForm.aiTrainingWeight)}
+            onChangeText={(t) => cff("aiTrainingWeight", Number(t) || 0)}
+            keyboardType="decimal-pad"
+          />
+
+          <View>
+            <Text className="text-xs font-bold text-gray-500 uppercase tracking-wide" style={{ marginBottom: 6 }}>Biên LN dự kiến</Text>
+            <MarginBar margin={comboMarginPreview} />
+          </View>
+
+          <LabeledInput
+            label="Ghi chú"
+            value={comboForm.note}
+            onChangeText={(t) => cff("note", t)}
+            multiline
+            rows={2}
+          />
+
+          <Pressable
+            onPress={() => cff("isAvailable", !comboForm.isAvailable)}
+            className="flex-row items-center"
+            style={{ gap: 8 }}
+          >
+            <AvailabilityToggle
+              isAvailable={comboForm.isAvailable}
+              onToggle={() => cff("isAvailable", !comboForm.isAvailable)}
+            />
+            <Text className="text-sm font-medium text-gray-600">Đang bán</Text>
+          </Pressable>
+        </FormModalCard>
+      )}
 
       {/* ─── Modal chi tiết combo mix ───────────────────────────────────────── */}
-      <ComboInfoModal combo={infoCombo} visible={comboModal === "info"} onClose={closeComboModal} />
+      {comboModal === "info" && <ComboInfoModal combo={infoCombo} visible onClose={closeComboModal} />}
 
       {/* ─── Modal sửa ghi chú combo mix ────────────────────────────────────── */}
-      <FormModalCard
-        visible={comboModal === "note"}
-        onClose={closeComboModal}
-        title={`Ghi chú — ${noteCombo?.foodName ?? ""}`}
-        footer={<ModalButton onPress={handleComboSaveNote} label="Lưu ghi chú" icon={Check} />}
-      >
-        <LabeledInput label="Ghi chú" value={comboNoteDraft} onChangeText={setComboNoteDraft} multiline rows={4} />
-      </FormModalCard>
+      {comboModal === "note" && (
+        <FormModalCard
+          visible
+          onClose={closeComboModal}
+          title={`Ghi chú — ${noteCombo?.foodName ?? ""}`}
+          footer={<ModalButton onPress={handleComboSaveNote} label="Lưu ghi chú" icon={Check} />}
+        >
+          <LabeledInput label="Ghi chú" value={comboNoteDraft} onChangeText={setComboNoteDraft} multiline rows={4} />
+        </FormModalCard>
+      )}
     </View>
   );
 }

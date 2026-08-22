@@ -45,7 +45,19 @@ const useIngredientZustand = create((set, get) => ({
   },
 
   // ─── Fetch từ server ───────────────────────────────────
+  // [TỐI ƯU - global] Tách thành getIngredients() (cache-first, giống hệt
+  // getFoods()/getFruits() ở 2 store anh em) + refreshIngredients() (luôn
+  // gọi API, dùng khi thực sự cần dữ liệu mới nhất, ví dụ sau khi import).
+  // Trước đây chỉ có 1 hàm gọi API vô điều kiện mỗi lần invoke — mọi màn
+  // hình mount lại (IngredientsPage, StoragePage, IngredientPicker trong
+  // form món ăn/trái cây...) đều bắn request trùng dù ingredients đã có sẵn
+  // trong store từ trước (ví dụ do App.js preload lúc khởi động).
   getIngredients: async () => {
+    if (get().ingredients.length > 0) return;
+    await get().refreshIngredients();
+  },
+
+  refreshIngredients: async () => {
     set({ isLoading: true });
     try {
       const data = await IngredientService.getAllIngredients();

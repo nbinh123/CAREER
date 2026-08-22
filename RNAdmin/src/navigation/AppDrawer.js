@@ -23,16 +23,10 @@ import FruitPage from "../pages/FruitPage";
 import OnlineOrdersPage from "../pages/OnlineOrdersPage";
 import StoragePage from "../pages/StoragePage";
 import VoucherPage from "../pages/VoucherPage";
+import KitchenPage from "../pages/KitchenPage";
+import OrdersPage from "../pages/OrdersPage";
 
 const Drawer = createDrawerNavigator();
-
-// [FIX] Menu/Fruit/Online/Storage/Voucher đã được viết đầy đủ (file thật,
-// không phải placeholder — xem MenuPage.js, FruitPage.js,
-// OnlineOrdersPage.js, StoragePage.js, VoucherPage.js) nhưng bị bỏ sót bước
-// gắn vào map này, y hệt tình huống từng xảy ra với CashFlow trước đây.
-// Hậu quả: 5 trang này là dead code, Drawer luôn hiện PlaceholderPage thay
-// vì bản thật dù đã tồn tại sẵn. Gắn lại ở đây. Chỉ còn Orders, Analyst,
-// StaffManager, Kitchen là thật sự chưa có file — vẫn dùng placeholder.
 const SCREEN_COMPONENTS = {
   Home: HomePage,
   CashFlow: CashFlowPage,
@@ -43,7 +37,14 @@ const SCREEN_COMPONENTS = {
   Online: OnlineOrdersPage,
   Storage: StoragePage,
   Voucher: VoucherPage,
+  Orders: OrdersPage,
+  Kitchen: KitchenPage
 };
+const PROTECTED_SCREENS = NAV.map(({ screen, label }) => {
+  const RawComponent = SCREEN_COMPONENTS[screen] ?? makePlaceholder(label);
+  const requireAdmin = ADMIN_ONLY_SCREENS.has(screen);
+  return { screen, label, Component: withProtection(RawComponent, { requireAdmin }) };
+});
 
 export default function AppDrawer() {
   return (
@@ -57,18 +58,9 @@ export default function AppDrawer() {
         drawerStyle: { width: 224 },
       }}
     >
-      {NAV.map(({ screen, label }) => {
-        const RawComponent = SCREEN_COMPONENTS[screen] ?? makePlaceholder(label);
-        const requireAdmin = ADMIN_ONLY_SCREENS.has(screen);
-        return (
-          <Drawer.Screen
-            key={screen}
-            name={screen}
-            component={withProtection(RawComponent, { requireAdmin })}
-            options={{ title: label }}
-          />
-        );
-      })}
+      {PROTECTED_SCREENS.map(({ screen, label, Component }) => (
+        <Drawer.Screen key={screen} name={screen} component={Component} options={{ title: label }} />
+      ))}
     </Drawer.Navigator>
   );
 }

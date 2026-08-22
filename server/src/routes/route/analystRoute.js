@@ -15,8 +15,6 @@ router.get("/heatmap", authMiddleware, AnalystController.getHeatmap);
 router.get("/pid", authMiddleware, AnalystController.getPidData);
 router.get("/weekly", authMiddleware, AnalystController.getWeeklySummary);
 router.get("/week-revenue", authMiddleware, AnalystController.getLast7DaysRevenue);
-
-// test
 router.get("/food-weights", authMiddleware, AnalystController.updateFoodWeights);
 router.get("/margin", authMiddleware, AnalystController.getMarginAnalytics);
 router.get("/avg-bill-value", authMiddleware, AnalystController.getAvgBillValue);

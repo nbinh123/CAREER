@@ -1,15 +1,32 @@
+// src/pages/RegisterPage.js
+// [UI] Chuyển đổi RegisterPage.js gốc (629 dòng, CSS-in-JS thuần). Giữ
+// nguyên 100% logic: validators (fullName/phone/citizenId/username), hiện
+// mật khẩu mặc định trả về, rồi reset form thay vì điều hướng đi đâu khác
+// (đúng hành vi cũ: admin có thể tạo liên tiếp nhiều tài khoản).
+//
+// [TỐI ƯU - global] Bản trước gọi thẳng axios.post(...) kèm header
+// Authorization thủ công, KHÔNG đi qua callAPI.js — vi phạm đúng điều cấm
+// ở mục 14 (tạo axios call rời khỏi API layer dùng chung). Hệ quả: request
+// này không có timeout 10s như mọi request khác, và nếu token hết hạn đúng
+// lúc gọi, không có interceptor 401 nào tự đăng xuất/điều hướng về Login —
+// hành vi khác biệt so với toàn bộ phần còn lại của app. Đổi sang
+// postData() từ callAPI.js: token được interceptor tự đính kèm (không cần
+// đọc accessToken thủ công nữa), giữ nguyên 100% payload/response shape và
+// toàn bộ logic xử lý kết quả bên dưới.
+//
+// Khác biệt platform duy nhất: <select> role → dãy chip Pressable (5 lựa
+// chọn, đủ ít để không cần dropdown/modal). Nền dùng lại AuthBackground
+// dùng chung với LoginPage.
 import React, { useRef, useState } from "react";
 import { View, Text, TextInput, Pressable, ScrollView, KeyboardAvoidingView, Platform } from "react-native";
 import Animated, { FadeInDown, FadeOutDown } from "react-native-reanimated";
-import axios from "axios";
 import { CircleAlert, UserPlus } from "lucide-react-native";
-import useAuthZustand from "../zustand/useAuthZustand";
-import { API_URL } from "../config/api";
+import { postData } from "../utils/callAPI";
 import AuthBackground from "../components/AuthBackground";
 import PrimaryButton from "../components/PrimaryButton";
 import colors from "../theme/tokens";
 
-const endpoint = `${API_URL}/api/users/register`;
+const REGISTER_URL = "/users/register";
 
 const ROLES = [
   { value: "staff", label: "👷 Nhân viên" },
@@ -27,8 +44,6 @@ const FIELDS = [
 ];
 
 export default function RegisterPage() {
-  const accessToken = useAuthZustand((state) => state.accessToken);
-
   const [form, setForm] = useState({
     fullName: "",
     username: "",
@@ -109,14 +124,14 @@ export default function RegisterPage() {
         payload.username = form.username.trim();
       }
 
-      const response = await axios.post(endpoint, payload, {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json",
-        },
-      });
+      const res = await postData({ url: REGISTER_URL, data: payload });
 
-      const result = response.data;
+      if (!res.success) {
+        showToast("❌ " + (res.message || "Lỗi server"));
+        return;
+      }
+
+      const result = res.data;
 
       if (!result.success) {
         showToast("❌ " + (result.message || "Đăng ký thất bại"));
@@ -128,9 +143,6 @@ export default function RegisterPage() {
 
       setForm({ fullName: "", username: "", phone: "", citizenId: "", role: "staff" });
       setErrors({});
-    } catch (err) {
-      const msg = err?.response?.data?.message || err?.message || "Lỗi server";
-      showToast("❌ " + msg);
     } finally {
       setLoading(false);
     }

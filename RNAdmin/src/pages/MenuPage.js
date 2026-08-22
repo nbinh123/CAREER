@@ -3,6 +3,7 @@ import {
     View,
     Text,
     ScrollView,
+    FlatList,
     Pressable,
     TextInput,
     Modal,
@@ -286,7 +287,13 @@ function FoodImage({ src, name, style }) {
     );
 }
 
-function FoodCard({ food, onEdit, onInfo, onRemove, onEditNote, isPending, onToggleAvailable }) {
+// [PERF] FoodCard là item của FlatList và có cây con khá nặng (ảnh, badge,
+// switch, 4 nút hành động). Bọc React.memo để mỗi item chỉ re-render khi
+// chính props của NÓ đổi — không phải mỗi khi MenuPage re-render (gõ tìm
+// kiếm, đổi filter, mở modal...). Điều kiện để memo có tác dụng: mọi hàm
+// truyền xuống (onEdit/onInfo/onRemove/onEditNote/onToggleAvailable) phải
+// giữ nguyên reference giữa các lần render — xem useCallback ở MenuPage.
+const FoodCard = React.memo(function FoodCard({ food, onEdit, onInfo, onRemove, onEditNote, isPending, onToggleAvailable }) {
     const margin =
         food.originalPrice > 0
             ? Math.round(((food.originalPrice - food.costPrice) / food.originalPrice) * 100)
@@ -373,7 +380,29 @@ function FoodCard({ food, onEdit, onInfo, onRemove, onEditNote, isPending, onTog
             </View>
         </View>
     );
+});
+
+// [PERF] Separator cấp module (không đọc props/state) để thay cho gap:12
+// từng có trên View bọc list — giữ đúng khoảng cách 12px giữa các thẻ khi
+// chuyển sang FlatList (FlatList không có prop `gap` cho khoảng cách giữa
+// item, phải dùng ItemSeparatorComponent).
+function ItemSeparator() {
+    return <View style={{ height: 12 }} />;
 }
+
+// [PERF] Nội dung tĩnh, không phụ thuộc state → khai báo ở cấp module để
+// reference KHÔNG BAO GIỜ đổi giữa các lần render. Nếu khai báo bên trong
+// MenuPage (kể cả bằng useMemo([])), vẫn ổn, nhưng đưa hẳn ra ngoài là cách
+// đơn giản và chắc chắn nhất, và áp dụng được cho object style — nơi rất dễ
+// vô tình tạo reference mới mỗi lần render (`style={{...}}` inline).
+const LIST_EMPTY_ELEMENT = (
+    <View className="items-center py-16">
+        <Text className="text-base font-bold text-gray-400">Không tìm thấy món ăn</Text>
+        <Text className="text-sm text-gray-300 mt-1">Thử thay đổi bộ lọc hoặc từ khoá tìm kiếm</Text>
+    </View>
+);
+
+const LIST_CONTENT_STYLE = { padding: 16, paddingBottom: 40 };
 
 // ─── Info Modal ─────────────────────────────────────────────────────────
 
@@ -493,12 +522,21 @@ export default function MenuPage() {
     const [isImporting, setIsImporting] = useState(false);
     const [importError, setImportError] = useState(null);
 
-    const openNoteEdit = (fd) => {
+    // [PERF] openEdit/openInfo/openNoteEdit được truyền thẳng xuống FoodCard
+    // (đã bọc React.memo). Nếu để là function thường, MenuPage re-render lần
+    // nào (gõ ô tìm kiếm, đổi filter, mở modal khác...) cũng tạo ra reference
+    // mới → React.memo trên FoodCard mất tác dụng, mọi item vẫn render lại.
+    // useCallback([]) giữ nguyên reference vì các hàm này chỉ dùng setter
+    // (setForm/setModal/...) vốn đã ổn định giữa các lần render.
+    const openNoteEdit = useCallback((fd) => {
         setNoteFood(fd);
         setNoteDraft(fd.note || "");
         setModal("note");
-    };
+    }, []);
 
+    // handleSaveNote KHÔNG truyền xuống FoodCard (chỉ dùng trong modal ghi
+    // chú) nên không cần useCallback — giữ nguyên dạng function thường như
+    // bản gốc để code dễ đọc, tránh tối ưu không mang lại lợi ích thực tế.
     const handleSaveNote = () => {
         if (!noteFood) return;
         stageUpdateFood({ ...noteFood, note: noteDraft }, null); // không đổi ảnh
@@ -559,21 +597,26 @@ export default function MenuPage() {
         []
     );
 
-    // Modal controls
-    const openAdd = () => {
+    // [PERF] Modal controls — openAdd/exportData/handleImportPick giờ được
+    // truyền vào phần header đã useMemo (xem bên dưới). Nếu để function
+    // thường, mỗi lần MenuPage render (kể cả gõ trong modal, không liên quan
+    // đến header) sẽ tạo reference mới → làm "hỏng" điều kiện memo của
+    // header, kéo theo FlatList render lại oan uổng. useCallback([]) giữ
+    // reference ổn định vì bên trong chỉ dùng setter/module import ổn định.
+    const openAdd = useCallback(() => {
         setForm({ ...EMPTY_FOOD });
         setImageFile(null);
         setImageRemoved(false);
         setModal("add");
-    };
+    }, []);
 
-    const exportData = () => {
+    const exportData = useCallback(() => {
         exportJSON(`${API_URL}/api/foods`, "foods").catch((err) => {
             console.error("exportData:", err);
         });
-    };
+    }, []);
 
-    const handleImportPick = async () => {
+    const handleImportPick = useCallback(async () => {
         setImportError(null);
         setIsImporting(true);
         try {
@@ -586,9 +629,9 @@ export default function MenuPage() {
         } finally {
             setIsImporting(false);
         }
-    };
+    }, [getFoods]);
 
-    const openEdit = (fd) => {
+    const openEdit = useCallback((fd) => {
         setForm({
             ...fd,
             categoryId: extractCatName(fd.categoryId),
@@ -605,12 +648,13 @@ export default function MenuPage() {
         setImageRemoved(false);
         setEditId(fd._id);
         setModal("edit");
-    };
+    }, []);
 
-    const openInfo = (fd) => {
+    const openInfo = useCallback((fd) => {
         setInfoFood(fd);
         setModal("info");
-    };
+    }, []);
+
     const closeModal = () => {
         setModal(null);
         setEditId(null);
@@ -642,7 +686,7 @@ export default function MenuPage() {
         [stageUpdateFood]
     );
 
-    const handleRefreshCosts = async () => {
+    const handleRefreshCosts = useCallback(async () => {
         try {
             const data = await refreshCosts();
             setRefreshMsg(`Đã cập nhật giá cho ${data?.updatedCount ?? 0} món`);
@@ -651,9 +695,9 @@ export default function MenuPage() {
         } finally {
             setTimeout(() => setRefreshMsg(null), 3000);
         }
-    };
+    }, [refreshCosts]);
 
-    const handleSaveAll = async () => {
+    const handleSaveAll = useCallback(async () => {
         setSaveStatus("saving");
         try {
             await saveAllChanges();
@@ -663,155 +707,223 @@ export default function MenuPage() {
             setSaveStatus("error");
             setTimeout(() => setSaveStatus(null), 3000);
         }
-    };
+    }, [saveAllChanges]);
 
     // Margin sống trong modal thêm/sửa (theo giá vốn tạm tính, chưa lưu)
     const liveCost = hasIngredients ? computedCostPrice : Number(form.costPrice) || 0;
     const liveOriginal = Number(form.originalPrice) || 0;
     const liveMargin = liveOriginal > 0 ? Math.round(((liveOriginal - liveCost) / liveOriginal) * 100) : 0;
 
+    // [PERF] renderItem/keyExtractor cho FlatList — bọc useCallback để giữ
+    // reference ổn định giữa các lần render (tránh FlatList nghĩ cấu hình
+    // đổi và làm mất tối ưu nội bộ của nó). Phụ thuộc đúng những gì thực sự
+    // dùng bên trong: các callback đã ổn định (useCallback ở trên) +
+    // pendingChanges (đổi khi có thay đổi staged).
+    const keyExtractor = useCallback((item) => item._id, []);
+
+    const renderFoodItem = useCallback(
+        ({ item: food }) => (
+            <FoodCard
+                food={food}
+                onEdit={openEdit}
+                onInfo={openInfo}
+                onRemove={handleRemove}
+                onEditNote={openNoteEdit}
+                onToggleAvailable={handleToggleAvailable}
+                isPending={pendingChanges.has(`add:${food._id}`) || pendingChanges.has(`update:${food._id}`)}
+            />
+        ),
+        [openEdit, openInfo, handleRemove, openNoteEdit, handleToggleAvailable, pendingChanges]
+    );
+
+    // [PERF-FIX] Nội dung header (tiêu đề, toolbar, banner lỗi, search + filter).
+    // TRƯỚC: đây là 1 biến JSX dựng lại mỗi lần MenuPage render, và được bọc
+    // trong 1 *function* (`renderListHeader`) khi truyền cho FlatList — RN
+    // coi function mới mỗi lần là "component khác", nên unmount/mount lại
+    // toàn bộ header (title, 6 nút toolbar, banner, search, filter pill) ở
+    // MỌI lần render, kể cả khi chỉ đang gõ trong modal thêm nguyên liệu hay
+    // bấm chọn danh mục. Đó chính là nguyên nhân cảm giác "delay".
+    // SAU: bọc useMemo, chỉ tính lại khi 1 trong các dependency dưới đây đổi.
+    // Nhờ vậy khi bạn sửa `form` (thêm nguyên liệu, gõ giá...) — thứ header
+    // không hề phụ thuộc — header giữ nguyên reference, và vì FlatList là
+    // PureComponent, nó thấy props không đổi nên BỎ QUA re-render hoàn toàn
+    // (không chỉ tránh remount, mà tránh luôn cả việc render lại).
+    const headerSection = useMemo(
+        () => (
+        <View style={{ gap: 14 }}>
+            {/* ── Header ────────────────────────────────────────────────── */}
+            <View>
+                <Text className="text-2xl font-black text-green-900">Thực đơn</Text>
+                <Text className="text-gray-500 text-sm mt-0.5">
+                    {visibleFoods.length} món • {visibleFoods.filter((f) => f.isAvailable).length} đang bán
+                </Text>
+            </View>
+
+            {/* ── Toolbar hành động ────────────────────────────────────── */}
+            <View className="flex-row flex-wrap items-center" style={{ gap: 8 }}>
+                {pendingCount > 0 && (
+                    <>
+                        <ActionBtn icon={RotateCcw} label="Huỷ thay đổi" variant="outline" disabled={loading} onPress={discardChanges} />
+                        <Pressable
+                            onPress={handleSaveAll}
+                            disabled={loading || saveStatus === "saving"}
+                            style={{ opacity: loading || saveStatus === "saving" ? 0.6 : 1 }}
+                            className={`flex-row items-center gap-1.5 px-4 py-2.5 rounded-xl ${saveStatus === "saving" ? "bg-amber-400" : saveStatus === "error" ? "bg-red-500" : "bg-amber-500"
+                                }`}
+                        >
+                            <Save size={14} color={colors.white} />
+                            <Text className="text-sm font-bold text-white">
+                                {saveStatus === "saving" ? "Đang lưu…" : saveStatus === "error" ? "Lỗi, thử lại" : `Lưu ${pendingCount} thay đổi`}
+                            </Text>
+                        </Pressable>
+                    </>
+                )}
+                {saveStatus === "saved" && pendingCount === 0 && (
+                    <View className="flex-row items-center" style={{ gap: 4 }}>
+                        <Check size={14} color={colors.green[600]} />
+                        <Text className="text-sm text-green-600 font-bold">Đã lưu thành công</Text>
+                    </View>
+                )}
+
+                <ActionBtn icon={Plus} label="Thêm món mới" variant="primary" disabled={loading} onPress={openAdd} />
+
+                {refreshMsg && (
+                    <View className="flex-row items-center" style={{ gap: 4 }}>
+                        <Check size={14} color={colors.blue[500]} />
+                        <Text className="text-sm text-blue-600 font-bold">{refreshMsg}</Text>
+                    </View>
+                )}
+                <ActionBtn
+                    icon={RefreshCcw}
+                    label="Làm mới"
+                    loading={loading}
+                    disabled={loading || pendingCount > 0}
+                    onPress={handleRefreshCosts}
+                />
+                <ActionBtn icon={FolderOpen} label="Xuất JSON" disabled={loading} onPress={exportData} />
+                <ActionBtn
+                    icon={Upload}
+                    label={isImporting ? "Đang tải lên..." : "Tải lên JSON"}
+                    loading={isImporting}
+                    disabled={loading || isImporting}
+                    onPress={handleImportPick}
+                />
+            </View>
+
+            {/* ── Banner lỗi ───────────────────────────────────────────── */}
+            {!!error && (
+                <View className="flex-row items-center justify-between gap-3 bg-red-50 border border-red-200 rounded-xl px-4 py-3">
+                    <Text className="flex-1 text-red-700 text-sm">{error}</Text>
+                    <Pressable onPress={clearError}>
+                        <X size={14} color={colors.red[600]} />
+                    </Pressable>
+                </View>
+            )}
+            {!!importError && (
+                <View className="flex-row items-center justify-between gap-3 bg-red-50 border border-red-200 rounded-xl px-4 py-3">
+                    <Text className="flex-1 text-red-700 text-sm">{importError}</Text>
+                    <Pressable onPress={() => setImportError(null)}>
+                        <X size={14} color={colors.red[600]} />
+                    </Pressable>
+                </View>
+            )}
+
+            {/* ── Search + Filter ──────────────────────────────────────── */}
+            <View style={{ gap: 10 }}>
+                <View style={{ position: "relative", justifyContent: "center" }}>
+                    <View style={{ position: "absolute", left: 14, zIndex: 1 }}>
+                        <Search size={14} color={colors.gray[400]} />
+                    </View>
+                    <TextInput
+                        value={search}
+                        onChangeText={setSearch}
+                        placeholder="Tìm món ăn..."
+                        placeholderTextColor={colors.gray[300]}
+                        className="bg-white border border-gray-200 rounded-xl text-sm text-gray-800"
+                        style={{ paddingLeft: 38, paddingRight: 14, paddingVertical: 11 }}
+                    />
+                </View>
+                <View className="flex-row flex-wrap" style={{ gap: 8 }}>
+                    {CAT_FILTER.map((c) => (
+                        <Pressable
+                            key={c}
+                            onPress={() => setCatFilter(c)}
+                            style={{ paddingHorizontal: 12, paddingVertical: 7 }}
+                            className={`rounded-xl ${catFilter === c ? "bg-green-500" : "bg-white border border-gray-200"}`}
+                        >
+                            <Text className={`text-xs font-bold ${catFilter === c ? "text-white" : "text-gray-600"}`}>{c}</Text>
+                        </Pressable>
+                    ))}
+                </View>
+            </View>
+        </View>
+        ),
+        [
+            visibleFoods,
+            pendingCount,
+            loading,
+            saveStatus,
+            discardChanges,
+            handleSaveAll,
+            openAdd,
+            refreshMsg,
+            handleRefreshCosts,
+            exportData,
+            isImporting,
+            handleImportPick,
+            error,
+            clearError,
+            importError,
+            search,
+            catFilter,
+        ]
+    );
+
+    // Bọc thêm marginBottom cho riêng bản dùng làm ListHeaderComponent — tách
+    // useMemo cấp 2 này ra để không phải lặp lại toàn bộ danh sách dependency
+    // ở trên; nó chỉ tính lại khi headerSection (ở trên) thực sự đổi.
+    const listHeaderElement = useMemo(
+        () => <View style={{ marginBottom: 14 }}>{headerSection}</View>,
+        [headerSection]
+    );
+
+    const showInitialSkeleton = loading && visibleFoods.length === 0;
+
     return (
         <View style={{ flex: 1 }} className="bg-gray-50">
-            <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40, gap: 14 }} keyboardShouldPersistTaps="handled">
-                {/* ── Header ────────────────────────────────────────────────── */}
-                <View>
-                    <Text className="text-2xl font-black text-green-900">Thực đơn</Text>
-                    <Text className="text-gray-500 text-sm mt-0.5">
-                        {visibleFoods.length} món • {visibleFoods.filter((f) => f.isAvailable).length} đang bán
-                    </Text>
-                </View>
-
-                {/* ── Toolbar hành động ────────────────────────────────────── */}
-                <View className="flex-row flex-wrap items-center" style={{ gap: 8 }}>
-                    {pendingCount > 0 && (
-                        <>
-                            <ActionBtn icon={RotateCcw} label="Huỷ thay đổi" variant="outline" disabled={loading} onPress={discardChanges} />
-                            <Pressable
-                                onPress={handleSaveAll}
-                                disabled={loading || saveStatus === "saving"}
-                                style={{ opacity: loading || saveStatus === "saving" ? 0.6 : 1 }}
-                                className={`flex-row items-center gap-1.5 px-4 py-2.5 rounded-xl ${saveStatus === "saving" ? "bg-amber-400" : saveStatus === "error" ? "bg-red-500" : "bg-amber-500"
-                                    }`}
-                            >
-                                <Save size={14} color={colors.white} />
-                                <Text className="text-sm font-bold text-white">
-                                    {saveStatus === "saving" ? "Đang lưu…" : saveStatus === "error" ? "Lỗi, thử lại" : `Lưu ${pendingCount} thay đổi`}
-                                </Text>
-                            </Pressable>
-                        </>
-                    )}
-                    {saveStatus === "saved" && pendingCount === 0 && (
-                        <View className="flex-row items-center" style={{ gap: 4 }}>
-                            <Check size={14} color={colors.green[600]} />
-                            <Text className="text-sm text-green-600 font-bold">Đã lưu thành công</Text>
-                        </View>
-                    )}
-
-                    <ActionBtn icon={Plus} label="Thêm món mới" variant="primary" disabled={loading} onPress={openAdd} />
-
-                    {refreshMsg && (
-                        <View className="flex-row items-center" style={{ gap: 4 }}>
-                            <Check size={14} color={colors.blue[500]} />
-                            <Text className="text-sm text-blue-600 font-bold">{refreshMsg}</Text>
-                        </View>
-                    )}
-                    <ActionBtn
-                        icon={RefreshCcw}
-                        label="Làm mới"
-                        loading={loading}
-                        disabled={loading || pendingCount > 0}
-                        onPress={handleRefreshCosts}
-                    />
-                    <ActionBtn icon={FolderOpen} label="Xuất JSON" disabled={loading} onPress={exportData} />
-                    <ActionBtn
-                        icon={Upload}
-                        label={isImporting ? "Đang tải lên..." : "Tải lên JSON"}
-                        loading={isImporting}
-                        disabled={loading || isImporting}
-                        onPress={handleImportPick}
-                    />
-                </View>
-
-                {/* ── Banner lỗi ───────────────────────────────────────────── */}
-                {!!error && (
-                    <View className="flex-row items-center justify-between gap-3 bg-red-50 border border-red-200 rounded-xl px-4 py-3">
-                        <Text className="flex-1 text-red-700 text-sm">{error}</Text>
-                        <Pressable onPress={clearError}>
-                            <X size={14} color={colors.red[600]} />
-                        </Pressable>
-                    </View>
-                )}
-                {!!importError && (
-                    <View className="flex-row items-center justify-between gap-3 bg-red-50 border border-red-200 rounded-xl px-4 py-3">
-                        <Text className="flex-1 text-red-700 text-sm">{importError}</Text>
-                        <Pressable onPress={() => setImportError(null)}>
-                            <X size={14} color={colors.red[600]} />
-                        </Pressable>
-                    </View>
-                )}
-
-                {/* ── Search + Filter ──────────────────────────────────────── */}
-                <View style={{ gap: 10 }}>
-                    <View style={{ position: "relative", justifyContent: "center" }}>
-                        <View style={{ position: "absolute", left: 14, zIndex: 1 }}>
-                            <Search size={14} color={colors.gray[400]} />
-                        </View>
-                        <TextInput
-                            value={search}
-                            onChangeText={setSearch}
-                            placeholder="Tìm món ăn..."
-                            placeholderTextColor={colors.gray[300]}
-                            className="bg-white border border-gray-200 rounded-xl text-sm text-gray-800"
-                            style={{ paddingLeft: 38, paddingRight: 14, paddingVertical: 11 }}
-                        />
-                    </View>
-                    <View className="flex-row flex-wrap" style={{ gap: 8 }}>
-                        {CAT_FILTER.map((c) => (
-                            <Pressable
-                                key={c}
-                                onPress={() => setCatFilter(c)}
-                                style={{ paddingHorizontal: 12, paddingVertical: 7 }}
-                                className={`rounded-xl ${catFilter === c ? "bg-green-500" : "bg-white border border-gray-200"}`}
-                            >
-                                <Text className={`text-xs font-bold ${catFilter === c ? "text-white" : "text-gray-600"}`}>{c}</Text>
-                            </Pressable>
-                        ))}
-                    </View>
-                </View>
-
-                {/* ── Skeleton ─────────────────────────────────────────────── */}
-                {loading && visibleFoods.length === 0 && (
+            {showInitialSkeleton ? (
+                // Lần tải đầu tiên, chưa có dữ liệu để virtualize — render trực
+                // tiếp 6 skeleton card trong ScrollView như cũ, không cần FlatList.
+                <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40, gap: 14 }} keyboardShouldPersistTaps="handled">
+                    {headerSection}
                     <View style={{ gap: 12 }}>
                         {Array.from({ length: 6 }).map((_, i) => (
                             <FoodCardSkeleton key={i} />
                         ))}
                     </View>
-                )}
-
-                {/* ── Danh sách món (1 cột full-width — xem ghi chú platform) ─ */}
-                {(!loading || visibleFoods.length > 0) && (
-                    <View style={{ gap: 12 }}>
-                        {filtered.map((food) => (
-                            <FoodCard
-                                key={food._id}
-                                food={food}
-                                onEdit={openEdit}
-                                onInfo={openInfo}
-                                onRemove={handleRemove}
-                                onEditNote={openNoteEdit}
-                                onToggleAvailable={handleToggleAvailable}
-                                isPending={pendingChanges.has(`add:${food._id}`) || pendingChanges.has(`update:${food._id}`)}
-                            />
-                        ))}
-                        {filtered.length === 0 && (
-                            <View className="items-center py-16">
-                                <Text className="text-base font-bold text-gray-400">Không tìm thấy món ăn</Text>
-                                <Text className="text-sm text-gray-300 mt-1">Thử thay đổi bộ lọc hoặc từ khoá tìm kiếm</Text>
-                            </View>
-                        )}
-                    </View>
-                )}
-            </ScrollView>
+                </ScrollView>
+            ) : (
+                // [PERF] Danh sách món — trước đây là ScrollView + filtered.map(),
+                // nghĩa là TOÀN BỘ card (ảnh + nội dung) được mount cùng lúc dù có
+                // hiện trên màn hình hay không. Menu càng nhiều món thì càng tốn
+                // RAM và JS thread càng nặng khi mount/scroll. Chuyển sang FlatList
+                // để chỉ render các item gần viewport (virtualization), giữ nguyên
+                // toàn bộ UI/UX, hành vi, và business logic.
+                <FlatList
+                    data={filtered}
+                    renderItem={renderFoodItem}
+                    keyExtractor={keyExtractor}
+                    ItemSeparatorComponent={ItemSeparator}
+                    ListHeaderComponent={listHeaderElement}
+                    ListEmptyComponent={LIST_EMPTY_ELEMENT}
+                    contentContainerStyle={LIST_CONTENT_STYLE}
+                    keyboardShouldPersistTaps="handled"
+                    initialNumToRender={6}
+                    maxToRenderPerBatch={6}
+                    windowSize={7}
+                    removeClippedSubviews={true}
+                />
+            )}
 
             {/* ─── Modal thêm / sửa ──────────────────────────────────────────── */}
             {(modal === "add" || modal === "edit") && (

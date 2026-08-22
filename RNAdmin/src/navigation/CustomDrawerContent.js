@@ -1,9 +1,3 @@
-// src/navigation/CustomDrawerContent.js
-// [UI] Chuyển từ pages/SidePage.js — giữ đúng bố cục: logo + tên quán +
-// "Quản lý quán ăn", danh sách nav lọc theo role, dòng trạng thái "Kết nối
-// thời gian thực" với chấm xanh nhấp nháy. Hiệu ứng CSS @keyframes pulse
-// (opacity 1↔0.4, 2s infinite) được chuyển sang react-native-reanimated
-// loop (xem PulseDot bên dưới) — 1-1 với bản gốc.
 import React, { useEffect } from "react";
 import { View, Text, Image, Pressable, ScrollView } from "react-native";
 import { DrawerContentScrollView } from "@react-navigation/drawer";
@@ -45,7 +39,7 @@ function PulseDot() {
 export default function CustomDrawerContent(props) {
   const { navigation, state } = props;
   const insets = useSafeAreaInsets();
-  const { currentUser } = useAuthZustand();
+  const currentUser = useAuthZustand((s) => s.currentUser);
 
   const activeRouteName = state.routes[state.index]?.name;
 

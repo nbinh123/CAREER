@@ -9,6 +9,7 @@ import {
     ActivityIndicator,
     KeyboardAvoidingView,
     Platform,
+    FlatList,
 } from "react-native";
 import Animated, { FadeInDown, FadeOutDown } from "react-native-reanimated";
 import {
@@ -37,6 +38,7 @@ const NEW_ORDER_TOAST_DURATION = 6000; // mỗi toast đơn mới tự ẩn sau 
 const MAX_VISIBLE_ORDER_TOASTS = 3; // đơn mới về liên tiếp — chỉ hiện tối đa 3 toast, dư ra gộp vào dòng tổng
 const NEW_CHAT_TOAST_DURATION = 6000; // toast tin nhắn mới tự ẩn sau 6s
 const ACTION_TOAST_DURATION = 3500; // toast kết quả thao tác (thanh toán...) tự ẩn sau 3.5s
+const HISTORY_SEARCH_DEBOUNCE = 350; // [PERF] trì hoãn filter lịch sử để không chạy lại trên mỗi keystroke
 
 const PAYMENT_OPTIONS = [
     ["CASH", "💵 Tiền mặt"],
@@ -144,6 +146,51 @@ function normalizeChatMessage(raw) {
     };
 }
 
+// ─── [PERF] Giữ nguyên reference của các field không đổi khi merge dữ liệu
+// đơn hàng nhận từ socket. Server bắn lại NGUYÊN danh sách mỗi lần cập nhật
+// (`online_orders_state`), nên nếu map thẳng qua normalizeOnlineOrder, MỌI
+// đơn — kể cả đơn không hề thay đổi — đều nhận object reference MỚI, khiến
+// React.memo ở OrderCard/OrderHistoryCard vô tác dụng (props luôn "khác
+// nhau" dù nội dung giống hệt). Hàm dưới đây so sánh nội dung, và chỉ tạo
+// object mới cho đơn thực sự thay đổi. Đây là workaround ở phía client cho
+// một hạn chế thuộc kiến trúc socket (xem "Potential remaining bottlenecks"
+// trong báo cáo đi kèm) — chỉ nên áp dụng nếu team chưa muốn đổi backend
+// sang bắn diff/delta.
+function ordersContentEqual(a, b) {
+    if (
+        a.status !== b.status ||
+        a.totalPrice !== b.totalPrice ||
+        a.note !== b.note ||
+        a.cancelReason !== b.cancelReason ||
+        a.customerName !== b.customerName ||
+        a.phone !== b.phone ||
+        a.address !== b.address ||
+        a.completedAt !== b.completedAt
+    ) {
+        return false;
+    }
+    if (a.items.length !== b.items.length) return false;
+    for (let i = 0; i < a.items.length; i++) {
+        const x = a.items[i];
+        const y = b.items[i];
+        if (x.foodId !== y.foodId || x.foodName !== y.foodName || x.quantity !== y.quantity || x.unitPrice !== y.unitPrice) {
+            return false;
+        }
+    }
+    return true;
+}
+function mergeOrdersPreservingRefs(prevList, rawList) {
+    const prevById = new Map(prevList.map((o) => [o.id, o]));
+    const next = [];
+    for (const raw of rawList) {
+        const normalized = normalizeOnlineOrder(raw);
+        if (!normalized || !normalized.id) continue;
+        const prev = prevById.get(normalized.id);
+        next.push(prev && ordersContentEqual(prev, normalized) ? prev : normalized);
+    }
+    return next;
+}
+
 /* ════════════════════════════════════════════════════════════
    UI HELPERS cục bộ (thay Button/Modal dùng chung ở bản web)
 ════════════════════════════════════════════════════════════ */
@@ -212,7 +259,10 @@ function EmptyState({ icon: Icon, text }) {
 }
 
 /* ── 1 đơn đang xử lý = 1 card ───────────────────────────────────────────── */
-function OrderCard({ order, onCancel, onAdvance }) {
+/* [PERF] React.memo: khi danh sách `orders` được cập nhật qua socket, chỉ
+   những đơn thực sự đổi nội dung mới nhận object reference mới (nhờ
+   mergeOrdersPreservingRefs), nên các card không đổi sẽ bỏ qua re-render. */
+const OrderCard = React.memo(function OrderCard({ order, onCancel, onAdvance }) {
     return (
         <View className="bg-white rounded-2xl border border-gray-100 p-3.5" style={{ gap: 10 }}>
             <View className="flex-row items-start justify-between" style={{ gap: 8 }}>
@@ -257,11 +307,12 @@ function OrderCard({ order, onCancel, onAdvance }) {
             </View>
         </View>
     );
-}
+});
 
 /* ── 1 đơn lịch sử = 1 card (thay cho <tr> bảng gốc, dùng cho mọi kích cỡ
    màn hình — xem ghi chú platform ở đầu file) ──────────────────────────── */
-function OrderHistoryCard({ order, isLast, onPress }) {
+/* [PERF] React.memo — cùng lý do với OrderCard. */
+const OrderHistoryCard = React.memo(function OrderHistoryCard({ order, isLast, onPress }) {
     return (
         <Pressable
             onPress={onPress}
@@ -279,10 +330,13 @@ function OrderHistoryCard({ order, isLast, onPress }) {
             </View>
         </Pressable>
     );
-}
+});
 
 /* ── 1 hội thoại = 1 hàng trong tab Tin nhắn ─────────────────────────────── */
-function ChatThreadRow({ thread, active, onPress, isLast }) {
+/* [PERF] React.memo — hạn chế re-render khi danh sách chatThreads được thay
+   mới (server cũng bắn lại nguyên mảng, xem ghi chú "Potential remaining
+   bottlenecks"). */
+const ChatThreadRow = React.memo(function ChatThreadRow({ thread, active, onPress, isLast }) {
     return (
         <Pressable
             onPress={onPress}
@@ -314,27 +368,298 @@ function ChatThreadRow({ thread, active, onPress, isLast }) {
             </View>
         </Pressable>
     );
-}
+});
+
+/* ── Khung chat (modal) ───────────────────────────────────────────────────
+   [PERF] Tách thành component riêng, giữ ô nhập (`draft`) là state CỤC BỘ
+   ở đây thay vì ở component cha. Bản gốc để `chatDraft` trong
+   OnlineOrdersPage nên MỖI phím gõ khi trả lời khách sẽ re-render TOÀN BỘ
+   trang (đơn hàng, thống kê, toast...) — chỉ vì gõ chat. Tách ra chỗ này,
+   gõ chat giờ chỉ re-render riêng modal chat. Danh sách tin nhắn cũng đổi
+   từ ScrollView + map() sang FlatList: modal có chiều cao cố định (480),
+   nên FlatList ở đây virtualization thật sự có tác dụng cho các đoạn chat
+   dài — không giống list "Lịch sử" bên dưới (xem ghi chú ở đó). ────────── */
+const ChatModal = React.memo(function ChatModal({ visible, customerId, title, messages, onClose, onSend }) {
+    const [draft, setDraft] = useState("");
+    const listRef = useRef(null);
+    const inputRef = useRef(null);
+
+    // Đổi khách đang chat → reset ô nhập dở dang, giống hành vi bản gốc
+    // (bản gốc reset chatDraft trong closeChatThread).
+    useEffect(() => {
+        setDraft("");
+    }, [customerId]);
+
+    // Mở khung chat → cuộn xuống cuối + focus ô nhập. [GIU-NGUYEN hành vi gốc]
+    useEffect(() => {
+        if (!visible) return;
+        listRef.current?.scrollToEnd({ animated: false });
+        const t = setTimeout(() => inputRef.current?.focus(), 150);
+        return () => clearTimeout(t);
+    }, [visible, customerId]);
+
+    useEffect(() => {
+        if (!visible) return;
+        listRef.current?.scrollToEnd({ animated: true });
+    }, [visible, messages.length]);
+
+    const handleSend = useCallback(() => {
+        const value = draft.trim();
+        if (!value) return;
+        onSend(value);
+        setDraft("");
+    }, [draft, onSend]);
+
+    const renderMessage = useCallback(({ item }) => (
+        <View style={{ flexDirection: "row", justifyContent: item.from === "admin" ? "flex-end" : "flex-start" }}>
+            <View
+                style={{ maxWidth: "75%" }}
+                className={`rounded-2xl px-3.5 py-2.5 ${item.from === "admin" ? "bg-green-500 rounded-br-md" : "bg-gray-100 rounded-bl-md"}`}
+            >
+                <Text className={`text-sm ${item.from === "admin" ? "text-white" : "text-gray-700"}`} style={{ lineHeight: 20 }}>
+                    {item.text}
+                </Text>
+                <Text className={`text-[10px] mt-1 ${item.from === "admin" ? "text-green-100" : "text-gray-400"}`}>
+                    {safeFmtDate(item.at instanceof Date ? item.at.toISOString() : item.at)}
+                </Text>
+            </View>
+        </View>
+    ), []);
+    const keyExtractor = useCallback((item, idx) => (item.id != null ? String(item.id) : String(idx)), []);
+
+    if (!visible) return null;
+
+    return (
+        <ModalOverlay onClose={onClose}>
+            <View className="bg-white rounded-3xl overflow-hidden" style={{ height: 480 }}>
+                <ModalHeader title={title} onClose={onClose} />
+                <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+                    <FlatList
+                        ref={listRef}
+                        data={messages}
+                        renderItem={renderMessage}
+                        keyExtractor={keyExtractor}
+                        style={{ flex: 1 }}
+                        contentContainerStyle={{ padding: 12, gap: 8 }}
+                        ListEmptyComponent={
+                            <Text className="text-gray-400 text-xs text-center" style={{ paddingVertical: 40 }}>Chưa có tin nhắn nào</Text>
+                        }
+                        initialNumToRender={20}
+                        maxToRenderPerBatch={20}
+                        windowSize={10}
+                    />
+                    <View className="flex-row items-center border-t border-gray-100" style={{ gap: 8, padding: 12 }}>
+                        <TextInput
+                            ref={inputRef}
+                            value={draft}
+                            onChangeText={setDraft}
+                            onSubmitEditing={handleSend}
+                            placeholder="Nhập tin nhắn trả lời..."
+                            placeholderTextColor={colors.gray[300]}
+                            className="flex-1 border border-gray-200 rounded-full text-sm text-gray-800"
+                            style={{ paddingHorizontal: 16, paddingVertical: 10 }}
+                        />
+                        <Pressable
+                            onPress={handleSend}
+                            disabled={!draft.trim()}
+                            style={{ opacity: draft.trim() ? 1 : 0.4 }}
+                            className="w-10 h-10 rounded-full bg-green-500 items-center justify-center"
+                        >
+                            <Send size={16} color={colors.white} />
+                        </Pressable>
+                    </View>
+                </KeyboardAvoidingView>
+            </View>
+        </ModalOverlay>
+    );
+});
+
+/* ── Tab "Lịch sử" ─────────────────────────────────────────────────────────
+   [PERF] Tách thành component riêng, giữ ô tìm kiếm (`search`) VÀ modal chi
+   tiết đơn (`detailOrder`) là state cục bộ ở đây. Bản gốc để `historySearch`
+   và `detailOrder` trong OnlineOrdersPage nên mỗi phím gõ tìm kiếm re-render
+   toàn trang. Có thêm debounce 350ms cho ô tìm kiếm (mục 6 trong checklist)
+   để không filter lại mảng lịch sử trên mỗi keystroke.
+
+   Lưu ý: danh sách này VẪN dùng .map() thay vì FlatList, y hệt bản gốc —
+   xem lý do ở "GLOBAL/UX ISSUE" trong báo cáo đi kèm: trang hiện là MỘT
+   ScrollView duy nhất bọc toàn bộ nội dung (header, thống kê, danh sách),
+   nên nhét FlatList vào đây sẽ bị cảnh báo "VirtualizedList nested inside
+   plain ScrollView" và KHÔNG có lợi ích ảo hoá thật sự (FlatList lồng trong
+   ScrollView không có chiều cao giới hạn vẫn phải render gần như toàn bộ).
+   Muốn ảo hoá thật cho danh sách lịch sử cần tách phần header (thống kê,
+   tab) ra khỏi vùng cuộn — đây là thay đổi layout/UX vượt phạm vi "tối ưu
+   không đổi UI", nên tôi không tự ý làm mà để bạn quyết định. ──────────── */
+const OrderHistorySection = React.memo(function OrderHistorySection({ orders, chatThreads, onViewChat }) {
+    const [search, setSearch] = useState("");
+    const [debouncedSearch, setDebouncedSearch] = useState("");
+    const [detailOrder, setDetailOrder] = useState(null);
+    const debounceTimerRef = useRef(null);
+
+    useEffect(() => {
+        clearTimeout(debounceTimerRef.current);
+        debounceTimerRef.current = setTimeout(() => setDebouncedSearch(search), HISTORY_SEARCH_DEBOUNCE);
+        return () => clearTimeout(debounceTimerRef.current);
+    }, [search]);
+
+    const filteredOrders = useMemo(() => {
+        const keyword = debouncedSearch.trim().toLowerCase();
+        if (!keyword) return orders;
+        return orders.filter(
+            (o) =>
+                o.customerName?.toLowerCase().includes(keyword) ||
+                o.phone?.includes(keyword) ||
+                o.id?.toLowerCase().includes(keyword)
+        );
+    }, [orders, debouncedSearch]);
+
+    const hasChatWithDetail = !!detailOrder && chatThreads.some((t) => t.customerId === detailOrder.customerId);
+
+    return (
+        <View style={{ gap: 12 }}>
+            <View style={{ position: "relative", justifyContent: "center" }}>
+                <View style={{ position: "absolute", left: 14, zIndex: 1 }}>
+                    <Search size={15} color={colors.gray[400]} />
+                </View>
+                <TextInput
+                    value={search}
+                    onChangeText={setSearch}
+                    placeholder="Tìm theo tên, SĐT, mã đơn..."
+                    placeholderTextColor={colors.gray[300]}
+                    className="bg-white border border-gray-200 rounded-xl text-sm text-gray-800"
+                    style={{ paddingLeft: 38, paddingRight: 16, paddingVertical: 11 }}
+                />
+            </View>
+
+            <View className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
+                {filteredOrders.length === 0 ? (
+                    <EmptyState icon={Search} text="Chưa có đơn nào trong lịch sử" />
+                ) : (
+                    filteredOrders.map((order, idx) => (
+                        <OrderHistoryCard
+                            key={order.id}
+                            order={order}
+                            isLast={idx === filteredOrders.length - 1}
+                            onPress={() => setDetailOrder(order)}
+                        />
+                    ))
+                )}
+            </View>
+
+            {!!detailOrder && (
+                <ModalOverlay onClose={() => setDetailOrder(null)}>
+                    <View className="bg-white rounded-3xl overflow-hidden">
+                        <ModalHeader title={detailOrder.customerName} onClose={() => setDetailOrder(null)} />
+                        <ScrollView contentContainerStyle={{ padding: 20, gap: 12 }} style={{ maxHeight: 480 }}>
+                            <View className="flex-row items-center justify-between">
+                                <OnlineStatusBadge status={detailOrder.status} />
+                                <Text className="text-xs text-gray-400">{safeFmtDate(detailOrder.createdAt)}</Text>
+                            </View>
+                            <View style={{ gap: 4 }}>
+                                <View className="flex-row items-center" style={{ gap: 6 }}>
+                                    <Phone size={12} color={colors.gray[500]} />
+                                    <Text className="text-xs text-gray-500">{detailOrder.phone}</Text>
+                                </View>
+                                <View className="flex-row items-center" style={{ gap: 6 }}>
+                                    <MapPin size={12} color={colors.gray[500]} />
+                                    <Text className="text-xs text-gray-500" style={{ flex: 1 }}>{detailOrder.address}</Text>
+                                </View>
+                            </View>
+                            <View className="bg-gray-50 rounded-xl p-3" style={{ gap: 4 }}>
+                                {detailOrder.items.map((item, idx) => (
+                                    <View key={idx} className="flex-row justify-between">
+                                        <Text className="text-sm text-gray-700">{item.foodName} × {item.quantity}</Text>
+                                        <Text className="text-sm font-semibold text-gray-600">{safeFmtVND(item.unitPrice * item.quantity)}</Text>
+                                    </View>
+                                ))}
+                            </View>
+                            {!!detailOrder.note && <Text className="text-xs text-gray-500">Ghi chú: {detailOrder.note}</Text>}
+                            {detailOrder.status === "cancelled" && !!detailOrder.cancelReason && (
+                                <Text className="text-xs text-red-500">Lý do huỷ: {detailOrder.cancelReason}</Text>
+                            )}
+                            <View className="flex-row justify-between items-center pt-2 border-t border-gray-100">
+                                <Text className="font-bold text-gray-700 text-sm">Tổng cộng</Text>
+                                <Text className="font-black text-lg text-green-600">{safeFmtVND(detailOrder.totalPrice)}</Text>
+                            </View>
+                            {hasChatWithDetail && (
+                                <ActionBtn
+                                    icon={MessageCircle}
+                                    label="Xem trò chuyện với khách"
+                                    variant="secondary"
+                                    flex
+                                    onPress={() => {
+                                        const cid = detailOrder.customerId;
+                                        setDetailOrder(null);
+                                        onViewChat(cid);
+                                    }}
+                                />
+                            )}
+                        </ScrollView>
+                    </View>
+                </ModalOverlay>
+            )}
+        </View>
+    );
+});
+
+/* ── Modal xác nhận huỷ đơn ────────────────────────────────────────────────
+   [PERF] Tách thành component riêng, giữ `reason` (ô nhập lý do huỷ) là
+   state cục bộ ở đây thay vì trong OnlineOrdersPage — cùng lý do với
+   ChatModal/OrderHistorySection: gõ lý do huỷ không nên re-render cả trang. */
+const CancelConfirmModal = React.memo(function CancelConfirmModal({ order, onClose, onConfirm }) {
+    const [reason, setReason] = useState("");
+
+    useEffect(() => {
+        setReason("");
+    }, [order?.id]);
+
+    if (!order) return null;
+
+    return (
+        <ModalOverlay onClose={onClose}>
+            <View className="bg-white rounded-3xl overflow-hidden">
+                <ModalHeader title="Huỷ đơn online?" />
+                <View style={{ padding: 20, gap: 16 }}>
+                    <Text className="text-sm text-gray-600" style={{ lineHeight: 20 }}>
+                        Đơn của <Text style={{ fontWeight: "800", color: colors.gray[800] }}>{order.customerName}</Text> sẽ được đánh dấu là đã huỷ. Bạn có chắc chắn không?
+                    </Text>
+                    <TextInput
+                        value={reason}
+                        onChangeText={setReason}
+                        placeholder="Lý do huỷ (tuỳ chọn)"
+                        placeholderTextColor={colors.gray[300]}
+                        className="border border-gray-200 rounded-xl text-sm text-gray-800"
+                        style={{ paddingHorizontal: 14, paddingVertical: 11 }}
+                    />
+                    <View className="flex-row" style={{ gap: 8 }}>
+                        <ActionBtn label="Đóng" variant="secondary" flex onPress={onClose} />
+                        <ActionBtn icon={XCircle} label="Huỷ đơn" variant="danger" flex onPress={() => onConfirm(order, reason)} />
+                    </View>
+                </View>
+            </View>
+        </ModalOverlay>
+    );
+});
 
 /* ════════════════════════════════════════════════════════════
    MAIN COMPONENT
 ════════════════════════════════════════════════════════════ */
 export default function OnlineOrdersPage() {
     // ── State [GIU-NGUYEN, đổi tên mobileStatusFilter → statusFilter vì đây
-    // giờ là bộ lọc DUY NHẤT, không còn phân biệt mobile/desktop] ───────────
+    // giờ là bộ lọc DUY NHẤT, không còn phân biệt mobile/desktop]
+    // [PERF] historySearch, detailOrder, cancelReason, chatDraft đã chuyển
+    // xuống làm state cục bộ trong OrderHistorySection/CancelConfirmModal/
+    // ChatModal — xem ghi chú ở từng component. ─────────────────────────────
     const [connected, setConnected] = useState(false);
     const [orders, setOrders] = useState([]);
     const [chatThreads, setChatThreads] = useState([]);
     const [tab, setTab] = useState("orders"); // "orders" | "chat"
     const [ordersView, setOrdersView] = useState("active"); // "active" | "history"
-    const [historySearch, setHistorySearch] = useState("");
 
     const [orderToasts, setOrderToasts] = useState([]); // [{ toastId, order }]
     const [chatToast, setChatToast] = useState(null); // { customerId, message }
 
     const [cancelTarget, setCancelTarget] = useState(null);
-    const [cancelReason, setCancelReason] = useState("");
-    const [detailOrder, setDetailOrder] = useState(null);
 
     const [statusFilter, setStatusFilter] = useState("pending");
 
@@ -345,15 +670,12 @@ export default function OnlineOrdersPage() {
 
     const [activeChatCustomerId, setActiveChatCustomerId] = useState(null);
     const [chatMessages, setChatMessages] = useState([]);
-    const [chatDraft, setChatDraft] = useState("");
 
     const socketRef = useRef(null);
     const orderToastTimersRef = useRef(new Map());
     const chatToastTimer = useRef(null);
     const actionToastTimer = useRef(null);
     const activeChatCustomerIdRef = useRef(null);
-    const chatScrollRef = useRef(null);
-    const chatInputRef = useRef(null);
 
     useEffect(() => {
         activeChatCustomerIdRef.current = activeChatCustomerId;
@@ -387,8 +709,13 @@ export default function OnlineOrdersPage() {
         };
         const handleDisconnect = () => setConnected(false);
 
+        // [PERF] Dùng mergeOrdersPreservingRefs thay vì map thẳng qua
+        // normalizeOnlineOrder, để giữ nguyên object reference cho các đơn
+        // không đổi nội dung — nhờ đó React.memo(OrderCard)/React.memo(
+        // OrderHistoryCard) mới thực sự bỏ qua re-render được. Không đổi
+        // hành vi/dữ liệu hiển thị, chỉ đổi cách tạo object.
         const handleOrdersState = (list) =>
-            setOrders(Array.isArray(list) ? list.map(normalizeOnlineOrder).filter(Boolean) : []);
+            setOrders((prev) => (Array.isArray(list) ? mergeOrdersPreservingRefs(prev, list) : []));
         const handleOrderCreated = (order) => {
             const normalized = normalizeOnlineOrder(order);
             if (!normalized || !normalized.id) return;
@@ -440,19 +767,6 @@ export default function OnlineOrdersPage() {
         };
     }, [dismissOrderToast]);
 
-    // Mở khung chat → cuộn xuống cuối + focus ô nhập. [UI] RN không có
-    // scrollTop, dùng ref.scrollToEnd — xem ghi chú platform ở đầu file.
-    useEffect(() => {
-        if (activeChatCustomerId == null) return;
-        chatScrollRef.current?.scrollToEnd({ animated: false });
-        const t = setTimeout(() => chatInputRef.current?.focus(), 150);
-        return () => clearTimeout(t);
-    }, [activeChatCustomerId]);
-
-    useEffect(() => {
-        chatScrollRef.current?.scrollToEnd({ animated: true });
-    }, [chatMessages.length]);
-
     // ─── Derived values [GIU-NGUYEN] ────────────────────────────────────────
     const activeByStatus = useMemo(() => {
         const map = { pending: [], confirmed: [], preparing: [], delivering: [] };
@@ -463,16 +777,14 @@ export default function OnlineOrdersPage() {
     const totalActive = activeByStatus.pending.length + activeByStatus.confirmed.length
         + activeByStatus.preparing.length + activeByStatus.delivering.length;
 
-    const historyOrders = useMemo(() => {
-        const list = orders.filter((o) => o.status === "completed" || o.status === "cancelled");
-        const keyword = historySearch.trim().toLowerCase();
-        if (!keyword) return list;
-        return list.filter((o) =>
-            o.customerName?.toLowerCase().includes(keyword) ||
-            o.phone?.includes(keyword) ||
-            o.id?.toLowerCase().includes(keyword)
-        );
-    }, [orders, historySearch]);
+    // [PERF] Bỏ phần filter theo từ khoá tìm kiếm khỏi memo này — từ khoá giờ
+    // được xử lý cục bộ bên trong OrderHistorySection (có debounce), nên
+    // memo này chỉ còn phụ thuộc `orders` như các memo khác, không phụ
+    // thuộc vào state gõ-liên-tục nữa.
+    const historyBaseList = useMemo(
+        () => orders.filter((o) => o.status === "completed" || o.status === "cancelled"),
+        [orders]
+    );
 
     const todayCompleted = useMemo(() => {
         const today = new Date().toDateString();
@@ -484,6 +796,11 @@ export default function OnlineOrdersPage() {
 
     const totalUnreadChat = chatThreads.reduce((s, t) => s + t.unreadCount, 0);
     const activeThread = chatThreads.find((t) => t.customerId === activeChatCustomerId);
+    const chatModalTitle = activeChatCustomerId
+        ? (activeThread?.customerName
+            ? `${activeThread.customerName}${activeThread.phone ? " · " + activeThread.phone : ""}`
+            : shortCustomerLabel(activeChatCustomerId))
+        : "";
 
     const visibleOrderToasts = orderToasts.slice(0, MAX_VISIBLE_ORDER_TOASTS);
     const hiddenOrderToastCount = orderToasts.length - visibleOrderToasts.length;
@@ -502,14 +819,14 @@ export default function OnlineOrdersPage() {
 
     const openCancel = useCallback((order) => {
         setCancelTarget(order);
-        setCancelReason("");
     }, []);
 
-    const confirmCancel = useCallback(() => {
-        if (!cancelTarget) return;
-        socketRef.current?.emit("admin_update_order_status", { orderId: cancelTarget.id, status: "cancelled", reason: cancelReason });
+    // [PERF] Nhận (order, reason) từ CancelConfirmModal thay vì đọc state
+    // `cancelReason` ở component cha (state đó giờ sống trong modal).
+    const confirmCancel = useCallback((order, reason) => {
+        socketRef.current?.emit("admin_update_order_status", { orderId: order.id, status: "cancelled", reason });
         setCancelTarget(null);
-    }, [cancelTarget, cancelReason]);
+    }, []);
 
     // ─── Xác nhận thanh toán (bước Hoàn thành) [GIU-NGUYEN logic — chỉ đổi
     // fetch() → postData(), xem ghi chú platform ở đầu file] ────────────────
@@ -556,7 +873,8 @@ export default function OnlineOrdersPage() {
         }
     }, [checkoutTarget, checkoutPayMethod, showActionToast]);
 
-    // ─── Hành động chat [GIU-NGUYEN] ────────────────────────────────────────
+    // ─── Hành động chat [GIU-NGUYEN, sendChatReply đổi tên → handleSendChat
+    // và nhận text trực tiếp từ ChatModal thay vì đọc state chatDraft ──────
     const openChatThread = useCallback((customerId) => {
         setActiveChatCustomerId(customerId);
         setChatMessages([]);
@@ -564,67 +882,22 @@ export default function OnlineOrdersPage() {
     }, []);
     const closeChatThread = useCallback(() => {
         setActiveChatCustomerId(null);
-        setChatDraft("");
     }, []);
-    const sendChatReply = useCallback(() => {
-        const value = chatDraft.trim();
-        if (!value || !activeChatCustomerId) return;
-        socketRef.current?.emit("send_admin_chat_message", { customerId: activeChatCustomerId, text: value });
-        setChatDraft("");
-    }, [chatDraft, activeChatCustomerId]);
+    const handleSendChat = useCallback((text) => {
+        if (!activeChatCustomerId) return;
+        socketRef.current?.emit("send_admin_chat_message", { customerId: activeChatCustomerId, text });
+    }, [activeChatCustomerId]);
+    // Dùng bởi nút "Xem trò chuyện với khách" trong OrderHistorySection.
+    const goToChatThread = useCallback((customerId) => {
+        setTab("chat");
+        openChatThread(customerId);
+    }, [openChatThread]);
 
     const goToNewOrders = useCallback(() => {
         setTab("orders");
         setOrdersView("active");
         setStatusFilter("pending");
     }, []);
-
-    // ─── Nội dung khung chat — dùng chung cho Modal chat ────────────────────
-    const renderChatBody = () => (
-        <>
-            <ScrollView ref={chatScrollRef} style={{ flex: 1 }} contentContainerStyle={{ padding: 12, gap: 8 }}>
-                {chatMessages.length === 0 ? (
-                    <Text className="text-gray-400 text-xs text-center" style={{ paddingVertical: 40 }}>Chưa có tin nhắn nào</Text>
-                ) : (
-                    chatMessages.map((m, idx) => (
-                        <View key={m.id || idx} style={{ flexDirection: "row", justifyContent: m.from === "admin" ? "flex-end" : "flex-start" }}>
-                            <View
-                                style={{ maxWidth: "75%" }}
-                                className={`rounded-2xl px-3.5 py-2.5 ${m.from === "admin" ? "bg-green-500 rounded-br-md" : "bg-gray-100 rounded-bl-md"}`}
-                            >
-                                <Text className={`text-sm ${m.from === "admin" ? "text-white" : "text-gray-700"}`} style={{ lineHeight: 20 }}>
-                                    {m.text}
-                                </Text>
-                                <Text className={`text-[10px] mt-1 ${m.from === "admin" ? "text-green-100" : "text-gray-400"}`}>
-                                    {safeFmtDate(m.at instanceof Date ? m.at.toISOString() : m.at)}
-                                </Text>
-                            </View>
-                        </View>
-                    ))
-                )}
-            </ScrollView>
-            <View className="flex-row items-center border-t border-gray-100" style={{ gap: 8, padding: 12 }}>
-                <TextInput
-                    ref={chatInputRef}
-                    value={chatDraft}
-                    onChangeText={setChatDraft}
-                    onSubmitEditing={sendChatReply}
-                    placeholder="Nhập tin nhắn trả lời..."
-                    placeholderTextColor={colors.gray[300]}
-                    className="flex-1 border border-gray-200 rounded-full text-sm text-gray-800"
-                    style={{ paddingHorizontal: 16, paddingVertical: 10 }}
-                />
-                <Pressable
-                    onPress={sendChatReply}
-                    disabled={!chatDraft.trim()}
-                    style={{ opacity: chatDraft.trim() ? 1 : 0.4 }}
-                    className="w-10 h-10 rounded-full bg-green-500 items-center justify-center"
-                >
-                    <Send size={16} color={colors.white} />
-                </Pressable>
-            </View>
-        </>
-    );
 
     // ──────────────────────────────────────────────────────────────────────
     return (
@@ -788,36 +1061,7 @@ export default function OnlineOrdersPage() {
                                 </View>
                             )
                         ) : (
-                            <View style={{ gap: 12 }}>
-                                <View style={{ position: "relative", justifyContent: "center" }}>
-                                    <View style={{ position: "absolute", left: 14, zIndex: 1 }}>
-                                        <Search size={15} color={colors.gray[400]} />
-                                    </View>
-                                    <TextInput
-                                        value={historySearch}
-                                        onChangeText={setHistorySearch}
-                                        placeholder="Tìm theo tên, SĐT, mã đơn..."
-                                        placeholderTextColor={colors.gray[300]}
-                                        className="bg-white border border-gray-200 rounded-xl text-sm text-gray-800"
-                                        style={{ paddingLeft: 38, paddingRight: 16, paddingVertical: 11 }}
-                                    />
-                                </View>
-
-                                <View className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
-                                    {historyOrders.length === 0 ? (
-                                        <EmptyState icon={Search} text="Chưa có đơn nào trong lịch sử" />
-                                    ) : (
-                                        historyOrders.map((order, idx) => (
-                                            <OrderHistoryCard
-                                                key={order.id}
-                                                order={order}
-                                                isLast={idx === historyOrders.length - 1}
-                                                onPress={() => setDetailOrder(order)}
-                                            />
-                                        ))
-                                    )}
-                                </View>
-                            </View>
+                            <OrderHistorySection orders={historyBaseList} chatThreads={chatThreads} onViewChat={goToChatThread} />
                         )}
                     </View>
                 ) : (
@@ -841,69 +1085,14 @@ export default function OnlineOrdersPage() {
             </ScrollView>
 
             {/* ── Modal chat ───────────────────────────────────────────────── */}
-            {!!activeChatCustomerId && (
-                <ModalOverlay onClose={closeChatThread}>
-                    <View className="bg-white rounded-3xl overflow-hidden" style={{ height: 480 }}>
-                        <ModalHeader
-                            title={activeThread?.customerName ? `${activeThread.customerName}${activeThread.phone ? " · " + activeThread.phone : ""}` : shortCustomerLabel(activeChatCustomerId)}
-                            onClose={closeChatThread}
-                        />
-                        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
-                            {renderChatBody()}
-                        </KeyboardAvoidingView>
-                    </View>
-                </ModalOverlay>
-            )}
-
-            {/* ── Modal chi tiết đơn (từ tab lịch sử) ─────────────────────────── */}
-            {!!detailOrder && (
-                <ModalOverlay onClose={() => setDetailOrder(null)}>
-                    <View className="bg-white rounded-3xl overflow-hidden">
-                        <ModalHeader title={detailOrder.customerName} onClose={() => setDetailOrder(null)} />
-                        <ScrollView contentContainerStyle={{ padding: 20, gap: 12 }} style={{ maxHeight: 480 }}>
-                            <View className="flex-row items-center justify-between">
-                                <OnlineStatusBadge status={detailOrder.status} />
-                                <Text className="text-xs text-gray-400">{safeFmtDate(detailOrder.createdAt)}</Text>
-                            </View>
-                            <View style={{ gap: 4 }}>
-                                <View className="flex-row items-center" style={{ gap: 6 }}>
-                                    <Phone size={12} color={colors.gray[500]} />
-                                    <Text className="text-xs text-gray-500">{detailOrder.phone}</Text>
-                                </View>
-                                <View className="flex-row items-center" style={{ gap: 6 }}>
-                                    <MapPin size={12} color={colors.gray[500]} />
-                                    <Text className="text-xs text-gray-500" style={{ flex: 1 }}>{detailOrder.address}</Text>
-                                </View>
-                            </View>
-                            <View className="bg-gray-50 rounded-xl p-3" style={{ gap: 4 }}>
-                                {detailOrder.items.map((item, idx) => (
-                                    <View key={idx} className="flex-row justify-between">
-                                        <Text className="text-sm text-gray-700">{item.foodName} × {item.quantity}</Text>
-                                        <Text className="text-sm font-semibold text-gray-600">{safeFmtVND(item.unitPrice * item.quantity)}</Text>
-                                    </View>
-                                ))}
-                            </View>
-                            {!!detailOrder.note && <Text className="text-xs text-gray-500">Ghi chú: {detailOrder.note}</Text>}
-                            {detailOrder.status === "cancelled" && !!detailOrder.cancelReason && (
-                                <Text className="text-xs text-red-500">Lý do huỷ: {detailOrder.cancelReason}</Text>
-                            )}
-                            <View className="flex-row justify-between items-center pt-2 border-t border-gray-100">
-                                <Text className="font-bold text-gray-700 text-sm">Tổng cộng</Text>
-                                <Text className="font-black text-lg text-green-600">{safeFmtVND(detailOrder.totalPrice)}</Text>
-                            </View>
-                            {chatThreads.some((t) => t.customerId === detailOrder.customerId) && (
-                                <ActionBtn
-                                    icon={MessageCircle}
-                                    label="Xem trò chuyện với khách"
-                                    variant="secondary"
-                                    flex
-                                    onPress={() => { setDetailOrder(null); setTab("chat"); openChatThread(detailOrder.customerId); }}
-                                />
-                            )}
-                        </ScrollView>
-                    </View>
-                </ModalOverlay>
-            )}
+            <ChatModal
+                visible={!!activeChatCustomerId}
+                customerId={activeChatCustomerId}
+                title={chatModalTitle}
+                messages={chatMessages}
+                onClose={closeChatThread}
+                onSend={handleSendChat}
+            />
 
             {/* ── Modal xác nhận thanh toán (bước Hoàn thành) ─────────────────── */}
             {!!checkoutTarget && (
@@ -958,30 +1147,7 @@ export default function OnlineOrdersPage() {
             )}
 
             {/* ── Modal xác nhận huỷ đơn ───────────────────────────────────────── */}
-            {!!cancelTarget && (
-                <ModalOverlay onClose={() => setCancelTarget(null)}>
-                    <View className="bg-white rounded-3xl overflow-hidden">
-                        <ModalHeader title="Huỷ đơn online?" />
-                        <View style={{ padding: 20, gap: 16 }}>
-                            <Text className="text-sm text-gray-600" style={{ lineHeight: 20 }}>
-                                Đơn của <Text style={{ fontWeight: "800", color: colors.gray[800] }}>{cancelTarget.customerName}</Text> sẽ được đánh dấu là đã huỷ. Bạn có chắc chắn không?
-                            </Text>
-                            <TextInput
-                                value={cancelReason}
-                                onChangeText={setCancelReason}
-                                placeholder="Lý do huỷ (tuỳ chọn)"
-                                placeholderTextColor={colors.gray[300]}
-                                className="border border-gray-200 rounded-xl text-sm text-gray-800"
-                                style={{ paddingHorizontal: 14, paddingVertical: 11 }}
-                            />
-                            <View className="flex-row" style={{ gap: 8 }}>
-                                <ActionBtn label="Đóng" variant="secondary" flex onPress={() => setCancelTarget(null)} />
-                                <ActionBtn icon={XCircle} label="Huỷ đơn" variant="danger" flex onPress={confirmCancel} />
-                            </View>
-                        </View>
-                    </View>
-                </ModalOverlay>
-            )}
+            <CancelConfirmModal order={cancelTarget} onClose={() => setCancelTarget(null)} onConfirm={confirmCancel} />
         </View>
     );
 }

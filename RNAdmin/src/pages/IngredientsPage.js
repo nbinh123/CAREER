@@ -52,6 +52,10 @@ const EMPTY_PENDING = { added: [], updated: [], deleted: [] };
 
 const NUMERIC_FIELDS = ["displayOrder", "quantity", "pricePerLargeUnit", "expiryDays"];
 
+// [TỐI ƯU] Thời gian debounce cho ô tìm kiếm (ms). Tách thành constant để
+// dễ chỉnh nếu cần, không hardcode rải rác trong component.
+const SEARCH_DEBOUNCE_MS = 300;
+
 /* ════════════════════════════════════════════════════════════
    UI HELPERS cục bộ (thay Btn/Modal/FormInput dùng chung ở bản web)
 ════════════════════════════════════════════════════════════ */
@@ -328,6 +332,12 @@ export default function IngredientsPage() {
   const [importError, setImportError] = useState(null);
 
   const [search, setSearch] = useState("");
+  // [TỐI ƯU] Debounce search — `search` phản ánh tức thời những gì người
+  // dùng gõ (để ô input mượt, không giật), còn `debouncedSearch` mới là
+  // giá trị dùng để lọc danh sách, chỉ cập nhật 300ms sau khi người dùng
+  // ngừng gõ. Nhờ vậy `.filter()` trên toàn bộ nguyên liệu không chạy lại
+  // trên từng ký tự gõ (có thể hàng chục lần/giây) mà chỉ chạy 1 lần.
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [modal, setModal] = useState(null); // null | "add" | "edit"
   const [form, setForm] = useState(EMPTY_ING);
   const [editId, setEditId] = useState(null);
@@ -339,6 +349,17 @@ export default function IngredientsPage() {
     getIngredients();
   }, [getIngredients]);
 
+  // [TỐI ƯU] Debounce timer cho search — huỷ timer cũ mỗi khi `search` đổi
+  // (người dùng gõ tiếp) để chỉ set `debouncedSearch` sau khi họ dừng gõ
+  // đủ SEARCH_DEBOUNCE_MS. Cleanup clearTimeout tránh set state sau khi
+  // component unmount hoặc sau khi có ký tự mới hơn.
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(search);
+    }, SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [search]);
+
   // ─── Thống kê pending ───────────────────────────────────────────────
   const pendingCount = safePending.added.length + safePending.updated.length + safePending.deleted.length;
   const hasPending = pendingCount > 0;
@@ -347,13 +368,16 @@ export default function IngredientsPage() {
   // [TỐI ƯU] useMemo — trước đây .filter() chạy lại trên MỌI lần render
   // (kể cả khi chỉ mở/đóng modal hay gõ trong ô ghi chú của form), dù
   // "search" và danh sách gốc không đổi. Chỉ tính lại khi 1 trong 2 dep đổi.
-  const filtered = useMemo(
-    () =>
-      safeIngredients.filter((i) =>
-        (i.ingredientName || "").toLowerCase().includes(search.toLowerCase())
-      ),
-    [safeIngredients, search]
-  );
+  // Dùng `debouncedSearch` (thay vì `search` gõ trực tiếp) để việc lọc chỉ
+  // chạy sau khi người dùng ngừng gõ, và tính `toLowerCase()`/`trim()` của
+  // từ khoá 1 lần bên ngoài vòng lặp thay vì lặp lại cho từng phần tử.
+  const filtered = useMemo(() => {
+    const q = debouncedSearch.trim().toLowerCase();
+    if (!q) return safeIngredients;
+    return safeIngredients.filter((i) =>
+      (i.ingredientName || "").toLowerCase().includes(q)
+    );
+  }, [safeIngredients, debouncedSearch]);
 
   // ─── Tra trạng thái pending theo id — O(1) thay vì .some() từng phần tử ─
   // [TỐI ƯU] Bản cũ gọi safePending.added.some()/updated.some() cho MỖI
@@ -457,6 +481,24 @@ export default function IngredientsPage() {
     await discardChanges();
     setDiscardOpen(false);
   }, [discardChanges]);
+
+  // [TỐI ƯU] renderItem bọc useCallback để giữ nguyên tham chiếu hàm giữa
+  // các lần render của IngredientsPage. FlatList/VirtualizedList dùng
+  // identity của renderItem khi quyết định có cần vẽ lại cell hay không;
+  // nếu để arrow function inline, mỗi lần cha render (vd: gõ ô ghi chú
+  // trong modal) sẽ tạo hàm mới, làm giảm hiệu quả của React.memo trên
+  // IngredientCard dù props ing/status/onEdit/onDelete không đổi.
+  const renderItem = useCallback(
+    ({ item }) => (
+      <IngredientCard
+        ing={item}
+        status={getRowStatus(item)}
+        onEdit={openEdit}
+        onDelete={setDeleteId}
+      />
+    ),
+    [getRowStatus, openEdit]
+  );
 
   // [TỐI ƯU] Header (tiêu đề, toolbar, banner lỗi, legend, ô tìm kiếm) tách
   // thành 1 phần tử riêng để làm ListHeaderComponent cho FlatList bên dưới,
@@ -583,14 +625,7 @@ export default function IngredientsPage() {
             </View>
           ) : null
         }
-        renderItem={({ item }) => (
-          <IngredientCard
-            ing={item}
-            status={getRowStatus(item)}
-            onEdit={openEdit}
-            onDelete={setDeleteId}
-          />
-        )}
+        renderItem={renderItem}
         /* Các tham số dưới đây điều chỉnh mức virtualization: số item vẽ
            ngay từ đầu, số item vẽ thêm mỗi batch khi cuộn, và "cửa sổ" vùng
            được giữ vẽ quanh vị trí đang xem — giảm số thẻ tồn tại cùng lúc

@@ -255,15 +255,25 @@ function DateField({ label, value, onChange }) {
 }
 
 /* ── 1 bàn trong lưới sơ đồ ─────────────────────────────────────────────── */
-function TableCard({ table, isSelected, onPress, onToggleActive, onOpenChat }) {
+// [PERF] React.memo + nhận callback dạng "stable" (nhận id bên trong) thay vì
+// nhận thẳng closure — nhờ đó khi component cha re-render vì lý do không liên
+// quan (gõ chat, gõ search...), 12 TableCard không bị buộc re-render theo vì
+// props (table, onPress, onToggleActive, onOpenChat) đều giữ nguyên reference.
+const TableCard = React.memo(function TableCard({ table, isSelected, onPress, onToggleActive, onOpenChat }) {
   const tSub = table.items.reduce((s, i) => s + i.unitPrice * i.quantity, 0);
   const hasPending = table.pendingItems?.length > 0;
   const hasUnreadChat = (table.messages || []).some((m) => m.from === "guest" && !m.read);
 
+  // Closure tạo ở đây chỉ phát sinh khi bản thân TableCard này thực sự
+  // re-render (vì table/isSelected đổi) — không ảnh hưởng các TableCard khác.
+  const handlePress = useCallback(() => onPress(table.id), [onPress, table.id]);
+  const handleSwitchToggle = useCallback(() => onToggleActive(table.id, table.active), [onToggleActive, table.id, table.active]);
+  const handleOpenChat = useCallback(() => onOpenChat(table.id), [onOpenChat, table.id]);
+
   return (
     <View style={{ width: "31%" }}>
       <Pressable
-        onPress={onPress}
+        onPress={handlePress}
         style={{ opacity: table.active ? 1 : 0.6 }}
         className={`rounded-2xl px-2 pt-3 pb-8 items-center border-2 ${
           isSelected
@@ -325,7 +335,7 @@ function TableCard({ table, isSelected, onPress, onToggleActive, onOpenChat }) {
       <View style={{ position: "absolute", top: 2, left: -4 }}>
         <Switch
           value={!!table.active}
-          onValueChange={onToggleActive}
+          onValueChange={handleSwitchToggle}
           trackColor={{ false: colors.gray[200], true: colors.green[400] }}
           thumbColor={colors.white}
           style={{ transform: [{ scaleX: 0.62 }, { scaleY: 0.62 }] }}
@@ -334,7 +344,7 @@ function TableCard({ table, isSelected, onPress, onToggleActive, onOpenChat }) {
 
       {/* Nút mở chat + chấm báo tin nhắn chưa đọc — góc dưới. */}
       <Pressable
-        onPress={onOpenChat}
+        onPress={handleOpenChat}
         style={{
           position: "absolute",
           bottom: 4,
@@ -368,17 +378,21 @@ function TableCard({ table, isSelected, onPress, onToggleActive, onOpenChat }) {
       </Pressable>
     </View>
   );
-}
+});
 
 /* ── 1 đơn lịch sử = 1 card (thay <tr> bảng gốc) ─────────────────────────── */
-function OrderHistoryCard({ order, isLast, onPress }) {
+// [PERF] React.memo + nhận "order" (ref ổn định trong mảng orders gốc) và
+// gọi onSelect(order) từ bên trong, để cha có thể truyền 1 callback duy nhất,
+// ổn định (useCallback), thay vì tạo 1 arrow function mới cho từng dòng lịch sử.
+const OrderHistoryCard = React.memo(function OrderHistoryCard({ order, isLast, onSelect }) {
+  const handlePress = useCallback(() => onSelect(order), [onSelect, order]);
   const itemsSummary = Array.isArray(order.items)
     ? order.items.slice(0, 3).map((i) => `${i.foodName || "Món"} ×${i.quantity ?? 1}`).join(", ") +
       (order.items.length > 3 ? ` +${order.items.length - 3} món khác` : "")
     : "";
   return (
     <Pressable
-      onPress={onPress}
+      onPress={handlePress}
       style={{ borderBottomWidth: isLast ? 0 : 1, borderBottomColor: colors.gray[50] }}
       className="px-4 py-3.5"
     >
@@ -402,7 +416,7 @@ function OrderHistoryCard({ order, isLast, onPress }) {
       </View>
     </Pressable>
   );
-}
+});
 
 /* ════════════════════════════════════════════════════════════
    MAIN COMPONENT
@@ -417,6 +431,10 @@ export default function OrdersPage() {
   const [checkoutOpen, setCheckoutOpen] = useState(false);
   const [payMethod, setPayMethod] = useState("CASH");
   const [orders, setOrders] = useState([]);
+  // [PERF] Tách "giá trị đang gõ" (histSearchInput, cập nhật ngay để ô nhập
+  // không bị giật) khỏi "giá trị dùng để lọc" (histSearch, debounce 350ms) —
+  // tránh chạy lại filtHist.filter() trên toàn bộ orders sau mỗi phím gõ.
+  const [histSearchInput, setHistSearchInput] = useState("");
   const [histSearch, setHistSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [paymentFilter, setPaymentFilter] = useState("");
@@ -461,9 +479,17 @@ export default function OrdersPage() {
     else console.error("[fetchOrders]", res.message);
   }, []);
 
+  // [PERF-FIX] Bản gốc dùng `if (orders.length === 0) fetchOrders()` với
+  // dependency là `orders` — nếu quán chưa có đơn nào (data thật sự rỗng),
+  // fetchOrders() trả về mảng [] mới (khác reference với state cũ) khiến
+  // effect này chạy lại, gọi fetchOrders() lần nữa, cứ thế lặp vô hạn.
+  // Sửa: chỉ fetch đúng 1 lần khi mount, dùng ref để chặn gọi lại.
+  const hasFetchedOrdersRef = useRef(false);
   useEffect(() => {
-    if (orders.length === 0) fetchOrders();
-  }, [orders, fetchOrders]);
+    if (hasFetchedOrdersRef.current) return;
+    hasFetchedOrdersRef.current = true;
+    fetchOrders();
+  }, [fetchOrders]);
 
   // ─── Socket setup [GIU-NGUYEN] ──────────────────────────────────────────
   useEffect(() => {
@@ -476,8 +502,30 @@ export default function OrdersPage() {
     };
     const handleDisconnect = () => setConnected(false);
 
+    // [PERF] Server gửi lại TOÀN BỘ danh sách bàn mỗi lần "tables_state" bắn ra,
+    // kể cả khi chỉ 1 bàn thay đổi. normalizeTable() luôn tạo object mới nên
+    // nếu set thẳng, cả 12 TableCard đều nhận props mới (dù nội dung y hệt) và
+    // re-render dù đã bọc React.memo. Ở đây so sánh với bàn cũ theo id, giữ
+    // nguyên reference nếu nội dung không đổi để memo phát huy tác dụng.
     const handleTablesState = (serverTables) => {
-      setTables(Array.isArray(serverTables) ? serverTables.map(normalizeTable).filter(Boolean) : []);
+      if (!Array.isArray(serverTables)) {
+        setTables([]);
+        return;
+      }
+      setTables((prevTables) => {
+        const prevById = new Map(prevTables.map((t) => [t.id, t]));
+        return serverTables
+          .map((raw) => {
+            const normalized = normalizeTable(raw);
+            if (!normalized) return null;
+            const prev = prevById.get(normalized.id);
+            if (prev && JSON.stringify(prev) === JSON.stringify(normalized)) {
+              return prev; // không đổi gì → giữ reference cũ
+            }
+            return normalized;
+          })
+          .filter(Boolean);
+      });
     };
 
     const handleChatMessage = (payload) => {
@@ -521,6 +569,14 @@ export default function OrdersPage() {
   useEffect(() => {
     setSelectedPending(new Set());
   }, [selectedId]);
+
+  // [PERF] Debounce ô tìm kiếm lịch sử đơn — chỉ cập nhật giá trị dùng để lọc
+  // 350ms sau khi người dùng ngừng gõ, thay vì lọc lại toàn bộ `orders` ở
+  // mỗi ký tự.
+  useEffect(() => {
+    const t = setTimeout(() => setHistSearch(histSearchInput), 350);
+    return () => clearTimeout(t);
+  }, [histSearchInput]);
 
   // Mở hộp thoại chat → cuộn xuống cuối + focus ô nhập. RN không có
   // scrollTop, dùng ref.scrollToEnd — xem ghi chú platform ở đầu file.
@@ -577,10 +633,20 @@ export default function OrdersPage() {
     [activeTable, showActionToast]
   );
 
+  // [PERF] Chọn/bỏ chọn bàn — dùng functional update để KHÔNG cần phụ thuộc
+  // `selectedId`, nhờ đó callback này giữ nguyên reference qua mọi render và
+  // có thể truyền thẳng xuống từng TableCard đã bọc React.memo.
+  const handleSelectTable = useCallback((tableId) => {
+    setSelectedId((prev) => (prev === tableId ? null : tableId));
+  }, []);
+
   // ─── Bật/tắt cho phép khách gọi món / gửi tin nhắn tại 1 bàn ────────────
-  const handleToggleActive = useCallback((table) => {
+  // [PERF] Nhận (tableId, currentActive) thay vì cả object "table" để callback
+  // này hoàn toàn không phụ thuộc `tables` — giữ được identity ổn định qua mọi
+  // render, cho phép truyền thẳng xuống TableCard mà không cần bọc arrow mới.
+  const handleToggleActive = useCallback((tableId, currentActive) => {
     if (!socketRef.current) return;
-    socketRef.current.emit("toggle_table_active", { tableId: table.id, active: !table.active });
+    socketRef.current.emit("toggle_table_active", { tableId, active: !currentActive });
   }, []);
   const handleToggleChat = useCallback((table) => {
     if (!socketRef.current) return;
@@ -658,6 +724,10 @@ export default function OrdersPage() {
       setCheckoutLoading(false);
     }
   }, [activeTable, payMethod, showActionToast]);
+
+  // [PERF] Callback ổn định cho OrderHistoryCard (React.memo) — tránh tạo 1
+  // arrow function mới cho mỗi dòng lịch sử ở mỗi lần render danh sách.
+  const handleOpenOrderDetail = useCallback((order) => setDetailOrder(order), []);
 
   // ─── Lịch sử đơn — lọc [GIU-NGUYEN] ─────────────────────────────────────
   const filtHist = useMemo(() => {
@@ -890,9 +960,9 @@ export default function OrdersPage() {
                   key={t.id}
                   table={t}
                   isSelected={t.id === selectedId}
-                  onPress={() => setSelectedId(t.id === selectedId ? null : t.id)}
-                  onToggleActive={() => handleToggleActive(t)}
-                  onOpenChat={() => openChat(t.id)}
+                  onPress={handleSelectTable}
+                  onToggleActive={handleToggleActive}
+                  onOpenChat={openChat}
                 />
               ))}
             </View>
@@ -934,8 +1004,8 @@ export default function OrdersPage() {
                   <Search size={15} color={colors.gray[400]} />
                 </View>
                 <TextInput
-                  value={histSearch}
-                  onChangeText={setHistSearch}
+                  value={histSearchInput}
+                  onChangeText={setHistSearchInput}
                   placeholder="Tìm theo mã đơn, tên món..."
                   placeholderTextColor={colors.gray[300]}
                   className="bg-white border border-gray-200 rounded-xl text-sm text-gray-800"
@@ -1003,7 +1073,7 @@ export default function OrdersPage() {
                     key={ord._id}
                     order={ord}
                     isLast={idx === Math.min(filtHist.length, 50) - 1}
-                    onPress={() => setDetailOrder(ord)}
+                    onSelect={handleOpenOrderDetail}
                   />
                 ))
               )}

@@ -1,21 +1,6 @@
-// src/utils/callAPI.js
-// [NEN-MONG] Giữ nguyên toàn bộ getData/postData/putData/deleteData/patchData
-// và cấu trúc interceptor y hệt bản gốc. Chỉ sửa đúng 2 chỗ platform-specific
-// như progress.md đã chốt:
-//   1. Interceptor request đọc token từ useAuthZustand.getState().accessToken
-//      → giữ nguyên (đã là in-memory state, không đổi).
-//   2. Interceptor response khi 401 dùng window.location.href = "/login"
-//      → thay bằng resetToLogin() qua navigationRef của React Navigation.
 import axios from "axios";
 import { API_URL } from "../config/api";
 import { resetToLogin } from "../navigation/navigationRef";
-
-// ĐÃ XÓA dòng require ở đây để triệt tiêu hoàn toàn Require Cycle (vòng lặp import).
-
-// ======================================================
-// AXIOS INSTANCE
-// ======================================================
-
 const api = axios.create({
   baseURL: `${API_URL}/api`,
   timeout: 10000,
@@ -23,10 +8,6 @@ const api = axios.create({
     "Content-Type": "application/json",
   },
 });
-
-// ======================================================
-// REQUEST INTERCEPTOR
-// ======================================================
 
 api.interceptors.request.use(
   (config) => {
@@ -46,16 +27,6 @@ api.interceptors.request.use(
 
   (error) => Promise.reject(error)
 );
-
-// ======================================================
-// RESPONSE INTERCEPTOR — auto-redirect khi 401
-// ======================================================
-// Bất kỳ request nào (từ mọi trang, vì tất cả đều đi qua instance `api`
-// này) trả về 401 → coi như phiên đăng nhập không còn hợp lệ:
-//   1. Xoá auth state (clearAuth) — AsyncStorage được dọn bên trong store.
-//   2. Đưa người dùng về màn Login bằng navigationRef (thay window.location).
-// Bỏ qua chính request login (sai mật khẩu cũng trả 401, trang Login tự xử
-// lý message lỗi bằng field `success` như thường lệ).
 api.interceptors.response.use(
   (response) => response,
 
@@ -90,6 +61,10 @@ const handleResponse = async (request) => {
       status: response.status,
     };
   } catch (error) {
+    if (axios.isCancel(error) || error.code === "ERR_CANCELED") {
+      return { success: false, cancelled: true, status: 0, message: "", data: null };
+    }
+
     return {
       success: false,
       status: error.response?.status || 500,
@@ -98,29 +73,24 @@ const handleResponse = async (request) => {
     };
   }
 };
-
-// ======================================================
-// GET / POST / PUT / DELETE / PATCH
-// ======================================================
-
-export const getData = ({ url, params = {}, headers = {} }) => {
-  return handleResponse(api.get(url, { params, headers }));
+export const getData = ({ url, params = {}, headers = {}, signal }) => {
+  return handleResponse(api.get(url, { params, headers, signal }));
 };
 
-export const postData = ({ url, data = {}, headers = {} }) => {
-  return handleResponse(api.post(url, data, { headers }));
+export const postData = ({ url, data = {}, headers = {}, signal }) => {
+  return handleResponse(api.post(url, data, { headers, signal }));
 };
 
-export const putData = ({ url, data = {}, headers = {} }) => {
-  return handleResponse(api.put(url, data, { headers }));
+export const putData = ({ url, data = {}, headers = {}, signal }) => {
+  return handleResponse(api.put(url, data, { headers, signal }));
 };
 
-export const deleteData = ({ url, params = {}, headers = {} }) => {
-  return handleResponse(api.delete(url, { params, headers }));
+export const deleteData = ({ url, params = {}, headers = {}, signal }) => {
+  return handleResponse(api.delete(url, { params, headers, signal }));
 };
 
-export const patchData = ({ url, data = {}, headers = {} }) => {
-  return handleResponse(api.patch(url, data, { headers }));
+export const patchData = ({ url, data = {}, headers = {}, signal }) => {
+  return handleResponse(api.patch(url, data, { headers, signal }));
 };
 
 export default api;

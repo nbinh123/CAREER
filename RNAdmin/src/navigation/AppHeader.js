@@ -1,9 +1,3 @@
-// src/navigation/AppHeader.js
-// [UI] Chuyển từ phần <header> trong App.js gốc. Vì kiến trúc RN tách hẳn
-// nhánh "chưa đăng nhập" (LoginPage riêng, không có header) khỏi nhánh
-// "đã đăng nhập" (Drawer luôn có header này), phần nút "Đăng nhập" khi
-// !isLoggedIn của bản gốc không còn cần thiết — người dùng chỉ thấy header
-// này sau khi đã đăng nhập, y hệt hiệu ứng cuối cùng nhìn thấy trên web.
 import React from "react";
 import { View, Text, Pressable, StyleSheet } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -14,7 +8,11 @@ import colors from "../theme/tokens";
 
 export default function AppHeader({ navigation, route }) {
   const insets = useSafeAreaInsets();
-  const { currentUser, logout, stopWorking, beginWorking, isWorking } = useAuthZustand();
+  const currentUser = useAuthZustand((s) => s.currentUser);
+  const logout = useAuthZustand((s) => s.logout);
+  const stopWorking = useAuthZustand((s) => s.stopWorking);
+  const beginWorking = useAuthZustand((s) => s.beginWorking);
+  const isWorking = useAuthZustand((s) => s.isWorking);
 
   const navItem = NAV.find((n) => n.screen === route.name);
   const title = navItem?.label ?? route.name;

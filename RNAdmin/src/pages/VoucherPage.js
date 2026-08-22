@@ -1,8 +1,9 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
     View,
     Text,
     ScrollView,
+    FlatList,
     Pressable,
     TextInput,
     Modal,
@@ -124,6 +125,13 @@ const toISODateLocal = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pa
    UI HELPERS cục bộ (không có Button/Modal/FormInput dùng chung
    nào để tái sử dụng — dựng riêng trong file này, cùng cách các
    trang khác trong dự án đã làm)
+
+   Ghi chú tối ưu: các component thuần "presentational" (chỉ nhận
+   props và render) được bọc React.memo để tránh re-render dây
+   chuyền khi VoucherPage re-render vì lý do khác (gõ search, mở
+   modal...). ModalOverlay / PickerBody / DateField KHÔNG memo vì
+   luôn chỉ có 1 instance sống tại 1 thời điểm — memo không mang
+   lại lợi ích thực tế ở đây.
 ════════════════════════════════════════════════════════════ */
 
 /* Overlay dùng chung cho mọi modal — tương đương e.stopPropagation() bên
@@ -150,7 +158,7 @@ function ModalOverlay({ onClose, maxWidth = 460, children }) {
     );
 }
 
-function IconBtn({ icon: Icon, onPress, tone = "neutral" }) {
+const IconBtn = React.memo(function IconBtn({ icon: Icon, onPress, tone = "neutral" }) {
     const TONE = {
         neutral: { box: "bg-gray-50", color: colors.gray[500] },
         danger: { box: "bg-red-50", color: colors.red[600] },
@@ -165,11 +173,11 @@ function IconBtn({ icon: Icon, onPress, tone = "neutral" }) {
             <Icon size={15} color={t.color} />
         </Pressable>
     );
-}
+});
 
 /* Nhãn + (tuỳ chọn) lỗi bên dưới — bọc mọi loại field trong form, kể cả
    field không phải TextInput (segmented/checkbox/date/picker). */
-function FieldWrap({ label, error, children }) {
+const FieldWrap = React.memo(function FieldWrap({ label, error, children }) {
     return (
         <View style={{ marginBottom: 14 }}>
             <Text className="text-xs font-semibold text-gray-500 mb-1.5">{label}</Text>
@@ -177,9 +185,9 @@ function FieldWrap({ label, error, children }) {
             {!!error && <Text className="text-rose-600 text-xs mt-1">{error}</Text>}
         </View>
     );
-}
+});
 
-function FieldInput({ label, error, value, onChangeText, keyboardType = "default", multiline, full, placeholder }) {
+const FieldInput = React.memo(function FieldInput({ label, error, value, onChangeText, keyboardType = "default", multiline, full, placeholder }) {
     return (
         <View className={full ? "w-full" : "w-[47%]"} style={{ marginBottom: 14 }}>
             <Text className="text-xs font-semibold text-gray-500 mb-1.5">{label}</Text>
@@ -196,11 +204,11 @@ function FieldInput({ label, error, value, onChangeText, keyboardType = "default
             {!!error && <Text className="text-rose-600 text-xs mt-1">{error}</Text>}
         </View>
     );
-}
+});
 
 /* Ô vuông tự vẽ thay <input type="checkbox"> — dùng cho kênh áp dụng và
    từng dòng trong PickerBody bên dưới. */
-function CheckBox({ checked }) {
+const CheckBox = React.memo(function CheckBox({ checked }) {
     return (
         <View
             className={`items-center justify-center rounded-md ${checked ? "bg-green-600" : "bg-white border border-gray-300"}`}
@@ -209,7 +217,7 @@ function CheckBox({ checked }) {
             {checked && <Check size={12} color={colors.white} />}
         </View>
     );
-}
+});
 
 /* Ô chọn ngày, thay <input type="date"> — copy nguyên cách StoragePage.js
    đã dựng (Platform-specific behavior cho Android/iOS). */
@@ -320,7 +328,7 @@ function PickerBody({ options, selectedIds, onToggle, onDone, loading, emptyText
 }
 
 /* Nút mở picker (thay trigger của SearchableMultiSelect) */
-function PickerTrigger({ count, placeholder, onPress }) {
+const PickerTrigger = React.memo(function PickerTrigger({ count, placeholder, onPress }) {
     return (
         <Pressable
             onPress={onPress}
@@ -333,9 +341,9 @@ function PickerTrigger({ count, placeholder, onPress }) {
             <ChevronRight size={16} color={colors.gray[400]} />
         </Pressable>
     );
-}
+});
 
-function Row({ label, value }) {
+const Row = React.memo(function Row({ label, value }) {
     return (
         <View className="flex-row justify-between" style={{ gap: 12 }}>
             <Text className="text-gray-400 text-sm">{label}</Text>
@@ -344,12 +352,15 @@ function Row({ label, value }) {
             </Text>
         </View>
     );
-}
+});
 
 /* 1 voucher = 1 card (thay cho 1 hàng <tr> ở bản gốc). KHÔNG bớt field nào
    so với bảng 9 cột gốc — dòng 3 gộp "Loại giảm" + "Giá trị" lại vì cùng
-   diễn đạt 1 ý ("Giảm 10%" / "Giảm 20.000₫"). */
-function VoucherCard({ voucher, isLast, onView, onEdit, onToggleActive }) {
+   diễn đạt 1 ý ("Giảm 10%" / "Giảm 20.000₫"). Bọc React.memo vì đây là
+   item của danh sách (nay là FlatList renderItem) — tránh re-render mọi
+   card khi chỉ 1 card thay đổi hoặc khi component cha re-render vì lý do
+   khác (gõ search, mở modal...). */
+const VoucherCard = React.memo(function VoucherCard({ voucher, isLast, onView, onEdit, onToggleActive }) {
     const meta = getStatusMeta(voucher.status);
     return (
         <View
@@ -400,7 +411,7 @@ function VoucherCard({ voucher, isLast, onView, onEdit, onToggleActive }) {
             </View>
         </View>
     );
-}
+});
 
 /* ════════════════════════════════════════════════════════════
    MAIN COMPONENT
@@ -468,11 +479,28 @@ export default function VoucherPage() {
         [foodOptions]
     );
 
+    /* ── Tối ưu: giữ fetchStats/fetchVouchers ổn định identity ──────
+       Đọc statsRange/search qua ref thay vì đóng gói trực tiếp trong
+       closure, để các hàm này không cần nằm trong dependency array
+       của bất kỳ useCallback/useEffect nào khác (handleToggleActive,
+       handleSubmit...) — tránh việc các hàm đó bị tạo lại theo
+       statsRange/search dù không thực sự liên quan. */
+    const searchRef = useRef(search);
+    useEffect(() => {
+        searchRef.current = search;
+    }, [search]);
+
+    const statsRangeRef = useRef(statsRange);
+    useEffect(() => {
+        statsRangeRef.current = statsRange;
+    }, [statsRange]);
+
     // ── Fetch thống kê ──────────────────────────────────────────────
-    const fetchStats = () => {
+    const fetchStats = useCallback(() => {
         setStatsLoading(true);
         setStatsError(null);
-        const rangeParam = statsRange === "all" ? "" : `?range=${statsRange}`;
+        const r = statsRangeRef.current;
+        const rangeParam = r === "all" ? "" : `?range=${r}`;
         getData({ url: `/vouchers/stats${rangeParam}` })
             .then((res) => {
                 // Phòng trường hợp response thiếu field / sai shape (res.data hoặc
@@ -486,15 +514,18 @@ export default function VoucherPage() {
                 setStatsError("Không tải được thống kê voucher");
             })
             .finally(() => setStatsLoading(false));
-    };
+    }, []);
 
-    useEffect(fetchStats, [statsRange]);
+    useEffect(() => {
+        fetchStats();
+    }, [statsRange, fetchStats]);
 
     // ── Fetch danh sách ─────────────────────────────────────────────
-    const fetchVouchers = () => {
+    const fetchVouchers = useCallback(() => {
         setListLoading(true);
         setListError(null);
-        const query = search.trim() ? `?search=${encodeURIComponent(search.trim())}` : "";
+        const q = searchRef.current.trim();
+        const query = q ? `?search=${encodeURIComponent(q)}` : "";
         getData({ url: `/vouchers${query}` })
             .then((res) => {
                 // Chấp nhận cả 2 dạng: res.data là mảng trực tiếp, HOẶC res.data.data
@@ -512,13 +543,12 @@ export default function VoucherPage() {
                 setListError("Không tải được danh sách voucher");
             })
             .finally(() => setListLoading(false));
-    };
+    }, []);
 
     useEffect(() => {
         const timer = setTimeout(fetchVouchers, 350); // debounce ô tìm kiếm
         return () => clearTimeout(timer);
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [search]);
+    }, [search, fetchVouchers]);
 
     // status là virtual field server trả sẵn trong mỗi voucher — lọc ngay
     // trên client, không cần thêm query param vì backend chưa hỗ trợ filter
@@ -530,15 +560,15 @@ export default function VoucherPage() {
     }, [vouchers, statusFilter]);
 
     // ── Mở form ─────────────────────────────────────────────────────
-    const openCreateForm = () => {
+    const openCreateForm = useCallback(() => {
         setEditingVoucher(null);
         setForm(emptyForm);
         setFormErrors({});
         setPickerMode(null);
         setFormOpen(true);
-    };
+    }, []);
 
-    const openEditForm = (voucher) => {
+    const openEditForm = useCallback((voucher) => {
         if (!voucher) return;
         setEditingVoucher(voucher);
         setForm({
@@ -562,42 +592,70 @@ export default function VoucherPage() {
         setFormErrors({});
         setPickerMode(null);
         setFormOpen(true);
-    };
+    }, []);
 
-    const closeForm = () => {
+    const closeForm = useCallback(() => {
         setFormOpen(false);
         setPickerMode(null);
-    };
+    }, []);
 
-    const toggleChannel = (channel) => {
+    const toggleChannel = useCallback((channel) => {
         setForm((f) => ({
             ...f,
             applicableChannels: f.applicableChannels.includes(channel)
                 ? f.applicableChannels.filter((c) => c !== channel)
                 : [...f.applicableChannels, channel],
         }));
-    };
+    }, []);
 
-    const toggleCategoryId = (id) => {
+    const toggleCategoryId = useCallback((id) => {
         setForm((f) => ({
             ...f,
             applicableCategoryIds: f.applicableCategoryIds.includes(id)
                 ? f.applicableCategoryIds.filter((c) => c !== id)
                 : [...f.applicableCategoryIds, id],
         }));
-    };
+    }, []);
 
-    const toggleFoodId = (id) => {
+    const toggleFoodId = useCallback((id) => {
         setForm((f) => ({
             ...f,
             applicableFoodIds: f.applicableFoodIds.includes(id)
                 ? f.applicableFoodIds.filter((c) => c !== id)
                 : [...f.applicableFoodIds, id],
         }));
-    };
+    }, []);
+
+    /* ── Tối ưu: handler ổn định cho từng field text của form ────────
+       Trước đây mỗi FieldInput nhận 1 arrow function tạo mới ngay
+       trong JSX mỗi lần VoucherPage render → dù FieldInput đã memo,
+       props onChangeText luôn "mới" nên memo vô nghĩa, gõ vào 1 ô
+       kéo theo re-render tất cả field khác trong form. setField tạo
+       ra closure ổn định theo từng "key", chỉ tính 1 lần. */
+    const setField = useCallback((key) => (value) => {
+        setForm((f) => ({ ...f, [key]: value }));
+    }, []);
+
+    const handleCodeChange = useCallback((t) => {
+        setForm((f) => ({ ...f, code: t.toUpperCase() }));
+    }, []);
+
+    const fieldHandlers = useMemo(
+        () => ({
+            name: setField("name"),
+            description: setField("description"),
+            discountValue: setField("discountValue"),
+            minOrderValue: setField("minOrderValue"),
+            maxDiscountAmount: setField("maxDiscountAmount"),
+            usageLimit: setField("usageLimit"),
+            usageLimitPerCustomer: setField("usageLimitPerCustomer"),
+            applicableCustomerIdsRaw: setField("applicableCustomerIdsRaw"),
+        }),
+        [setField]
+    );
 
     // ── Submit tạo/sửa ──────────────────────────────────────────────
-    const handleSubmit = async () => {
+    const handleSubmit = useCallback(async () => {
         const errors = {};
         if (!form.name.trim()) errors.name = "Vui lòng nhập tên voucher";
         if (!form.code.trim()) errors.code = "Vui lòng nhập mã voucher";
@@ -654,29 +712,32 @@ export default function VoucherPage() {
         closeForm();
         fetchVouchers();
         fetchStats();
-    };
+    }, [form, editingVoucher, closeForm, fetchVouchers, fetchStats]);
 
     // ── Tắt / bật nhanh từ danh sách ────────────────────────────────
-    const handleToggleActive = async (voucher) => {
-        if (!voucher?._id) return;
+    const handleToggleActive = useCallback(
+        async (voucher) => {
+            if (!voucher?._id) return;
 
-        try {
-            const res = await putData({
-                url: `/vouchers/${voucher._id}`,
-                data: { isActive: !voucher.isActive },
-            });
+            try {
+                const res = await putData({
+                    url: `/vouchers/${voucher._id}`,
+                    data: { isActive: !voucher.isActive },
+                });
 
-            if (!res?.success) {
-                console.error("Failed to toggle voucher:", res?.message);
-                return;
+                if (!res?.success) {
+                    console.error("Failed to toggle voucher:", res?.message);
+                    return;
+                }
+
+                fetchVouchers();
+                fetchStats();
+            } catch (err) {
+                console.error("Failed to toggle voucher:", err);
             }
-
-            fetchVouchers();
-            fetchStats();
-        } catch (err) {
-            console.error("Failed to toggle voucher:", err);
-        }
-    };
+        },
+        [fetchVouchers, fetchStats]
+    );
 
     const todayLabel = new Date().toLocaleDateString("vi-VN", {
         weekday: "long",
@@ -687,10 +748,30 @@ export default function VoucherPage() {
 
     const rangeSubLabel = RANGE_OPTIONS.find((r) => r.value === statsRange)?.label;
 
-    return (
-        <View style={{ flex: 1 }} className="bg-gray-50">
-            <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40, gap: 14 }} keyboardShouldPersistTaps="handled">
-                {/* ── Header ────────────────────────────────────────────────── */}
+    /* ── Tối ưu FlatList: keyExtractor + renderItem ổn định ──────────
+       renderVoucherItem chỉ đổi identity khi filteredVouchers.length,
+       openEditForm hoặc handleToggleActive thực sự đổi (2 hàm này đã
+       ổn định gần như vĩnh viễn nhờ useCallback ở trên) — giúp
+       FlatList tránh re-render toàn bộ item khi không cần thiết. */
+    const keyExtractor = useCallback((item, index) => item?._id || `voucher-${index}`, []);
+
+    const renderVoucherItem = useCallback(
+        ({ item, index }) => (
+            <VoucherCard
+                voucher={item}
+                isLast={index === filteredVouchers.length - 1}
+                onView={setViewingVoucher}
+                onEdit={openEditForm}
+                onToggleActive={handleToggleActive}
+            />
+        ),
+        [filteredVouchers.length, openEditForm, handleToggleActive]
+    );
+
+    const listHeader = useMemo(
+        () => (
+            <View style={{ paddingHorizontal: 16, paddingTop: 16, gap: 14 }}>
+                {/* ── Header ────────────────────────────────────────────── */}
                 <View className="flex-row items-start justify-between" style={{ gap: 12 }}>
                     <View>
                         <Text className="text-2xl font-black text-green-900">Quản lý Voucher</Text>
@@ -706,7 +787,7 @@ export default function VoucherPage() {
                     </Pressable>
                 </View>
 
-                {/* ── Bộ lọc khoảng thời gian cho 2 thẻ cuối ──────────────────── */}
+                {/* ── Bộ lọc khoảng thời gian cho 2 thẻ cuối ────────────── */}
                 <View style={{ gap: 8 }}>
                     <Text className="text-xs text-gray-500 font-semibold">Thống kê giảm giá:</Text>
                     <View className="flex-row flex-wrap" style={{ gap: 8 }}>
@@ -731,7 +812,7 @@ export default function VoucherPage() {
                     )}
                 </View>
 
-                {/* ── 6 thẻ thống kê ───────────────────────────────────────── */}
+                {/* ── 6 thẻ thống kê ───────────────────────────────────── */}
                 <View className="flex-row flex-wrap" style={{ gap: 12 }}>
                     <StatCard icon={Ticket} label="Tổng voucher" value={statsLoading ? "…" : stats?.totalVouchers ?? 0} sub="Toàn bộ mã đang có" color="blue" />
                     <StatCard icon={CheckCircle2} label="Đang hoạt động" value={statsLoading ? "…" : stats?.active ?? 0} sub="Khách có thể dùng ngay" color="green" />
@@ -741,7 +822,7 @@ export default function VoucherPage() {
                     <StatCard icon={BarChart3} label="Số lượt sử dụng" value={statsLoading ? "…" : stats?.totalUses ?? 0} sub={rangeSubLabel} color="blue" />
                 </View>
 
-                {/* ── Danh sách ────────────────────────────────────────────── */}
+                {/* ── Thanh công cụ danh sách (title + search + filter) ─── */}
                 <View className="bg-white rounded-2xl border border-gray-100" style={{ padding: 16, gap: 12 }}>
                     <Text className="font-bold text-gray-700">Danh sách voucher</Text>
 
@@ -780,33 +861,70 @@ export default function VoucherPage() {
                             <Text className="text-xs text-rose-600 font-semibold">{listError}</Text>
                         </View>
                     )}
-
-                    <View className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
-                        {listLoading ? (
-                            <View className="flex-row items-center justify-center py-16" style={{ gap: 8 }}>
-                                <ActivityIndicator size="small" color={colors.gray[400]} />
-                                <Text className="text-sm text-gray-400">Đang tải...</Text>
-                            </View>
-                        ) : filteredVouchers.length === 0 ? (
-                            <View className="items-center py-14 px-6">
-                                <Text style={{ fontSize: 34 }}>🎟️</Text>
-                                <Text className="text-sm text-gray-300 font-bold mt-2">Chưa có voucher nào</Text>
-                            </View>
-                        ) : (
-                            filteredVouchers.map((v, idx) => (
-                                <VoucherCard
-                                    key={v._id || idx}
-                                    voucher={v}
-                                    isLast={idx === filteredVouchers.length - 1}
-                                    onView={setViewingVoucher}
-                                    onEdit={openEditForm}
-                                    onToggleActive={handleToggleActive}
-                                />
-                            ))
-                        )}
-                    </View>
                 </View>
-            </ScrollView>
+            </View>
+        ),
+        [
+            todayLabel,
+            openCreateForm,
+            statsRange,
+            statsError,
+            statsLoading,
+            stats,
+            rangeSubLabel,
+            search,
+            statusFilter,
+            listError,
+        ]
+    );
+
+    const listEmpty = useMemo(
+        () =>
+            listLoading ? (
+                <View className="flex-row items-center justify-center py-16" style={{ gap: 8 }}>
+                    <ActivityIndicator size="small" color={colors.gray[400]} />
+                    <Text className="text-sm text-gray-400">Đang tải...</Text>
+                </View>
+            ) : (
+                <View className="items-center py-14 px-6">
+                    <Text style={{ fontSize: 34 }}>🎟️</Text>
+                    <Text className="text-sm text-gray-300 font-bold mt-2">Chưa có voucher nào</Text>
+                </View>
+            ),
+        [listLoading]
+    );
+
+    return (
+        <View style={{ flex: 1 }} className="bg-gray-50">
+            {/* Danh sách voucher — trước đây ScrollView + filteredVouchers.map(),
+                nay dùng FlatList để chỉ render số item lấp đầy khung hình + buffer
+                (giảm mount cost/RAM, scroll mượt hơn khi số voucher lớn). Header
+                (title, thống kê, ô search, filter) đưa vào ListHeaderComponent để
+                FlatList vẫn là scroll container duy nhất của trang — không lồng
+                FlatList trong ScrollView. */}
+            <FlatList
+                data={filteredVouchers}
+                keyExtractor={keyExtractor}
+                renderItem={renderVoucherItem}
+                ListHeaderComponent={listHeader}
+                ListEmptyComponent={listEmpty}
+                style={{
+                    marginHorizontal: 16,
+                    marginTop: 12,
+                    marginBottom: 40,
+                    backgroundColor: colors.white,
+                    borderWidth: 1,
+                    borderColor: colors.gray[100],
+                    borderRadius: 16,
+                    overflow: "hidden",
+                }}
+                contentContainerStyle={{ flexGrow: 1 }}
+                keyboardShouldPersistTaps="handled"
+                initialNumToRender={10}
+                maxToRenderPerBatch={10}
+                windowSize={7}
+                removeClippedSubviews={Platform.OS === "android"}
+            />
 
             {/* ── Modal xem chi tiết ────────────────────────────────────── */}
             {!!viewingVoucher && (
@@ -884,7 +1002,7 @@ export default function VoucherPage() {
                                         full
                                         error={formErrors.code}
                                         value={form.code}
-                                        onChangeText={(t) => setForm((f) => ({ ...f, code: t.toUpperCase() }))}
+                                        onChangeText={handleCodeChange}
                                         placeholder="GIAM10"
                                     />
                                     <FieldInput
@@ -892,7 +1010,7 @@ export default function VoucherPage() {
                                         full
                                         error={formErrors.name}
                                         value={form.name}
-                                        onChangeText={(t) => setForm((f) => ({ ...f, name: t }))}
+                                        onChangeText={fieldHandlers.name}
                                         placeholder="Giảm 10%"
                                     />
                                     <FieldInput
@@ -900,7 +1018,7 @@ export default function VoucherPage() {
                                         full
                                         multiline
                                         value={form.description}
-                                        onChangeText={(t) => setForm((f) => ({ ...f, description: t }))}
+                                        onChangeText={fieldHandlers.description}
                                     />
 
                                     <FieldWrap label="Loại giảm">
@@ -925,7 +1043,7 @@ export default function VoucherPage() {
                                         keyboardType="decimal-pad"
                                         error={formErrors.discountValue}
                                         value={form.discountValue}
-                                        onChangeText={(t) => setForm((f) => ({ ...f, discountValue: t }))}
+                                        onChangeText={fieldHandlers.discountValue}
                                     />
 
                                     <View className="flex-row flex-wrap justify-between">
@@ -933,13 +1051,13 @@ export default function VoucherPage() {
                                             label="Đơn tối thiểu (đ)"
                                             keyboardType="decimal-pad"
                                             value={form.minOrderValue}
-                                            onChangeText={(t) => setForm((f) => ({ ...f, minOrderValue: t }))}
+                                            onChangeText={fieldHandlers.minOrderValue}
                                         />
                                         <FieldInput
                                             label="Giảm tối đa (đ)"
                                             keyboardType="decimal-pad"
                                             value={form.maxDiscountAmount}
-                                            onChangeText={(t) => setForm((f) => ({ ...f, maxDiscountAmount: t }))}
+                                            onChangeText={fieldHandlers.maxDiscountAmount}
                                             placeholder="Trống = không giới hạn"
                                         />
                                     </View>
@@ -949,14 +1067,14 @@ export default function VoucherPage() {
                                             label="Tổng lượt dùng"
                                             keyboardType="number-pad"
                                             value={form.usageLimit}
-                                            onChangeText={(t) => setForm((f) => ({ ...f, usageLimit: t }))}
+                                            onChangeText={fieldHandlers.usageLimit}
                                             placeholder="Trống = không giới hạn"
                                         />
                                         <FieldInput
                                             label="Lượt / khách"
                                             keyboardType="number-pad"
                                             value={form.usageLimitPerCustomer}
-                                            onChangeText={(t) => setForm((f) => ({ ...f, usageLimitPerCustomer: t }))}
+                                            onChangeText={fieldHandlers.usageLimitPerCustomer}
                                         />
                                     </View>
 
@@ -1008,7 +1126,7 @@ export default function VoucherPage() {
                                         label="Khách hàng cụ thể (customerId/accountId, cách nhau dấu phẩy — để trống = mọi khách)"
                                         full
                                         value={form.applicableCustomerIdsRaw}
-                                        onChangeText={(t) => setForm((f) => ({ ...f, applicableCustomerIdsRaw: t }))}
+                                        onChangeText={fieldHandlers.applicableCustomerIdsRaw}
                                     />
 
                                     <View className="flex-row items-center justify-between" style={{ marginBottom: 8 }}>
