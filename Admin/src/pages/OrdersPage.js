@@ -1,676 +1,1009 @@
-// pages/MenuPage.js
-import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useEffect, useRef, useState, useCallback, useMemo } from "react";
+import socket from "../utils/socket";
 import Button from "../components/Button";
-import FormInput from "../components/FormInput";
 import Modal from "../components/Modal";
-import ImageUploadField from "../components/ImageUploadField";
-import IngredientPicker from "../components/IngredientPicker";
-
-import {
-  Edit2, Plus, Search, Check, Info, Save, RotateCcw,
-  Trash2, X, FolderOpen, RefreshCcw, StickyNote, Upload, Loader2
-} from "lucide-react";
+import StatusBadge from "../components/StatusBadge";
+import { Bell, Check, CheckCircle2, ChefHat, Flame, Lock, MessageCircle, Search, Send, Trash2, Wifi, WifiOff, X } from "lucide-react";
 import fmtVND from "../utils/fmtVND";
-import extractCatName from "../utils/extractCatName";
-import useFoodZustand from "../zustand/useFoodZustand";
-
-
-import exportJSON from "../utils/exportJSON"
+import fmtDate from "../utils/fmtDate";
 import { API_URL } from "../config/api";
-import importJSON from "../utils/importJSON";
-// ─── Constants ────────────────────────────────────────────────────────────────
+import axios from "axios"
 
-/** Danh mục cố định — không cần API */
-const CAT_OPTIONS = ["Đồ chiên", "Lẩu", "Chính", "Tráng miệng", "Nước", "Món thêm"];
-const CAT_FILTER = ["Tất cả", ...CAT_OPTIONS];
+// ─── Hằng số ──────────────────────────────────────────────────────────────────
+const TABLE_COUNT = 12;
+const ORDERS_API_URL = `${API_URL}/api/orders`;
+const CHAT_TOOLTIP_DURATION = 8000; // tooltip tự ẩn sau 8s nếu admin không bấm vào
 
-/** Danh mục dùng riêng cho combo trái cây mix — quản lý & hiển thị ở FruitPage, không hiện ở đây */
-const MIX_CATEGORY = "Trái cây mix";
+const mkEmptyTable = (id) => ({
+  id,
+  name: `Bàn ${id}`,
+  status: "empty",
+  since: null,
+  items: [],
+  pendingItems: [],
+  active: false, // mặc định khoá gọi món cho tới khi admin bật, khớp default ở DB
+  chatEnabled: true, // mặc định mở tin nhắn, khớp default ở DB
+  guestName: null, // tên khách nhập ở GuestInfoPage.jsx (phía khách) trước khi gọi món
+  guestPhone: null, // SĐT khách, đủ 10 chữ số — hiện cùng tên trong hộp thoại chat
+  messages: [],
+});
 
-const EMPTY_FOOD = {
-  foodName: "",
-  categoryId: CAT_OPTIONS[0],  // lưu tên, không phải ObjectId
-  costPrice: 0,
-  originalPrice: 0,
-  aiTrainingWeight: 0,
-  isAvailable: true,
-  note: "",
-  ingredients: [],
-};
+// ─── Component ────────────────────────────────────────────────────────────────
+export default function OrdersPage() {
+  // const { currentUser, logout } = useAuthZustand();   // { _id, name, role: "admin" | "staff" }
 
-// ─── Sub-components ───────────────────────────────────────────────────────────
+  // ── State ─────────────────────────────────────────────────────────────────
+  const [tables, setTables] = useState(() => Array.from({ length: TABLE_COUNT }, (_, i) => mkEmptyTable(i + 1)));
+  const [connected, setConnected] = useState(false);
+  const [tab, setTab] = useState("tables");
+  const [selectedId, setSelectedId] = useState(null);
+  const [selectedPending, setSelectedPending] = useState(() => new Set());
+  const [checkoutOpen, setCheckoutOpen] = useState(false);
+  const [payMethod, setPayMethod] = useState("CASH");
+  const [orders, setOrders] = useState([]);
+  const [histSearch, setHistSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [checkoutLoading, setCheckoutLoading] = useState(false);
+  const [confirmLoading, setConfirmLoading] = useState(false);
+  const [toast, setToast] = useState(null); // { type, msg }
 
-function StatusBadge({ isAvailable }) {
-  return (
-    <span className={`text-xs px-2 py-0.5 rounded-full flex-shrink-0 font-semibold ${isAvailable ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"
-      }`}>
-      {isAvailable ? "Đang bán" : "Nghỉ"}
-    </span>
-  );
-}
+  const [paymentFilter, setPaymentFilter] = useState("");
+  const [minAmount, setMinAmount] = useState("");
+  const [maxAmount, setMaxAmount] = useState("");
 
-function AvailabilityToggle({ isAvailable, onToggle }) {
-  return (
-    <button
-      type="button"
-      onClick={(e) => { e.stopPropagation(); onToggle(); }}
-      title={isAvailable ? "Đang hiển thị — bấm để ẩn khỏi menu" : "Đang ẩn — bấm để hiển thị lên menu"}
-      className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors flex-shrink-0 ${isAvailable ? "bg-green-500" : "bg-gray-300"
-        }`}
-    >
-      <span
-        className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform ${isAvailable ? "translate-x-[18px]" : "translate-x-[2px]"
-          }`}
-      />
-    </button>
-  );
-}
+  // ── Chat theo bàn ────────────────────────────────────────────────────────
+  const [chatOpenTableId, setChatOpenTableId] = useState(null);
+  const [chatDraft, setChatDraft] = useState("");
+  const [tooltips, setTooltips] = useState({}); // { [tableId]: message } — tin nhắn mới nhất chưa xem
 
-function MarginBar({ margin }) {
-  const m = Math.max(0, Math.min(margin, 100));
-  const bar = m > 50 ? "bg-green-400" : m > 30 ? "bg-amber-400" : "bg-red-400";
-  const text = m > 50 ? "text-green-600" : m > 30 ? "text-amber-600" : "text-red-500";
-  return (
-    <div className="flex items-center gap-1.5">
-      <div className="w-16 h-1.5 bg-gray-100 rounded-full overflow-hidden">
-        <div style={{ width: `${m}%` }} className={`h-full rounded-full ${bar}`} />
-      </div>
-      <span className={`font-bold ${text}`}>{margin}%</span>
-    </div>
-  );
-}
+  const socketRef = useRef(null);
+  const chatScrollRef = useRef(null);
+  const chatInputRef = useRef(null);
+  const tooltipTimers = useRef({});
+  const chatOpenTableIdRef = useRef(null); // để đọc trong socket handler mà không tạo lại effect
+  const [clearChatConfirmOpen, setClearChatConfirmOpen] = useState(false);
 
-function FoodImage({ src, name, className = "" }) {
-  const [errored, setErrored] = useState(false);
-  if (!src || errored) {
-    return (
-      <div className={`flex items-center justify-center bg-gradient-to-br from-green-50 via-emerald-50 to-teal-50 ${className}`}>
-        <span className="text-4xl font-black text-green-200 select-none">{name?.[0] ?? "?"}</span>
-      </div>
-    );
-  }
-  return (
-    <img src={src} alt={name} onError={() => setErrored(true)}
-      className={`object-cover ${className}`} />
-  );
-}
+  useEffect(() => {
+    chatOpenTableIdRef.current = chatOpenTableId;
+  }, [chatOpenTableId]);
 
-function FoodCard({ food, onEdit, onInfo, onRemove, onEditNote, isPending, onToggleAvailable }) {
-  const margin = food.originalPrice > 0
-    ? Math.round((food.originalPrice - food.costPrice) / food.originalPrice * 100)
-    : 0;
-  const catName = extractCatName(food.categoryId);
-
-  return (
-    <div className={`bg-white rounded-2xl border overflow-hidden transition-all hover:shadow-md hover:-translate-y-0.5
-      ${food.isAvailable ? "border-gray-100" : "border-gray-200 opacity-60"}
-      ${isPending ? "ring-2 ring-amber-300" : ""}`}>
-
-      <div className="relative h-36">
-        <FoodImage src={food.imageUrl} name={food.foodName} className="h-36 w-full" />
-        {!food.isAvailable && (
-          <div className="absolute inset-0 bg-gray-200/60 flex items-center justify-center">
-            <span className="text-xs font-bold text-gray-500 bg-white rounded-lg px-2 py-1">Tạm nghỉ</span>
-          </div>
-        )}
-        {isPending && (
-          <span className="absolute top-2 right-2 text-[10px] bg-amber-400 text-white font-bold rounded-full px-1.5 py-0.5">
-            Chưa lưu
-          </span>
-        )}
-      </div>
-
-      <div className="p-4">
-        <div className="flex items-start justify-between gap-2 mb-1">
-          <h4 className="font-bold text-gray-800 text-sm leading-tight">{food.foodName}</h4>
-          <div className="flex items-center gap-1.5 flex-shrink-0">
-            <StatusBadge isAvailable={food.isAvailable} />
-            <AvailabilityToggle
-              isAvailable={food.isAvailable}
-              onToggle={() => onToggleAvailable(food)}
-            />
-          </div>
-        </div>
-        <p className="text-xs text-gray-400 mb-3 font-medium">{catName || "—"}</p>
-
-        <div className="space-y-1.5 text-xs">
-          <div className="flex justify-between">
-            <span className="text-gray-500">Giá bán</span>
-            <span className="font-bold text-green-600">{fmtVND(food.originalPrice)}</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-gray-500">Giá vốn</span>
-            <span className="text-gray-600">{fmtVND(food.costPrice)}</span>
-          </div>
-          <div className="flex justify-between items-center">
-            <span className="text-gray-500">Biên LN</span>
-            <MarginBar margin={margin} />
-          </div>
-        </div>
-
-        <div className="mt-3 pt-3 border-t border-gray-50 flex gap-2">
-          <Button sm variant="secondary" className="flex-1 justify-center" onClick={() => onEdit(food)}>
-            <Edit2 size={12} />Sửa
-          </Button>
-          <Button sm variant="secondary" className="flex-1 justify-center" onClick={() => onInfo(food)}>
-            <Info size={12} />Chi tiết
-          </Button>
-          <button onClick={() => onEditNote(food)}
-            className={`p-1.5 rounded-xl transition-colors ${food.note
-              ? "text-amber-500 bg-amber-50 hover:bg-amber-100"
-              : "text-gray-300 hover:bg-gray-50 hover:text-amber-500"
-              }`}
-            title={food.note ? "Xem/sửa ghi chú" : "Thêm ghi chú"}>
-            <StickyNote size={14} />
-          </button>
-          <button onClick={() => onRemove(food._id)}
-            className="p-1.5 rounded-xl text-red-400 hover:bg-red-50 hover:text-red-600 transition-colors"
-            title="Xóa món">
-            <Trash2 size={14} />
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── Info Modal ───────────────────────────────────────────────────────────────
-
-function InfoModal({ food, open, onClose }) {
-  if (!food) return null;
-  const catName = extractCatName(food.categoryId);
-  const pct = food.percentageDiscount ?? food.categoryId?.percentageDiscount ?? 0;
-  const fixed = food.fixedDiscount ?? food.categoryId?.fixedDiscount ?? 0;
-  const disc = Math.max(food.originalPrice * (1 - pct / 100) - fixed, 0);
-  const profit = disc - food.costPrice;
-  const margin = disc > 0 ? Math.round((profit / disc) * 100) : 0;
-
-  const rows = [
-    ["Tên món", food.foodName],
-    ["Danh mục", catName || "—"],
-    ["Trạng thái", food.isAvailable ? "Đang bán" : "Tạm nghỉ"],
-    ["Giá bán gốc", fmtVND(food.originalPrice)],
-    ["Giá vốn", fmtVND(food.costPrice)],
-    ["Giảm %", `${pct}%`],
-    ["Giảm cố định", fmtVND(fixed)],
-    ["Giá sau ưu đãi", fmtVND(disc)],
-    ["Lợi nhuận gộp", fmtVND(profit)],
-    ["Biên lợi nhuận", `${margin}%`],
-    ["Trọng số AI", food.aiTrainingWeight ?? 0],
-  ];
-
-  return (
-    <Modal open={open} onClose={onClose} title={`Chi tiết — ${food.foodName}`}>
-      <div className="mb-4">
-        <FoodImage src={food.imageUrl} name={food.foodName} className="w-full h-44 rounded-xl" />
-      </div>
-      <table className="w-full text-sm">
-        <tbody className="divide-y divide-gray-50">
-          {rows.map(([label, value]) => (
-            <tr key={label}>
-              <td className="py-2 pr-4 text-gray-500 font-medium whitespace-nowrap">{label}</td>
-              <td className="py-2 text-gray-800 font-semibold text-right">{value}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      {food.ingredients?.length > 0 && (
-        <div className="mt-4">
-          <p className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">Nguyên liệu</p>
-          <div className="space-y-1.5">
-            {food.ingredients.map((ing, i) => (
-              <div key={i} className="flex justify-between text-xs bg-gray-50 rounded-lg px-3 py-2">
-                <span className="text-gray-700 font-medium">{ing.ingredientName}</span>
-                <span className="text-gray-500">{ing.quantity} {ing.smallUnit} — {fmtVND(ing.price)}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-      <div className="flex justify-end mt-5 pt-4 border-t border-gray-100">
-        <Button variant="outline" onClick={onClose}>Đóng</Button>
-      </div>
-    </Modal>
-  );
-}
-
-// ─── Main Page ────────────────────────────────────────────────────────────────
-
-export default function MenuPage() {
-  const {
-    foods, loading, error,
-    getFoods,
-    stageAddFood, stageUpdateFood, stageRemoveFood,
-    saveAllChanges, discardChanges,
-    pendingChanges, clearError, refreshCosts
-  } = useFoodZustand();
-
-  const [catFilter, setCatFilter] = useState("Tất cả");
-  const [search, setSearch] = useState("");
-  const [modal, setModal] = useState(null);
-  const [form, setForm] = useState(EMPTY_FOOD);
-  const [editId, setEditId] = useState(null);
-  const [imageFile, setImageFile] = useState(null);
-  const [imageRemoved, setImageRemoved] = useState(false);
-  const [imageFieldKey, setImageFieldKey] = useState(0);
-  const [infoFood, setInfoFood] = useState(null);
-  const [saveStatus, setSaveStatus] = useState(null);
-  const [noteFood, setNoteFood] = useState(null);
-  const [noteDraft, setNoteDraft] = useState("");
-  const [refreshMsg, setRefreshMsg] = useState(null);
-  const fileInputRef = useRef(null);
-  const [isImporting, setIsImporting] = useState(false);
-  const [importError, setImportError] = useState(null);
-  const openNoteEdit = fd => {
-    setNoteFood(fd);
-    setNoteDraft(fd.note || "");
-    setModal("note");
-  };
-
-  const handleSaveNote = () => {
-    if (!noteFood) return;
-    stageUpdateFood({ ...noteFood, note: noteDraft }, null); // không đổi ảnh
-    setModal(null);
-    setNoteFood(null);
-    setNoteDraft("");
-  };
-
-  useEffect(() => { getFoods(); }, [getFoods]);
-
-  const pendingCount = pendingChanges.size;
-
-  // Món hiển thị ở thực đơn — loại trừ các combo "Trái cây mix" (quản lý riêng ở trang Trái cây)
-  const visibleFoods = useMemo(
-    () => foods.filter(fd => extractCatName(fd.categoryId) !== MIX_CATEGORY),
-    [foods]
-  );
-
-  // Giá vốn tự tính từ nguyên liệu
-  const computedCostPrice = useMemo(
-    () => form.ingredients.reduce((s, r) => s + (r.cost || 0), 0),
-    [form.ingredients]
-  );
-  const hasIngredients = form.ingredients.length > 0;
-
-  // Filter
-  const filtered = useMemo(() =>
-    visibleFoods.filter(fd => {
-      const catName = extractCatName(fd.categoryId);
-      const matchCat = catFilter === "Tất cả" || catName === catFilter;
-      const matchQ = fd.foodName.toLowerCase().includes(search.toLowerCase());
-      return matchCat && matchQ;
-    }),
-    [visibleFoods, catFilter, search]
-  );
-
-  // Form helpers
-  const ff = useCallback((k, v) => setForm(p => ({ ...p, [k]: v })), []);
-
-  const handleRemoveImage = () => {
-    setImageFile(null);
-    setImageRemoved(true);
-    setImageFieldKey(k => k + 1); // ép ImageUploadField remount → xoá preview nội bộ
-  };
-
-  const handleIngredientsChange = useCallback(
-    newIngredients => setForm(p => ({ ...p, ingredients: newIngredients })),
-    []
-  );
-
-  // Modal controls
-  const openAdd = () => {
-    setForm({ ...EMPTY_FOOD });
-    setImageFile(null);
-    setImageRemoved(false);
-    setModal("add");
-  };
-
-  const exportData = () => {
-    exportJSON(`${API_URL}/api/foods`, "foods")
-  }
-  const triggerImport = () => fileInputRef.current?.click();
-
-  const handleImportFile = async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    setIsImporting(true);
-    setImportError(null);
-
-    try {
-      await importJSON(`${API_URL}/api/foods`, file, "foods");
-      await getFoods(); // tải lại danh sách mới nhất
-    } catch (err) {
-      setImportError(
-        err.response?.data?.message || err.message || "Import thất bại"
-      );
-    } finally {
-      setIsImporting(false);
-      e.target.value = "";
+  useEffect(() => {
+    if (orders.length === 0) {
+      getOrders();
     }
-  };
+  }, [orders]);
 
-  const openEdit = fd => {
-    setForm({
-      ...fd,
-      categoryId: extractCatName(fd.categoryId),
-      ingredients: (fd.ingredients || []).map(i => ({
-        ...i,
-        pricePerLargeUnit: i.pricePerLargeUnit || (i.quantity > 0 ? i.cost / i.quantity : 0),
-      })),
+  // ─── Toast helper ──────────────────────────────────────────────────────────
+  const showToast = useCallback((type, msg) => {
+    setToast({ type, msg });
+    setTimeout(() => setToast(null), 3500);
+  }, []);
+
+  // ─── Socket setup ──────────────────────────────────────────────────────────
+  // Dùng instance socket DÙNG CHUNG (import từ ../utils/socket) — không tự
+  // io(...) ở đây nữa, để trang này và các trang khác (KitchenPage, trang
+  // khách...) chia sẻ đúng 1 connection.
+  useEffect(() => {
+    socketRef.current = socket;
+    const timers = tooltipTimers.current;
+
+    const handleConnect = () => {
+      setConnected(true);
+      socket.emit("join_admin");
+    };
+    const handleDisconnect = () => setConnected(false);
+
+    // Nhận toàn bộ state bàn từ server (đã gồm cả pendingItems, active, chatEnabled,
+    // guestName, guestPhone, messages)
+    const handleTablesState = (serverTables) => {
+      setTables(serverTables.map((t) => ({
+        ...t,
+        active: t.active ?? false,
+        chatEnabled: t.chatEnabled !== false,
+        guestName: t.guestName || null,
+        guestPhone: t.guestPhone || null,
+        since: t.since ? new Date(t.since) : null,
+        items: t.items || [],
+        pendingItems: t.pendingItems || [],
+        messages: t.messages || [],
+      })));
+    };
+
+    // Tin nhắn mới (chat) — chỉ quan tâm tin từ khách để hiện tooltip/tín hiệu.
+    // Nếu admin đang mở đúng hộp thoại của bàn đó thì coi như đã đọc luôn,
+    // không cần hiện tooltip.
+    const handleChatMessage = (payload) => {
+      const { tableId, message } = payload || {};
+      if (!message || message.from !== "guest") return;
+
+      if (chatOpenTableIdRef.current === tableId) {
+        socket.emit("mark_chat_read", { tableId });
+        return;
+      }
+
+      setTooltips((prev) => ({ ...prev, [tableId]: message }));
+      clearTimeout(tooltipTimers.current[tableId]);
+      tooltipTimers.current[tableId] = setTimeout(() => {
+        setTooltips((prev) => {
+          if (prev[tableId]?.id !== message.id) return prev;
+          const next = { ...prev };
+          delete next[tableId];
+          return next;
+        });
+      }, CHAT_TOOLTIP_DURATION);
+    };
+
+    // Socket dùng chung có thể ĐÃ connect từ trước (do một trang khác mở
+    // lên trước trang này) — nếu vậy event "connect" sẽ không bắn lại,
+    // nên cần tự đồng bộ state + join_admin ngay khi mount.
+    if (socket.connected) {
+      handleConnect();
+    }
+
+    socket.on("connect", handleConnect);
+    socket.on("disconnect", handleDisconnect);
+    socket.on("tables_state", handleTablesState);
+    socket.on("chat_message", handleChatMessage);
+
+    return () => {
+      // Chỉ gỡ listener của riêng trang này. KHÔNG gọi socket.disconnect()
+      // ở đây — socket này dùng chung cho cả app, disconnect sẽ làm
+      // trang khác (hoặc lần mount lại của chính trang này) mất kết nối.
+      socket.off("connect", handleConnect);
+      socket.off("disconnect", handleDisconnect);
+      socket.off("tables_state", handleTablesState);
+      socket.off("chat_message", handleChatMessage);
+      Object.values(timers).forEach(clearTimeout);
+    };
+  }, []);
+
+  // Đổi bàn đang chọn → bỏ chọn hết checkbox món chờ xác nhận của bàn cũ
+  useEffect(() => {
+    setSelectedPending(new Set());
+  }, [selectedId]);
+
+  // Mở hộp thoại chat → cuộn xuống cuối + focus ô nhập
+  useEffect(() => {
+    if (chatOpenTableId == null) return;
+    if (chatScrollRef.current) chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
+    const t = setTimeout(() => chatInputRef.current?.focus(), 50);
+    return () => clearTimeout(t);
+  }, [chatOpenTableId]);
+
+  // ─── Derived values ────────────────────────────────────────────────────────
+  const activeTable = selectedId != null ? tables.find((t) => t.id === selectedId) : null;
+  const chatTable = chatOpenTableId != null ? tables.find((t) => t.id === chatOpenTableId) : null;
+  const subtotal = activeTable?.items.reduce((s, i) => s + i.unitPrice * i.quantity, 0) ?? 0;
+  const pendingSubtotal = activeTable?.pendingItems.reduce((s, i) => s + i.unitPrice * i.quantity, 0) ?? 0;
+  const occupiedCount = tables.filter((t) => t.status === "occupied").length;
+
+  // Tiêu đề hộp thoại chat: "Bàn 1 - Bình - 0123456789" nếu khách đã nhập
+  // tên/SĐT ở GuestInfoPage.jsx, hoặc chỉ "Bàn 1" nếu chưa có (bàn vừa mở
+  // lại sau thanh toán, khách chưa kịp nhập).
+  const chatModalTitle = chatTable
+    ? [chatTable.name, chatTable.guestName, chatTable.guestPhone].filter(Boolean).join(" - ")
+    : "";
+
+  // Tự cuộn xuống mỗi khi có tin nhắn mới trong bàn đang mở chat
+  useEffect(() => {
+    if (chatScrollRef.current) chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
+  }, [chatTable?.messages?.length]);
+
+  // ─── Xác nhận món đang chờ & gửi bếp ────────────────────────────────────────
+  const togglePending = useCallback((itemId) => {
+    setSelectedPending((prev) => {
+      const next = new Set(prev);
+      const key = String(itemId);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
     });
-    setImageFile(null);
-    setImageRemoved(false);
-    setEditId(fd._id);
-    setModal("edit");
-  };
+  }, []);
 
-  const openInfo = fd => { setInfoFood(fd); setModal("info"); };
-  const closeModal = () => {
-    setModal(null); setEditId(null);
-    setImageFile(null); setImageRemoved(false);
-    setNoteFood(null); setNoteDraft("");
-  };
+  const toggleSelectAllPending = useCallback(() => {
+    if (!activeTable) return;
+    setSelectedPending((prev) =>
+      prev.size === activeTable.pendingItems.length
+        ? new Set()
+        : new Set(activeTable.pendingItems.map((i) => String(i.id)))
+    );
+  }, [activeTable]);
 
-  // Staged actions
-  const handleSave = () => {
-    if (!form.foodName.trim()) return;
-    const payload = { ...form, costPrice: hasIngredients ? computedCostPrice : form.costPrice };
-    if (modal === "add") stageAddFood(payload, imageFile);
-    else stageUpdateFood({ ...payload, _id: editId }, imageFile);
-    closeModal();
-  };
+  const confirmItems = useCallback((pendingItemIds) => {
+    if (!activeTable || !socketRef.current || pendingItemIds.length === 0) return;
+    setConfirmLoading(true);
+    socketRef.current.emit("confirm_items", { tableId: activeTable.id, pendingItemIds });
+    setSelectedPending(new Set());
+    showToast("success", `Đã xác nhận & gửi bếp cho ${activeTable.name}`);
+    setTimeout(() => setConfirmLoading(false), 300);
+  }, [activeTable, showToast]);
 
-  const handleRemove = useCallback(id => { stageRemoveFood(id); }, [stageRemoveFood]);
+  // ─── Bật/tắt cho phép khách gọi món tại 1 bàn ──────────────────────────────
+  const handleToggleActive = useCallback((table) => {
+    if (!socketRef.current) return;
+    socketRef.current.emit("toggle_table_active", { tableId: table.id, active: !table.active });
+  }, []);
 
-  const handleToggleAvailable = useCallback(
-    food => stageUpdateFood({ ...food, isAvailable: !food.isAvailable }, null),
-    [stageUpdateFood]
-  );
+  // ─── Bật/tắt cho phép khách gửi tin nhắn tại 1 bàn ─────────────────────────
+  const handleToggleChat = useCallback((table) => {
+    if (!socketRef.current) return;
+    const currentlyEnabled = table.chatEnabled !== false;
+    socketRef.current.emit("toggle_table_chat", { tableId: table.id, chatEnabled: !currentlyEnabled });
+  }, []);
 
-  const handleRefreshCosts = async () => {
+  // ─── Chat theo bàn ─────────────────────────────────────────────────────────
+  const openChat = useCallback((tableId) => {
+    setChatOpenTableId(tableId);
+    setTooltips((prev) => {
+      if (!(tableId in prev)) return prev;
+      const next = { ...prev };
+      delete next[tableId];
+      return next;
+    });
+    clearTimeout(tooltipTimers.current[tableId]);
+    socketRef.current?.emit("mark_chat_read", { tableId });
+  }, []);
+
+  const closeChat = useCallback(() => {
+    setChatOpenTableId(null);
+    setChatDraft("");
+    setClearChatConfirmOpen(false);
+  }, []);
+
+  const sendChatReply = useCallback(() => {
+    const value = chatDraft.trim();
+    if (!value || chatOpenTableId == null || !socketRef.current) return;
+    socketRef.current.emit("send_admin_chat_message", { tableId: chatOpenTableId, text: value });
+    setChatDraft("");
+  }, [chatDraft, chatOpenTableId]);
+
+  const clearChatHistory = useCallback(() => {
+    console.log("[clearChatHistory] called", { chatOpenTableId, hasSocket: !!socketRef.current });
+    if (chatOpenTableId == null || !socketRef.current) return;
+    socketRef.current.emit("clear_chat_messages", { tableId: chatOpenTableId });
+    setClearChatConfirmOpen(false);
+  }, [chatOpenTableId]);
+
+  // ─── Lấy lịch sử đơn ───────────────────────────────────────────────────────
+  function getOrders() {
+    axios.get(ORDERS_API_URL)
+      .then((response) => {
+        setOrders(response.data);
+      })
+      .catch((error) => {
+        console.error("Error fetching orders:", error);
+      });
+  }
+  // ─── Thanh toán ────────────────────────────────────────────────────────────
+  const handleCheckout = useCallback(async () => {
+    if (!activeTable || !activeTable.items.length) return;
+    setCheckoutLoading(true);
+
+    const mergedForOrder = new Map();
+    activeTable.items.forEach((i) => {
+      const noteKey = i.note || "";
+      const key = `${i.foodId}::${noteKey}`;
+      const existing = mergedForOrder.get(key);
+      if (existing) {
+        existing.quantity += i.quantity;
+      } else {
+        mergedForOrder.set(key, { foodId: i.foodId, note: noteKey, quantity: i.quantity });
+      }
+    });
+
+    const payload = {
+      items: Array.from(mergedForOrder.values()),
+      discountAmount: 0,
+      paymentMethod: payMethod,
+      isPaid: true,
+      note: "",
+      createdBy: "Admin", // thay bằng userId khi có auth #fix
+    };
+
     try {
-      const data = await refreshCosts();
-      setRefreshMsg(`Đã cập nhật giá cho ${data.updatedCount} món`);
-    } catch {
-      setRefreshMsg("Cập nhật giá thất bại");
+      const res = await fetch(ORDERS_API_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+      const saved = await res.json();
+
+      setOrders((p) => [saved.order, ...p]);
+
+      socketRef.current?.emit("checkout_table", { tableId: activeTable.id });
+
+      setCheckoutOpen(false);
+      setSelectedId(null);
+      showToast("success", `Thanh toán ${activeTable.name} thành công! 🎉`);
+    } catch (err) {
+      console.error("[Checkout]", err);
+      showToast("error", `Thanh toán thất bại: ${err.message}`);
     } finally {
-      setTimeout(() => setRefreshMsg(null), 3000);
+      setCheckoutLoading(false);
     }
-  };
-  const handleSaveAll = async () => {
-    setSaveStatus("saving");
-    try {
-      await saveAllChanges();
-      setSaveStatus("saved");
-      setTimeout(() => setSaveStatus(null), 2500);
-    } catch {
-      setSaveStatus("error");
-      setTimeout(() => setSaveStatus(null), 3000);
-    }
+  }, [activeTable, payMethod, showToast]);
+
+  // ─── Lịch sử đơn – lọc ────────────────────────────────────────────────────
+  const filtHist = useMemo(() => {
+
+    return orders.filter((o) => {
+
+      const keyword =
+        histSearch
+          .trim()
+          .toLowerCase();
+
+      const matchSearch =
+        !keyword ||
+        o._id?.toLowerCase().includes(keyword) ||
+        o.items?.some((i) => i.foodName?.toLowerCase().includes(keyword)) ||
+        o.createdBy?.toLowerCase().includes(keyword);
+
+      const matchStatus =
+        !statusFilter ||
+        o.status === statusFilter;
+
+      const matchPayment =
+        !paymentFilter ||
+        o.paymentMethod === paymentFilter;
+
+      const createdDate =
+        new Date(o.createdAt);
+
+      const matchDateFrom =
+        !dateFrom ||
+        createdDate >= new Date(dateFrom);
+
+      const matchDateTo =
+        !dateTo ||
+        createdDate <= new Date(dateTo + "T23:59:59");
+
+      const amount =
+        Number(o.totalAmount || 0);
+
+      const matchMinAmount =
+        !minAmount ||
+        amount >= Number(minAmount);
+
+      const matchMaxAmount =
+        !maxAmount ||
+        amount <= Number(maxAmount);
+
+      return (
+        matchSearch &&
+        matchStatus &&
+        matchPayment &&
+        matchDateFrom &&
+        matchDateTo &&
+        matchMinAmount &&
+        matchMaxAmount
+      );
+    });
+
+  }, [
+    orders,
+    histSearch,
+    statusFilter,
+    paymentFilter,
+    dateFrom,
+    dateTo,
+    minAmount,
+    maxAmount
+  ]);
+
+  // ─── Nội dung chi tiết bàn — tách riêng để tái dùng cho cả panel desktop
+  // (bên phải, lg+) và Modal trên mobile, tránh lặp code 2 nơi. ─────────────
+  const renderTableDetailBody = () => {
+    if (!activeTable) return null;
+    return (
+      <>
+        <div className="flex-1 p-3 overflow-y-auto space-y-4">
+          {activeTable.since && (
+            <p className="text-xs text-gray-400">
+              {fmtDate(activeTable.since instanceof Date
+                ? activeTable.since.toISOString()
+                : activeTable.since)}
+            </p>
+          )}
+
+          {/* Món chờ xác nhận */}
+          {activeTable.pendingItems.length > 0 && (
+            <div className="rounded-xl border-2 border-red-200 bg-red-50 p-3">
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-xs font-bold text-red-600 uppercase tracking-wide flex items-center gap-1.5">
+                  <Bell size={13} /> Cần xác nhận
+                </p>
+                <button onClick={toggleSelectAllPending} className="text-[11px] font-semibold text-red-500 hover:underline">
+                  {selectedPending.size === activeTable.pendingItems.length ? "Bỏ chọn tất cả" : "Chọn tất cả"}
+                </button>
+              </div>
+              <div className="space-y-1.5">
+                {activeTable.pendingItems.map((item) => (
+                  <label key={item.id} className="flex items-center gap-3.5 bg-white rounded-lg p-2 cursor-pointer">
+                    <input type="checkbox"
+                      checked={selectedPending.has(String(item.id))}
+                      onChange={() => togglePending(item.id)}
+                      className="w-4 h-4 accent-red-500" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-bold text-gray-700 truncate">{item.foodName}</p>
+                      <p className="text-xs text-gray-400">{fmtVND(item.unitPrice)} × {item.quantity}</p>
+                    </div>
+                    {item.note && <p className="text-xs text-gray-500 mt-0.5">{item.note}</p>}
+                  </label>
+                ))}
+              </div>
+              <button
+                className="w-full flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-sm font-bold text-white bg-red-500 hover:bg-red-600 transition-all disabled:opacity-40 disabled:cursor-not-allowed mt-3"
+                disabled={selectedPending.size === 0 || confirmLoading}
+                onClick={() => confirmItems(Array.from(selectedPending))}>
+                <Check size={14} /> Xác nhận đã chọn ({selectedPending.size}) & gửi bếp
+              </button>
+              {activeTable.pendingItems.length > 1 && (
+                <button
+                  onClick={() => confirmItems(activeTable.pendingItems.map((i) => String(i.id)))}
+                  disabled={confirmLoading}
+                  className="w-full text-center text-xs font-semibold text-red-500 hover:underline mt-2">
+                  Xác nhận tất cả ({activeTable.pendingItems.length} món)
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* Món đã xác nhận */}
+          {activeTable.items.length === 0 && activeTable.pendingItems.length === 0 ? (
+            <div className="text-center text-gray-400 py-10">
+              <ChefHat size={32} className="mx-auto mb-2 opacity-25" />
+              <p className="text-sm">Chưa có món nào</p>
+              <p className="text-xs mt-1">Khách gọi món sẽ hiện tại đây</p>
+            </div>
+          ) : activeTable.items.length > 0 && (
+            <div>
+              <p className="text-xs text-gray-400 font-bold uppercase tracking-wide mb-2">Đã xác nhận</p>
+              <div className="space-y-2">
+                {activeTable.items.map((item, idx) => (
+                  <div key={item.id || idx} className="flex items-center gap-2.5 bg-gray-50 rounded-xl p-4">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-bold text-gray-700 truncate">{item.foodName}</p>
+                      <p className="text-xs text-gray-400">{fmtVND(item.unitPrice)} × {item.quantity}</p>
+                      {item.note && <p className="text-[11px] text-gray-400 mt-0.5">{item.note}</p>}
+                    </div>
+                    {item.status === "ready" ? (
+                      <span className="flex items-center gap-1 text-[11px] font-bold text-green-600 bg-green-100 px-2 py-1 rounded-full whitespace-nowrap">
+                        <CheckCircle2 size={12} /> Sẵn sàng
+                      </span>
+                    ) : (
+                      <span className="flex items-center gap-1 text-[11px] font-bold text-orange-600 bg-orange-100 px-2 py-1 rounded-full whitespace-nowrap">
+                        <Flame size={12} /> Đang nấu
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Tổng & Thanh toán */}
+        <div className="p-4 border-t border-gray-100 bg-green-50/50 rounded-b-2xl">
+          <div className="flex justify-between items-center mb-1">
+            <span className="text-sm font-bold text-gray-700">Tổng cộng</span>
+            <span className="text-xl font-black text-green-600">{fmtVND(subtotal)}</span>
+          </div>
+          {pendingSubtotal > 0 && (
+            <p className="text-xs text-red-500 text-right mb-2">+ {fmtVND(pendingSubtotal)} đang chờ xác nhận</p>
+          )}
+          <Button className="w-full justify-center"
+            disabled={!activeTable.items.length || activeTable.pendingItems.length > 0}
+            onClick={() => setCheckoutOpen(true)}>
+            <Check size={15} />Thanh toán
+          </Button>
+          {activeTable.pendingItems.length > 0 && (
+            <p className="text-[11px] text-center text-gray-400 mt-1.5">Xác nhận hết món đang chờ trước khi thanh toán</p>
+          )}
+        </div>
+      </>
+    );
   };
 
+  // ─── Render ────────────────────────────────────────────────────────────────
   return (
     <div className="space-y-5">
+
+      {/* Toast (kết quả thao tác) — góc trên-phải */}
+      {toast && (
+        <div className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-xl shadow-lg text-sm font-semibold text-white transition-all
+                    ${toast.type === "success" ? "bg-green-500" : "bg-red-500"}`}>
+          {toast.msg}
+        </div>
+      )}
+
+      {/* Thông báo tin nhắn mới từ khách — góc trên-trái, xếp chồng theo bàn.
+                Responsive: full-width (trừ lề) trên mobile, thu về khung cố định
+                trên màn hình lớn. Đặt bên trái để không đè lên toast phía trên. */}
+      {Object.keys(tooltips).length > 0 && (
+        <div className="fixed top-4 left-4 right-4 sm:right-auto sm:w-72 z-40 flex flex-col gap-2">
+          {Object.entries(tooltips).map(([tableIdKey, msg]) => {
+            const tableId = Number(tableIdKey);
+            const t = tables.find((tb) => tb.id === tableId);
+            return (
+              <button
+                key={tableIdKey}
+                onClick={() => openChat(tableId)}
+                className="text-left bg-white border border-green-200 rounded-xl shadow-lg px-3.5 py-2.5 animate-fade-in"
+              >
+                <p className="text-[11px] font-bold text-green-600 mb-0.5 flex items-center gap-1">
+                  <MessageCircle size={11} /> {t?.name || `Bàn ${tableId}`} nhắn tin
+                </p>
+                <p className="text-xs text-gray-700 line-clamp-2">{msg.text}</p>
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-2xl font-black text-green-900">Thực đơn</h1>
-          <p className="text-gray-500 text-sm">
-            {visibleFoods.length} món • {visibleFoods.filter(f => f.isAvailable).length} đang bán
+          <h1 className="text-2xl font-black text-green-900">Quản lý Order</h1>
+          <p className="text-gray-500 text-sm flex items-center gap-2">
+            {occupiedCount}/{TABLE_COUNT} bàn đang có khách
+            <span className={`inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full
+                            ${connected ? "bg-green-100 text-green-700" : "bg-red-100 text-red-600"}`}>
+              {connected
+                ? <><Wifi size={11} /> Real-time</>
+                : <><WifiOff size={11} /> Mất kết nối</>}
+            </span>
           </p>
         </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          {pendingCount > 0 && (
-            <>
-              <button onClick={() => discardChanges()} disabled={loading}
-                className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-semibold text-gray-500 border border-gray-200 hover:bg-gray-50 transition-colors disabled:opacity-50">
-                <RotateCcw size={14} />Huỷ thay đổi
-              </button>
-              <button onClick={handleSaveAll} disabled={loading || saveStatus === "saving"}
-                className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-bold shadow-sm transition-all ${saveStatus === "saving" ? "bg-amber-400 text-white"
-                  : saveStatus === "error" ? "bg-red-500 text-white"
-                    : "bg-amber-500 hover:bg-amber-600 text-white"
-                  }`}>
-                <Save size={14} />
-                {saveStatus === "saving" ? "Đang lưu…"
-                  : saveStatus === "error" ? "Lỗi, thử lại"
-                    : `Lưu ${pendingCount} thay đổi`}
-              </button>
-            </>
-          )}
-          {saveStatus === "saved" && pendingCount === 0 && (
-            <span className="flex items-center gap-1 text-sm text-green-600 font-semibold">
-              <Check size={14} />Đã lưu thành công
-            </span>
-          )}
-          <Button onClick={openAdd} disabled={loading}><Plus size={15} />Thêm món mới</Button>
-          {/* ← thêm nút này */}
-          {refreshMsg && (
-            <span className="flex items-center gap-1 text-sm text-blue-600 font-semibold">
-              <Check size={14} />{refreshMsg}
-            </span>
-          )}
-          <Button
-            variant="secondary"
-            onClick={handleRefreshCosts}
-            disabled={loading || pendingCount > 0}
-            title={pendingCount > 0
-              ? "Hãy lưu hoặc huỷ thay đổi đang chờ trước khi cập nhật giá"
-              : "Cập nhật giá vốn theo giá nguyên liệu mới nhất"}
-          >
-            <RefreshCcw size={15} className={loading ? "animate-spin" : ""} />
-            Làm mới
-          </Button>
-          <Button variant="secondary" onClick={exportData} disabled={loading}>
-            <FolderOpen size={15} />
-            Xuất JSON
-          </Button>
-
-          <Button variant="secondary" onClick={triggerImport} disabled={loading || isImporting}>
-            {isImporting ? <Loader2 size={15} className="animate-spin" /> : <Upload size={15} />}
-            {isImporting ? "Đang tải lên..." : "Tải lên JSON"}
-          </Button>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="application/json"
-            onChange={handleImportFile}
-            className="hidden"
-          />
-        </div>
-      </div>
-
-      {/* Error banner */}
-      {error && (
-        <div className="flex items-center justify-between bg-red-50 border border-red-200 text-red-700 text-sm rounded-xl px-4 py-3">
-          <span>{error}</span>
-          <button onClick={clearError}><X size={14} /></button>
-        </div>
-      )}
-      {importError && (
-        <div className="flex items-center justify-between bg-red-50 border border-red-200 text-red-700 text-sm rounded-xl px-4 py-3">
-          <span>{importError}</span>
-          <button onClick={() => setImportError(null)}><X size={14} /></button>
-        </div>
-      )}
-
-      {/* Search + Filter */}
-      <div className="flex flex-wrap gap-3 items-center">
-        <div className="relative flex-1 min-w-44">
-          <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400" />
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Tìm món ăn..."
-            className="w-full pl-9 pr-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-green-300" />
-        </div>
-        <div className="flex gap-2 flex-wrap">
-          {CAT_FILTER.map(c => (
-            <button key={c} onClick={() => setCatFilter(c)}
-              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${catFilter === c
-                ? "bg-green-500 text-white"
-                : "bg-white border border-gray-200 text-gray-600 hover:border-green-300 hover:text-green-700"
-                }`}>
-              {c}
+        <div className="flex gap-2">
+          {[["tables", "Sơ đồ bàn"], ["history", "Lịch sử đơn"]].map(([k, l]) => (
+            <button key={k} onClick={() => setTab(k)}
+              className={`px-4 py-2 rounded-xl text-sm font-bold transition-all
+                                ${tab === k ? "bg-green-500 text-white" : "bg-white border border-gray-200 text-gray-600 hover:bg-green-50"}`}>
+              {l}
             </button>
           ))}
         </div>
       </div>
 
-      {/* Skeleton */}
-      {loading && visibleFoods.length === 0 && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-          {[...Array(8)].map((_, i) => (
-            <div key={i} className="bg-white rounded-2xl border border-gray-100 overflow-hidden animate-pulse">
-              <div className="h-36 bg-gray-100" />
-              <div className="p-4 space-y-2">
-                <div className="h-4 bg-gray-100 rounded w-3/4" />
-                <div className="h-3 bg-gray-100 rounded w-1/2" />
+      {/* ── Tab: Sơ đồ bàn ── */}
+      {tab === "tables" ? (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+
+          {/* Danh sách bàn */}
+          <div className="lg:col-span-2 space-y-4">
+            <div className="grid grid-cols-3 sm:grid-cols-4 gap-3">
+              {tables.map((t) => {
+                const tSub = t.items.reduce((s, i) => s + i.unitPrice * i.quantity, 0);
+                const isSelected = t.id === selectedId;
+                const hasPending = t.pendingItems?.length > 0;
+                const hasUnreadChat = (t.messages || []).some((m) => m.from === "guest" && !m.read);
+                return (
+                  <div key={t.id} className="relative group">
+                    <button
+                      onClick={() => setSelectedId(t.id === selectedId ? null : t.id)}
+                      className={`w-full h-full relative rounded-2xl p-4 text-center transition-all border-2
+        ${isSelected ? "border-green-500 bg-green-50"
+                          : t.status === "occupied" ? "border-orange-200 bg-orange-50 hover:border-orange-300"
+                            : "border-gray-100 bg-white hover:border-green-200 hover:bg-green-50"}
+        ${!t.active ? "opacity-60" : ""}`}>
+                      {hasPending && (
+                        <span className="absolute -top-1.5 -right-1.5 flex h-4 w-4">
+                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75" />
+                          <span className="relative inline-flex rounded-full h-4 w-4 bg-red-500 border-2 border-white" />
+                        </span>
+                      )}
+                      <div className={`text-3xl mb-1.5 ${t.status === "empty" ? "opacity-25" : ""}`}>🪑</div>
+                      <p className="font-bold text-sm text-gray-700">{t.name}</p>
+                      {t.guestName && (
+                        <p className="text-[10px] text-gray-400 truncate">{t.guestName}</p>
+                      )}
+                      {t.status === "occupied" ? (
+                        <div className="mt-1">
+                          <p className="text-xs font-bold text-orange-600">{t.items.reduce((s, i) => s + i.quantity, 0)} món</p>
+                          <p className="text-xs text-orange-500 mt-0.5">{fmtVND(tSub)}</p>
+                        </div>
+                      ) : <p className="text-xs text-gray-400 mt-1">Trống</p>}
+                      {hasPending && (
+                        <p className="text-[11px] text-red-500 font-bold mt-0.5">{t.pendingItems.length} món chờ xác nhận</p>
+                      )}
+                      {!t.active && (
+                        <p className="text-[10px] font-bold text-gray-400 mt-1 flex items-center justify-center gap-1">
+                          <Lock size={9} /> Chưa mở gọi món
+                        </p>
+                      )}
+                    </button>
+
+                    {/* Toggle bật/tắt cho khách gọi món tại bàn này. */}
+                    <label
+                      onClick={(e) => e.stopPropagation()}
+                      title={t.active ? "Đang mở gọi món — nhấn để khoá" : "Đang khoá — nhấn để mở gọi món"}
+                      className="absolute top-1.5 left-1.5 z-10 inline-flex items-center cursor-pointer
+                                                opacity-100 sm:opacity-0 sm:group-hover:opacity-100 sm:focus-within:opacity-100
+                                                transition-opacity duration-150"
+                    >
+                      <input
+                        type="checkbox"
+                        className="sr-only peer"
+                        checked={!!t.active}
+                        onChange={() => handleToggleActive(t)}
+                      />
+                      <div className="w-9 h-5 bg-gray-300 rounded-full peer-checked:bg-green-500 transition-colors relative shadow-sm">
+                        <div className="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform peer-checked:translate-x-4" />
+                      </div>
+                    </label>
+
+                    {/* Cụm nút góc dưới-phải: toggle bật/tắt tin nhắn + icon mở chat.
+                                            Toggle luôn hiện trên mobile (chạm được ngay), chỉ ẩn/hiện theo
+                                            hover trên màn hình lớn — cùng kiểu với toggle "mở gọi món". */}
+                    <div className="absolute bottom-1.5 right-1.5 z-10 flex items-center gap-1">
+                      <label
+                        onClick={(e) => e.stopPropagation()}
+                        title={t.chatEnabled !== false ? "Đang mở tin nhắn — nhấn để tắt" : "Đang tắt tin nhắn — nhấn để mở"}
+                        className="inline-flex items-center cursor-pointer
+                                                    opacity-100 sm:opacity-0 sm:group-hover:opacity-100 sm:focus-within:opacity-100
+                                                    transition-opacity duration-150"
+                      >
+                        <input
+                          type="checkbox"
+                          className="sr-only peer"
+                          checked={t.chatEnabled !== false}
+                          onChange={() => handleToggleChat(t)}
+                        />
+                        {/* <div className="w-7 h-4 bg-gray-300 rounded-full peer-checked:bg-blue-500 transition-colors relative shadow-sm">
+                                                    <div className="absolute top-0.5 left-0.5 w-3 h-3 bg-white rounded-full shadow transition-transform peer-checked:translate-x-3" />
+                                                </div> */}
+                      </label>
+
+                      <button
+                        onClick={(e) => { e.stopPropagation(); openChat(t.id); }}
+                        title="Nhắn tin với bàn này"
+                        aria-label={`Chat với ${t.name}`}
+                        className="relative w-7 h-7 rounded-full bg-white border border-gray-200 shadow-sm
+                                                    flex items-center justify-center text-gray-500 hover:text-green-600 hover:border-green-300 transition-colors"
+                      >
+                        <MessageCircle size={14} className={t.chatEnabled === false ? "opacity-40" : ""} />
+                        {hasUnreadChat && (
+                          <span className="absolute -top-1 -right-1 flex h-3.5 w-3.5">
+                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75" />
+                            <span className="relative inline-flex rounded-full h-3.5 w-3.5 bg-red-500 border-2 border-white" />
+                          </span>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Chú thích */}
+            <div className="flex gap-4 text-xs text-gray-500 bg-white rounded-xl px-4 py-3 border border-gray-100 flex-wrap">
+              <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded border-2 border-gray-200 bg-white inline-block" />Trống</span>
+              <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded border-2 border-orange-200 bg-orange-50 inline-block" />Có khách</span>
+              <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded border-2 border-green-500 bg-green-50 inline-block" />Đang chọn</span>
+              <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-red-500 inline-block" />Có món chờ xác nhận / tin nhắn chưa đọc</span>
+              <span className="flex items-center gap-1.5"><Lock size={11} className="text-gray-400" />Chưa mở gọi món — hover/chạm góc trái bàn để bật</span>
+              <span className="flex items-center gap-1.5"><MessageCircle size={11} className="text-gray-400" />Chat với bàn — góc phải dưới, có toggle bật/tắt cạnh icon</span>
+            </div>
+          </div>
+
+          {/* Chi tiết bàn được chọn — panel cố định, chỉ hiện từ lg trở lên.
+                        Dưới lg xem qua Modal (bên dưới). */}
+          <div className="hidden lg:flex bg-white rounded-2xl border border-gray-100 flex-col" style={{ minHeight: 480 }}>
+            {activeTable ? (
+              <>
+                <div className="px-4 py-3.5 border-b border-gray-100 flex items-center justify-between">
+                  <div className="min-w-0">
+                    <h3 className="font-bold text-gray-800">{activeTable.name}</h3>
+                    {(activeTable.guestName || activeTable.guestPhone) && (
+                      <p className="text-xs text-gray-400 truncate">
+                        {[activeTable.guestName, activeTable.guestPhone].filter(Boolean).join(" - ")}
+                      </p>
+                    )}
+                  </div>
+                  <button onClick={() => setSelectedId(null)}
+                    className="text-gray-400 hover:text-gray-600 w-7 h-7 rounded-lg hover:bg-gray-100 flex items-center justify-center shrink-0">
+                    <X size={16} />
+                  </button>
+                </div>
+                {renderTableDetailBody()}
+              </>
+            ) : (
+              <div className="flex-1 flex items-center justify-center p-8 text-center">
+                <div className="text-gray-400">
+                  <div className="text-5xl mb-3">🪑</div>
+                  <p className="font-semibold text-gray-500 text-sm">Chọn một bàn để bắt đầu</p>
+                  <p className="text-xs mt-1">Bàn màu cam đang có khách</p>
+                </div>
               </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Grid */}
-      {(!loading || visibleFoods.length > 0) && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-          {filtered.map(food => (
-            <FoodCard key={food._id} food={food} onEdit={openEdit} onInfo={openInfo}
-              onRemove={handleRemove} onEditNote={openNoteEdit} onToggleAvailable={handleToggleAvailable}
-              isPending={pendingChanges.has(`add:${food._id}`) || pendingChanges.has(`update:${food._id}`)} />
-          ))}
-          {filtered.length === 0 && (
-            <div className="col-span-full text-center py-16 text-gray-400">
-              <p className="text-lg font-medium">Không tìm thấy món ăn</p>
-              <p className="text-sm mt-1">Thử thay đổi bộ lọc hoặc từ khoá tìm kiếm</p>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* ─── Modal thêm / sửa ──────────────────────────────────────────────── */}
-      <Modal open={modal === "add" || modal === "edit"} onClose={closeModal}
-        title={modal === "add" ? "Thêm món mới" : "Chỉnh sửa món ăn"}>
-        <div className="space-y-4 max-h-[70vh] overflow-y-auto pr-1">
-
-          {/* Ảnh */}
-          <div>
-            <label className="text-xs font-bold text-gray-500 uppercase tracking-wide block mb-2">Ảnh món ăn</label>
-            <ImageUploadField
-              key={imageFieldKey}
-              currentUrl={imageRemoved ? null : (form.imageUrl ?? null)}
-              onSelect={(file) => { setImageFile(file); setImageRemoved(false); }}
-            />
-            {(imageFile || (!imageRemoved && form.imageUrl)) && (
-              <button onClick={handleRemoveImage}
-                className="mt-1 text-xs text-red-400 hover:text-red-600">
-                Xoá ảnh
-              </button>
             )}
           </div>
+        </div>
 
-          {/* Tên + Danh mục */}
-          <div className="grid grid-cols-2 gap-3">
-            <div className="col-span-2">
-              <FormInput label="Tên món *" value={form.foodName} onChange={e => ff("foodName", e.target.value)} />
-            </div>
-            <div className="col-span-2">
-              <label className="text-xs font-bold text-gray-500 uppercase tracking-wide block mb-1.5">Danh mục</label>
+      ) : (
+        /* ── Tab: Lịch sử đơn ── */
+        <div className="space-y-4">
+          <div className="bg-white rounded-2xl p-4 border border-gray-100">
+            <div className="flex flex-wrap gap-3">
+
+              {/* Search */}
+              <div className="relative flex-1 min-w-44">
+                <Search
+                  size={14}
+                  className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400"
+                />
+
+                <input
+                  value={histSearch}
+                  onChange={(e) =>
+                    setHistSearch(e.target.value)
+                  }
+                  placeholder="Tìm theo mã đơn, tên món..."
+                  className="w-full pl-9 pr-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-green-300"
+                />
+              </div>
+
+              {/* Status */}
               <select
-                value={form.categoryId ?? CAT_OPTIONS[0]}
-                onChange={e => ff("categoryId", e.target.value)}
-                className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-300">
-                {CAT_OPTIONS.map(c => <option key={c} value={c}>{c}</option>)}
+                value={statusFilter}
+                onChange={(e) =>
+                  setStatusFilter(e.target.value)
+                }
+                className="border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-300 bg-white"
+              >
+                <option value="">Tất cả trạng thái</option>
+                <option value="PENDING">Chờ</option>
+                <option value="PROCESSING">Đang làm</option>
+                <option value="COMPLETED">Hoàn thành</option>
+                <option value="CANCELLED">Đã hủy</option>
               </select>
+
+              {/* Payment */}
+              <select
+                value={paymentFilter}
+                onChange={(e) =>
+                  setPaymentFilter(e.target.value)
+                }
+                className="border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-300 bg-white"
+              >
+                <option value="">Tất cả PTTT</option>
+                <option value="CASH">Tiền mặt</option>
+                <option value="BANKING">Chuyển khoản</option>
+                <option value="MOMO">MoMo</option>
+                <option value="ZALOPAY">ZaloPay</option>
+              </select>
+
+              {/* Date from */}
+              <input
+                type="date"
+                value={dateFrom}
+                onChange={(e) =>
+                  setDateFrom(e.target.value)
+                }
+                className="border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-300 bg-white"
+              />
+
+              {/* Date to */}
+              <input
+                type="date"
+                value={dateTo}
+                onChange={(e) =>
+                  setDateTo(e.target.value)
+                }
+                className="border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-300 bg-white"
+              />
+
+              {/* Min amount */}
+              <input
+                type="number"
+                value={minAmount}
+                onChange={(e) =>
+                  setMinAmount(e.target.value)
+                }
+                placeholder="Tiền từ"
+                className="w-32 border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-300 bg-white"
+              />
+
+              {/* Max amount */}
+              <input
+                type="number"
+                value={maxAmount}
+                onChange={(e) =>
+                  setMaxAmount(e.target.value)
+                }
+                placeholder="Tiền đến"
+                className="w-32 border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-300 bg-white"
+              />
             </div>
           </div>
 
-          {/* Nguyên liệu */}
-          <IngredientPicker
-            selectedIngredients={form.ingredients}
-            onChange={handleIngredientsChange}
-          />
-
-          {/* Giá */}
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-xs font-bold text-gray-500 uppercase tracking-wide block mb-1.5">Giá vốn (₫)</label>
-              {hasIngredients ? (
-                <div className="w-full border border-green-200 bg-green-50 rounded-xl px-3 py-2.5 text-sm font-semibold text-green-700">
-                  {fmtVND(computedCostPrice)}
-                  <span className="text-xs font-normal text-green-500 ml-1">(tự tính)</span>
-                </div>
-              ) : (
-                <FormInput type="number" value={form.costPrice} onChange={e => ff("costPrice", +e.target.value)} />
+          <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-green-50 border-b border-green-100">
+                    {["Mã đơn", "Món", "Trạng thái", "Tổng tiền", "PTTT", "Thời gian", "Người tạo"].map((h, i) => (
+                      <th key={i} className="px-4 py-3 text-left text-xs font-bold text-green-800 whitespace-nowrap">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {filtHist.slice(0, 50).map((ord) => (
+                    <tr key={ord._id} style={{ borderBottom: "1px solid black" }} className="border-t border-gray-50 hover:bg-green-50/40 transition-colors">
+                      <td className="px-4 py-3 font-mono text-xs font-bold text-gray-600">{ord._id}</td>
+                      <td className="px-4 py-3">
+                        <div className="flex flex-col gap-1 min-w-[160px]">
+                          {ord.items.map((item, idx) => (
+                            <div
+                              key={idx}
+                              className="flex items-center justify-between gap-3 text-xs"
+                            >
+                              <span className="text-gray-700 truncate">
+                                {item.foodName}
+                              </span>
+                              <span className="font-semibold text-green-600 whitespace-nowrap">
+                                ×{item.quantity}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3"><StatusBadge status={ord.status} /></td>
+                      <td className="px-4 py-3 font-bold text-green-600 text-left whitespace-nowrap">{fmtVND(ord.totalAmount)}</td>
+                      <td className="px-4 py-3 text-xs text-gray-500">{ord.paymentMethod}</td>
+                      <td className="px-4 py-3 text-xs text-gray-400 whitespace-nowrap">{fmtDate(ord.createdAt)}</td>
+                      <td className="px-4 py-3 text-xs text-gray-500">{ord.createdBy || "Admin"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {filtHist.length === 0 && (
+                <div className="text-center py-12 text-gray-400 text-sm">Không có đơn nào phù hợp</div>
               )}
             </div>
+          </div>
+        </div>
+      )}
 
-            <FormInput label="Giá bán (₫)" type="number" value={form.originalPrice}
-              onChange={e => ff("originalPrice", +e.target.value)} />
+      {/* ── Modal chi tiết bàn — chỉ dùng dưới lg (mobile/tablet), thay cho
+                panel cố định bên phải. Cùng nội dung với panel desktop qua
+                renderTableDetailBody() để không lặp code. ── */}
+      <div className="lg:hidden">
+        <Modal open={!!activeTable} onClose={() => setSelectedId(null)} title={activeTable?.name || ""}>
+          {activeTable && (
+            <div className="flex flex-col" style={{ maxHeight: "75vh" }}>
+              {renderTableDetailBody()}
+            </div>
+          )}
+        </Modal>
+      </div>
 
-            <FormInput label="Trọng số AI [0–1]" type="number" step="0.01" min="0" max="1"
-              value={form.aiTrainingWeight} onChange={e => ff("aiTrainingWeight", +e.target.value)} />
-
-            <div>
-              <label className="text-xs font-bold text-gray-500 uppercase tracking-wide block mb-1.5">Biên LN dự kiến</label>
-              <div className="flex items-center gap-2 pt-2">
-                {(() => {
-                  const cost = hasIngredients ? computedCostPrice : form.costPrice;
-                  const m = form.originalPrice > 0
-                    ? Math.round((form.originalPrice - cost) / form.originalPrice * 100) : 0;
-                  return <MarginBar margin={m} />;
-                })()}
+      {/* ── Modal thanh toán ── */}
+      <Modal open={checkoutOpen} onClose={() => setCheckoutOpen(false)} title={`Thanh toán — ${activeTable?.name}`}>
+        {activeTable && (
+          <>
+            <div className="space-y-2 mb-5 bg-green-50 rounded-xl p-4">
+              {activeTable.items.map((item, idx) => (
+                <div key={`${item.foodId}-${idx}`} className="flex justify-between text-sm">
+                  <span className="text-gray-700">
+                    {item.foodName} × {item.quantity}
+                    {item.note && <span className="block text-[11px] text-gray-400">{item.note}</span>}
+                  </span>
+                  <span className="font-semibold">{fmtVND(item.unitPrice * item.quantity)}</span>
+                </div>
+              ))}
+              <div className="border-t border-green-200 pt-2 mt-2 flex justify-between items-center">
+                <span className="font-bold text-gray-700">Tổng cộng</span>
+                <span className="font-black text-lg text-green-600">{fmtVND(subtotal)}</span>
               </div>
             </div>
-          </div>
-          {/* Ghi chú */}
-          <div>
-            <label className="text-xs font-bold text-gray-500 uppercase tracking-wide block mb-1.5">Ghi chú</label>
-            <textarea
-              rows={2}
-              value={form.note}
-              onChange={e => ff("note", e.target.value)}
-              placeholder="Ghi chú thêm cho món (không bắt buộc)..."
-              className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-green-300"
-            />
-          </div>
-          {/* Trạng thái */}
-          <div className="flex items-center gap-2">
-            <input type="checkbox" id="avail" checked={form.isAvailable}
-              onChange={e => ff("isAvailable", e.target.checked)} className="accent-green-500 w-4 h-4" />
-            <label htmlFor="avail" className="text-sm font-medium text-gray-600">Đang bán</label>
-          </div>
-        </div>
 
-        <div className="flex justify-end gap-2 mt-5 pt-4 border-t border-gray-100">
-          <Button variant="outline" onClick={closeModal}>Hủy</Button>
-          <Button onClick={handleSave} disabled={!form.foodName.trim()}>
-            <Check size={14} />Xác nhận
-          </Button>
-        </div>
+            <p className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-3">Phương thức thanh toán</p>
+            <div className="grid grid-cols-2 gap-2">
+              {[["CASH", "💵 Tiền mặt"], ["BANKING", "🏦 Chuyển khoản"], ["MOMO", "🟣 MoMo"], ["ZALOPAY", "🔵 ZaloPay"]].map(([m, l]) => (
+                <button key={m} onClick={() => setPayMethod(m)}
+                  className={`py-3 rounded-xl text-sm font-bold border-2 transition-all
+                                        ${payMethod === m ? "border-green-500 bg-green-50 text-green-700" : "border-gray-200 text-gray-600 hover:border-green-200"}`}>
+                  {l}
+                </button>
+              ))}
+            </div>
+
+            <div className="flex gap-2 mt-5">
+              <Button variant="outline" className="flex-1 justify-center" onClick={() => setCheckoutOpen(false)}>
+                Hủy
+              </Button>
+              <Button className="flex-1 justify-center" onClick={handleCheckout} disabled={checkoutLoading}>
+                {checkoutLoading ? (
+                  <span className="inline-flex items-center gap-2">
+                    <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                    </svg>
+                    Đang xử lý…
+                  </span>
+                ) : (
+                  <><Check size={15} />Xác nhận thanh toán</>
+                )}
+              </Button>
+            </div>
+          </>
+        )}
       </Modal>
 
-      {/* ─── Modal chi tiết ─────────────────────────────────────────────────── */}
-      <InfoModal food={infoFood} open={modal === "info"} onClose={closeModal} />
+      {/* ── Modal chat theo bàn ── */}
+      <Modal open={chatOpenTableId != null} onClose={closeChat} title={chatModalTitle}>
+        {chatTable && (
+          <div className="flex flex-col" style={{ height: 420 }}>
+            {/* Thanh hành động — nút xoá lịch sử */}
+            {chatTable.messages?.length > 0 && (
+              <div className="flex justify-end mb-2">
+                <button
 
-      {/* ─── Modal sửa ghi chú ─────────────────────────────────────────────── */}
-      <Modal open={modal === "note"} onClose={closeModal} title={`Ghi chú — ${noteFood?.foodName ?? ""}`}>
-        <div className="space-y-3">
-          <label className="text-xs font-bold text-gray-500 uppercase tracking-wide block">Ghi chú</label>
-          <textarea
-            autoFocus
-            rows={4}
-            value={noteDraft}
-            onChange={e => setNoteDraft(e.target.value)}
-            placeholder="Nhập ghi chú cho món này..."
-            className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-green-300"
-          />
-        </div>
-        <div className="flex justify-end gap-2 mt-5 pt-4 border-t border-gray-100">
-          <Button variant="outline" onClick={closeModal}>Hủy</Button>
-          <Button onClick={handleSaveNote}>
-            <Check size={14} />Lưu ghi chú
-          </Button>
+                  onClick={() => { console.log("[open confirm modal] clicked"); setClearChatConfirmOpen(true) }}
+                  className="flex items-center gap-1 text-xs font-semibold text-gray-400 hover:text-red-500 transition-colors"
+                >
+                  <Trash2 size={13} /> Xoá lịch sử
+                </button>
+              </div>
+            )}
+
+            <div ref={chatScrollRef} className="flex-1 overflow-y-auto space-y-2 pr-1 mb-3">
+              {(!chatTable.messages || chatTable.messages.length === 0) ? (
+                <p className="text-gray-400 text-xs text-center py-10">Chưa có tin nhắn nào với {chatTable.name}</p>
+              ) : (
+                chatTable.messages.map((m, idx) => (
+                  <div key={m.id || idx} className={`flex ${m.from === "admin" ? "justify-end" : "justify-start"}`}>
+                    <div className={`max-w-[75%] rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed
+                                ${m.from === "admin" ? "bg-green-500 text-white rounded-br-md" : "bg-gray-100 text-gray-700 rounded-bl-md"}`}>
+                      <p>{m.text}</p>
+                      <p className={`text-[10px] mt-1 ${m.from === "admin" ? "text-green-100" : "text-gray-400"}`}>
+                        {fmtDate(m.at instanceof Date ? m.at.toISOString() : m.at)}
+                      </p>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+            <div className="flex items-center gap-2 pt-3 border-t border-gray-100">
+              <input
+                ref={chatInputRef}
+                value={chatDraft}
+                onChange={(e) => setChatDraft(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && sendChatReply()}
+                placeholder="Nhập tin nhắn trả lời..."
+                className="flex-1 border border-gray-200 rounded-full px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-300"
+              />
+              <button
+                onClick={sendChatReply}
+                disabled={!chatDraft.trim()}
+                aria-label="Gửi"
+                className="w-10 h-10 flex-shrink-0 flex items-center justify-center rounded-full bg-green-500 text-white disabled:opacity-40 disabled:cursor-not-allowed active:bg-green-600">
+                <Send size={16} />
+              </button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* ── Modal xác nhận xoá lịch sử chat ── */}
+      <Modal open={clearChatConfirmOpen} onClose={() => setClearChatConfirmOpen(false)} title="Xoá lịch sử tin nhắn?">
+        <div className="space-y-4">
+          <p className="text-sm text-gray-600">
+            Toàn bộ tin nhắn giữa admin và <span className="font-semibold text-gray-800">{chatTable?.name}</span> sẽ bị xoá vĩnh viễn. Bạn có chắc chắn không?
+          </p>
+          <div className="flex gap-2">
+            <Button variant="outline" className="flex-1 justify-center" onClick={() => setClearChatConfirmOpen(false)}>
+              Huỷ
+            </Button>
+            <Button className="flex-1 justify-center bg-red-500 hover:bg-red-600" onClick={clearChatHistory}>
+              <Trash2 size={15} />Xoá
+            </Button>
+          </div>
         </div>
       </Modal>
     </div>
