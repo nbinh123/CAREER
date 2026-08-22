@@ -1,10 +1,3 @@
-// src/pages/PlaceholderPage.js
-// Màn hình tạm cho các trang nghiệp vụ CHƯA chuyển đổi ở phiên làm việc
-// này (Giai đoạn 5 — 13 trang + 10 chart). Dùng để toàn bộ Drawer + luồng
-// điều hướng có thể chạy thử ngay, thay vì để trắng/crash khi bấm vào menu.
-// Khi bắt tay chuyển từng trang thật, chỉ cần thay thế đúng file trong
-// src/pages/<TenTrang>.js và trỏ lại trong AppDrawer.js — không cần đụng gì
-// tới phần navigation đã dựng.
 import React from "react";
 import { View, Text } from "react-native";
 import { Construction } from "lucide-react-native";

@@ -1,79 +1,3 @@
-// src/pages/OnlineOrdersPage.js
-// [UI] Chuyển đổi OnlineOrdersPage.jsx gốc (~700 dòng, CRA + Tailwind thuần,
-// dùng chung Button/Modal). Giữ nguyên 100% logic nghiệp vụ: kết nối socket
-// dùng chung (utils/socket, "join_admin" khi connect), 4 cột trạng thái đơn
-// đang xử lý (pending→confirmed→preparing→delivering, "completed" nằm ở tab
-// Lịch sử), hàng đợi toast đơn mới với timer TỰ TẮT ĐỘC LẬP cho từng đơn
-// (Map toastId→timeoutId, KHÔNG dùng 1 state đơn lẻ vì đơn đến liên tiếp sẽ
-// ghi đè mất thông báo đơn trước), giới hạn hiển thị 3 toast + dòng tổng
-// "+N đơn khác", toast tin nhắn chat mới (chỉ toast tin KHÁCH gửi, không
-// toast lại tin admin tự gửi), bước cuối "Hoàn thành" bắt buộc qua modal xác
-// nhận thanh toán vì đây là bước duy nhất động tới tiền — tạo 1 Order THẬT
-// (channel: "ONLINE") để lên chung báo cáo doanh thu, rồi mới báo server
-// đổi OnlineOrder sang "completed" kèm paymentMethod + convertedOrderId.
-// Toàn bộ hàm chuẩn hoá dữ liệu (normalizeOnlineOrder/normalizeChatThread/
-// normalizeChatMessage) copy y hệt — thuần JS, không đụng DOM.
-//
-// Khác biệt platform:
-//   - KHÔNG dùng breakpoint responsive (md:/lg:/xl:) như bản gốc (Kanban
-//     4 cột cho tablet+desktop, bảng lịch sử cho desktop, panel chat cố
-//     định cho lg+). Đã kiểm tra: KHÔNG có trang RN nào trong dự án này
-//     dùng prefix responsive (grep toàn bộ src/pages, src/components,
-//     src/navigation ra rỗng) — đây là app di động chạy chủ yếu trên điện
-//     thoại (đúng yêu cầu ban đầu), không phải website responsive nhiều
-//     kích cỡ màn hình. Vì vậy gộp về ĐÚNG 1 layout duy nhất cho mọi màn
-//     hình, chính là biến thể "mobile" của bản gốc (dải chip lọc trạng
-//     thái + danh sách 1 cột cho đơn đang xử lý; card dọc cho lịch sử;
-//     chat luôn mở qua Modal) — KHÔNG bớt trạng thái/hành động/field nào,
-//     chỉ bỏ biến thể desktop song song (Kanban 4 cột, bảng, panel cố
-//     định) vì không có chỗ dùng tới trong app này.
-//   - Bảng lịch sử đơn <table> 5 cột (desktop) → như Customers.js/
-//     IngredientsPage.js đã làm với bảng khách hàng/nguyên liệu gốc: đổi
-//     hẳn thành 1 kiểu OrderHistoryCard dọc dùng chung cho mọi kích cỡ,
-//     không giữ song song 2 layout bảng/card như bản gốc.
-//   - "../components/Button" / "Modal" dùng chung bên web không tồn tại
-//     bên RN (dự án RN chỉ có PrimaryButton/StatCard/AuthBackground/
-//     MiniAreaChart) — dựng cục bộ ActionBtn/IconBtn/ModalOverlay ngay
-//     trong file này, đúng pattern IngredientsPage.js/Customers.js đã
-//     dùng (RN Modal transparent animationType="fade" + Pressable nền tối
-//     đóng khi tap ra ngoài, bọc 1 Pressable no-op cho thẻ nội dung).
-//   - handleConfirmCheckout gọi thẳng `fetch(`${API_URL}/api/orders`)` ở
-//     bản gốc — KHÔNG đi qua interceptor nên không đính Bearer token (cùng
-//     kiểu thiếu sót đã ghi nhận & sửa cho CashFlow.js/FoodService/
-//     FruitService, xem README). Đổi sang postData() của utils/callAPI.js
-//     để nhất quán với mọi trang khác + tự động đính token. Field
-//     `saved.order?._id` (từ `res.json()`) → `res.data.order?._id` (postData
-//     đã parse sẵn), giữ nguyên logic còn lại.
-//   - Toast đơn mới (position: fixed top-right, hàng đợi) + toast chat mới
-//     (fixed top-left/nhảy góc theo breakpoint) → gộp chung 1 cột toast ở
-//     mép trên (đơn mới trước, tin nhắn mới sau) vì chỉ còn 1 layout duy
-//     nhất, tránh 2 toast đè lên nhau mà không cần logic breakpoint riêng.
-//     Toast kết quả thao tác (thanh toán) giữ kiểu pill đáy màn hình đã
-//     dùng ở CashFlow.js/Customers.js (Animated FadeInDown/FadeOutDown)
-//     thay vì hộp góc dưới-phải của bản gốc, cho đồng nhất toàn app.
-//   - border-l-4 màu (thẻ thống kê, cột Kanban) → không dùng className
-//     border-l-*, dùng style inline borderLeftWidth/Color, đúng quyết định
-//     đã ghi nhận ở IngredientsPage.js (NativeWind không xử lý tốt
-//     className border theo hướng).
-//   - orange-400 không có sẵn trong theme/tokens.js (chỉ có green/emerald/
-//     red/amber[500]/blue[500]/rose[500]/gray) — 1 chỗ duy nhất cần hex trực
-//     tiếp (thẻ thống kê "Đang xử lý") ghi thẳng "#fb923c" (đúng giá trị
-//     Tailwind v3 mặc định), cùng tinh thần hex trực tiếp đã dùng ở
-//     IngredientsPage.js/CashFlow.js cho amber-50/orange-600. Các badge màu
-//     cam/xanh dương/tím/xanh lơ còn lại (STATUS_META) chỉ cần className
-//     (bg-orange-100 text-orange-600...) — KHÔNG phải border theo hướng nên
-//     không cần hex, đã có tiền lệ "bg-amber-100 text-amber-700" chạy tốt ở
-//     IngredientsPage.js.
-//   - .cm-toast tự ẩn bằng CSS keyframe / icon Loader2 animate-spin →
-//     Animated.View FadeInDown/FadeOutDown (Reanimated) + ActivityIndicator,
-//     đúng quyết định đã dùng xuyên suốt dự án.
-//   - scrollTop/scrollHeight của DOM (cuộn khung chat xuống cuối) → RN
-//     ScrollView không có scrollTop, dùng ref.scrollToEnd({animated}).
-//     onKeyDown Enter để gửi tin → TextInput onSubmitEditing.
-//   - Khung chat luôn nằm trong Modal (không còn panel cố định lg+) nên
-//     bọc thêm KeyboardAvoidingView (behavior "padding" trên iOS) quanh
-//     phần thân chat, đúng pattern đã dùng ở LoginPage.js/RegisterPage.js,
-//     để bàn phím không che ô nhập nằm ở đáy modal.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
     View,
@@ -121,15 +45,6 @@ const PAYMENT_OPTIONS = [
     ["ZALOPAY", "🔵 ZaloPay"],
 ];
 
-// Cột trạng thái cho đơn đang xử lý — đúng thứ tự luồng thật:
-// pending → confirmed → preparing → delivering → (completed nằm ở tab Lịch sử)
-// [UI] Bản gốc dùng mảng này cho CẢ 2 biến thể: dải chip lọc (mobile, chỉ
-// cần status+label, chip đang chọn tô xanh — xem đúng đoạn JSX gốc trong
-// khối `md:hidden`) VÀ lưới Kanban 4 cột màu (desktop, cần thêm badge/accent
-// màu riêng từng cột). Vì đã gộp về 1 layout duy nhất kiểu chip (xem ghi
-// chú platform ở đầu file), chỉ còn giữ status+label — không cần badge/
-// accent màu riêng nữa (STATUS_META bên dưới đã đủ màu cho badge trạng
-// thái ở card lịch sử/chi tiết đơn).
 const ACTIVE_COLUMNS = [
     { status: "pending", label: "Chờ xác nhận" },
     { status: "confirmed", label: "Đã xác nhận" },
@@ -164,9 +79,6 @@ function shortCustomerLabel(customerId) {
     return `Khách #${(customerId || "").slice(0, 8)}`;
 }
 
-// fmtDate/fmtVND là util bên ngoài — không kiểm soát được chúng throw gì khi
-// gặp giá trị null/undefined/sai định dạng. Bọc lại kiểu safeCall để 1 giá
-// trị xấu không làm crash cả cây render. [GIU-NGUYEN]
 function safeFmtDate(value) {
     if (!value) return "—";
     try {

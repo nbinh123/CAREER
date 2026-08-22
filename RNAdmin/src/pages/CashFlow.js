@@ -1,31 +1,3 @@
-// src/pages/CashFlowPage.js
-// [UI] Chuyển đổi CashFlow.js gốc (587 dòng, JSX + className Tailwind
-// thuần, không CSS-in-JS). Giữ nguyên 100% logic nghiệp vụ: fetch 3
-// endpoint song song (food-weights/margin/avg-bill-value theo `days`),
-// công thức doanh thu ước tính = bill TB × số khách, thuế cố định 4.5%,
-// và toàn bộ CRUD "chi phí duy trì" chạy HOÀN TOÀN phía client — bản gốc
-// không có endpoint lưu chi phí này, dữ liệu mất khi rời màn hình/tải lại,
-// giữ nguyên hành vi đó (không tự ý thêm persist).
-//
-// Khác biệt platform:
-//   - Bản gốc gọi thẳng `axios.get(`${API_URL}/api/...`)` bằng axios trần,
-//     KHÔNG đi qua interceptor của utils/callAPI.js → không đính Bearer
-//     token. Đây nhiều khả năng là thiếu sót vì /analyst/* nằm dưới quyền
-//     admin (navConfig.js liệt "CashFlow" trong ADMIN_ONLY_SCREENS). Bản RN
-//     chuyển sang getData() của utils/callAPI.js để nhất quán với mọi
-//     trang khác trong dự án + tự động đính token — cùng tinh thần sửa lỗi
-//     tương tự đã ghi nhận ở FoodService/FruitService (xem README).
-//   - <table> chi phí duy trì (thead/tbody/tfoot, ô input inline khi sửa)
-//     → RN không có table, dựng lại bằng các dòng flex-row với tỉ lệ cột cố
-//     định (tên/giá trị/hành động), giữ đúng thao tác thêm/sửa/xoá/inline-
-//     edit như bản gốc.
-//   - animate-spin (CSS) trên icon RefreshCw → ActivityIndicator (đã dùng ở
-//     PrimaryButton.js cho cùng mục đích).
-//   - "font-mono" bị bỏ (dự án chỉ nạp font Nunito, không có font monospace
-//     nào được load qua expo-font — giữ font-mono sẽ gây cảnh báo "Unrecognized
-//     font family" trên RN).
-//   - Toast "Cập nhật trọng số" (span cạnh nút ở bản gốc) → toast nổi đáy
-//     màn hình, tái dùng đúng kiểu dáng đã có ở LoginPage.js.
 import React, { useCallback, useEffect, useState } from "react";
 import {
     View,

@@ -1,17 +1,3 @@
-// src/pages/LoginPage.js
-// [UI] Chuyển đổi toàn bộ LoginPage.js gốc (577 dòng, CSS-in-JS thuần).
-// Giữ nguyên 100% logic nghiệp vụ: validatePhone, validatePwd, luồng PIN 6
-// ô (auto-focus, backspace, paste), gọi login() từ useAuthZustand y hệt.
-// Khác biệt platform:
-//   - 6 ô input PIN + auto-focus/backspace/paste  → 6 TextInput + refs,
-//     xử lý qua onChangeText/onKeyPress (RN không có onPaste riêng, phát
-//     hiện "dán" khi text đến có length > 1 trong onChangeText).
-//   - Toast trượt vào/ra → Reanimated FadeInDown/FadeOutDown.
-//   - Nền blob/dots/card kính mờ → AuthBackground.js dùng chung.
-//   - Chuyển hướng sau đăng nhập thành công: RootNavigator tự động chuyển
-//     sang nhánh Main ngay khi isAuthenticated=true (không cần navigate thủ
-//     công như web); vì vậy toast "Đăng nhập thành công" chỉ có ý nghĩa
-//     tức thời — bỏ delay 800ms của bản gốc cho mượt trên mobile.
 import React, { useRef, useState } from "react";
 import {
   View,

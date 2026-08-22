@@ -1,14 +1,20 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   View,
   Text,
   ScrollView,
+  FlatList,
   Pressable,
   TextInput,
   Modal,
   ActivityIndicator,
   Switch,
 } from "react-native";
+import Animated, {
+  useAnimatedStyle,
+  useSharedValue,
+  withTiming,
+} from "react-native-reanimated";
 import {
   AlertTriangle,
   Check,
@@ -56,43 +62,83 @@ const ACTION_VARIANTS = {
   danger: { box: "bg-red-600", text: "text-white" },
 };
 
-function ActionBtn({ icon: Icon, label, onPress, variant = "secondary", disabled, loading, badge }) {
+// ─── Hiệu ứng bấm nút (co nhẹ khi nhấn) ─────────────────────────────────
+// ActionBtn/IconBtn giờ bọc trong Animated.View + scale qua Reanimated,
+// giữ đúng convention "Reanimated animations" đã thống nhất cho RNAdmin.
+//
+// [TỐI ƯU] Bọc React.memo: đây là các nút tái sử dụng nhiều lần trong toolbar
+// và trong từng thẻ nguyên liệu (IconBtn). Không memo thì mỗi lần component
+// cha re-render (gõ tìm kiếm, mở modal...) toàn bộ nút cũng re-render theo dù
+// props không đổi — cùng nguyên nhân chính khiến trang bị giật khi danh sách
+// nguyên liệu dài.
+const ActionBtn = React.memo(function ActionBtn({ icon: Icon, label, onPress, variant = "secondary", disabled, loading, badge }) {
   const v = ACTION_VARIANTS[variant] ?? ACTION_VARIANTS.secondary;
   const iconColor = variant === "primary" || variant === "danger" ? colors.white : colors.gray[600];
-  return (
-    <Pressable
-      onPress={onPress}
-      disabled={disabled || loading}
-      style={{ opacity: disabled ? 0.5 : 1 }}
-      className={`flex-row items-center gap-1.5 px-3.5 py-2.5 rounded-xl ${v.box}`}
-    >
-      {loading ? (
-        <ActivityIndicator size="small" color={iconColor} />
-      ) : (
-        !!Icon && <Icon size={14} color={iconColor} />
-      )}
-      <Text className={`text-xs font-bold ${v.text}`}>{label}</Text>
-      {!!badge && (
-        <View className="ml-0.5 w-4 h-4 rounded-full bg-amber-500 items-center justify-center">
-          <Text className="text-white text-[9px] font-black">{badge}</Text>
-        </View>
-      )}
-    </Pressable>
-  );
-}
+  const scale = useSharedValue(1);
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: scale.value }],
+  }));
 
-function IconBtn({ icon: Icon, onPress, danger }) {
   return (
-    <Pressable
-      onPress={onPress}
-      className={`w-8 h-8 rounded-lg items-center justify-center ${danger ? "bg-red-50" : "bg-gray-50"}`}
-    >
-      <Icon size={14} color={danger ? colors.red[600] : colors.gray[500]} />
-    </Pressable>
+    <Animated.View style={animatedStyle}>
+      <Pressable
+        onPress={onPress}
+        disabled={disabled || loading}
+        onPressIn={() => {
+          scale.value = withTiming(0.95, { duration: 80 });
+        }}
+        onPressOut={() => {
+          scale.value = withTiming(1, { duration: 120 });
+        }}
+        style={{ opacity: disabled ? 0.5 : 1 }}
+        className={`flex-row items-center gap-1.5 px-3.5 py-2.5 rounded-xl ${v.box}`}
+      >
+        {loading ? (
+          <ActivityIndicator size="small" color={iconColor} />
+        ) : (
+          !!Icon && <Icon size={14} color={iconColor} />
+        )}
+        <Text className={`text-xs font-bold ${v.text}`}>{label}</Text>
+        {!!badge && (
+          <View className="ml-0.5 w-4 h-4 rounded-full bg-amber-500 items-center justify-center">
+            <Text className="text-white text-[9px] font-black">{badge}</Text>
+          </View>
+        )}
+      </Pressable>
+    </Animated.View>
   );
-}
+});
 
-function FieldInput({ label, required, value, onChangeText, keyboardType = "default", multiline, full }) {
+// Nút Sửa/Xóa: to hơn (w-10 h-10, icon 18) + hiệu ứng co khi bấm
+// [TỐI ƯU] React.memo — mỗi thẻ nguyên liệu có 2 IconBtn, danh sách càng dài
+// thì phần này càng nhân lên; memo giúp chỉ re-render đúng nút bị đổi props.
+const IconBtn = React.memo(function IconBtn({ icon: Icon, onPress, danger }) {
+  const scale = useSharedValue(1);
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: scale.value }],
+  }));
+
+  return (
+    <Animated.View style={animatedStyle}>
+      <Pressable
+        onPress={onPress}
+        onPressIn={() => {
+          scale.value = withTiming(0.9, { duration: 80 });
+        }}
+        onPressOut={() => {
+          scale.value = withTiming(1, { duration: 120 });
+        }}
+        className={`w-10 h-10 rounded-lg items-center justify-center ${danger ? "bg-red-50" : "bg-gray-50"}`}
+      >
+        <Icon size={18} color={danger ? colors.red[600] : colors.gray[500]} />
+      </Pressable>
+    </Animated.View>
+  );
+});
+
+// [TỐI ƯU] React.memo — form Thêm/Sửa có 8 field, mỗi lần gõ 1 ô thì cả 7 ô
+// còn lại không cần vẽ lại nếu value/onChangeText của chúng không đổi.
+const FieldInput = React.memo(function FieldInput({ label, required, value, onChangeText, keyboardType = "default", multiline, full }) {
   return (
     <View className={full ? "w-full" : "w-[47%]"} style={{ marginBottom: 12 }}>
       <Text className="text-xs font-semibold text-gray-500 mb-1.5">
@@ -110,7 +156,7 @@ function FieldInput({ label, required, value, onChangeText, keyboardType = "defa
       />
     </View>
   );
-}
+});
 
 /* Overlay dùng chung cho cả 3 modal — tương đương e.stopPropagation() */
 function ModalOverlay({ onClose, children }) {
@@ -134,13 +180,16 @@ function ModalOverlay({ onClose, children }) {
   );
 }
 
-/* ── Trạng thái pending của 1 hàng ──────────────────────────────────────── */
+/* ── Trạng thái pending của 1 thẻ nguyên liệu ────────────────────────────
+   Trước đây chỉ tô viền trái (borderLeft) vì các hàng nằm sát nhau trong
+   1 khối bảng. Giờ mỗi nguyên liệu là 1 thẻ độc lập có viền bao quanh
+   (theo yêu cầu), nên trạng thái pending đổi màu toàn bộ viền + nền. */
 const ROW_ACCENT = {
-  added: { backgroundColor: colors.green[50], borderLeftWidth: 3, borderLeftColor: colors.green[400] },
+  added: { backgroundColor: colors.green[50], borderColor: colors.green[400] },
   // amber-50/amber-400 không có sẵn trong tokens.js (chỉ có amber[500]) —
   // ghi hex trực tiếp, cùng tinh thần ORDER_STATUS_COLORS ở Customers.js.
-  updated: { backgroundColor: "#fffbeb", borderLeftWidth: 3, borderLeftColor: "#fbbf24" },
-  normal: {},
+  updated: { backgroundColor: "#fffbeb", borderColor: "#fbbf24" },
+  normal: { backgroundColor: colors.white, borderColor: colors.gray[100] },
 };
 
 function RowStatusBadge({ status }) {
@@ -170,16 +219,28 @@ function expiryMeta(expiryDays) {
   return { label: `${expiryDays}d`, bg: "bg-green-100", text: "text-green-700" };
 }
 
-/* ── 1 nguyên liệu = 1 card (thay cho 1 hàng <tr> ở bản gốc) ────────────── */
-function IngredientCard({ ing, status, isLast, onEdit, onDelete }) {
+/* ── 1 nguyên liệu = 1 thẻ có viền riêng, xếp lưới 2 cột ─────────────────
+   Đổi từ "1 hàng trong bảng" (isLast quyết định borderBottom) sang
+   "1 thẻ độc lập" (width 48%, border bao quanh, bo góc) để render được
+   2 nguyên liệu / hàng theo yêu cầu.
+
+   [TỐI ƯU] React.memo — đây là component nặng nhất vì lặp lại theo số
+   nguyên liệu (có thể hàng chục/hàng trăm thẻ). Nếu không memo, mỗi lần
+   IngredientsPage re-render vì lý do bất kỳ (gõ ô tìm kiếm, đóng/mở modal,
+   isSaving đổi...) thì TOÀN BỘ thẻ vẽ lại dù dữ liệu không đổi — đây là
+   nguyên nhân chính gây giật/lag. Memo chỉ có tác dụng khi props (ing,
+   status, onEdit, onDelete) giữ nguyên tham chiếu giữa các lần render, nên
+   onEdit/onDelete ở component cha đã được bọc useCallback tương ứng. */
+const IngredientCard = React.memo(function IngredientCard({ ing, status, onEdit, onDelete }) {
   const quantity = ing.quantity ?? 0;
   const expiry = expiryMeta(ing.expiryDays);
+  const accent = ROW_ACCENT[status] ?? ROW_ACCENT.normal;
 
   return (
     <View
       style={[
-        { borderBottomWidth: isLast ? 0 : 1, borderBottomColor: colors.gray[50] },
-        ROW_ACCENT[status] ?? ROW_ACCENT.normal,
+        { width: "100%", borderWidth: 1, borderRadius: 16, marginBottom: 12 },
+        accent,
       ]}
       className="px-4 py-3.5"
     >
@@ -233,7 +294,7 @@ function IngredientCard({ ing, status, isLast, onEdit, onDelete }) {
       )}
     </View>
   );
-}
+});
 
 /* ════════════════════════════════════════════════════════════
    MAIN COMPONENT
@@ -282,21 +343,48 @@ export default function IngredientsPage() {
   const pendingCount = safePending.added.length + safePending.updated.length + safePending.deleted.length;
   const hasPending = pendingCount > 0;
 
-  // ─── Search ─────────────────────────────────────────────────────────
-  const filtered = safeIngredients.filter((i) =>
-    (i.ingredientName || "").toLowerCase().includes(search.toLowerCase())
+  // ─── Danh sách sau khi lọc tìm kiếm ───────────────────────────────────
+  // [TỐI ƯU] useMemo — trước đây .filter() chạy lại trên MỌI lần render
+  // (kể cả khi chỉ mở/đóng modal hay gõ trong ô ghi chú của form), dù
+  // "search" và danh sách gốc không đổi. Chỉ tính lại khi 1 trong 2 dep đổi.
+  const filtered = useMemo(
+    () =>
+      safeIngredients.filter((i) =>
+        (i.ingredientName || "").toLowerCase().includes(search.toLowerCase())
+      ),
+    [safeIngredients, search]
+  );
+
+  // ─── Tra trạng thái pending theo id — O(1) thay vì .some() từng phần tử ─
+  // [TỐI ƯU] Bản cũ gọi safePending.added.some()/updated.some() cho MỖI
+  // nguyên liệu trên MỖI lần render, tức O(số nguyên liệu × số thay đổi
+  // pending). Gom trước thành 1 Map (O(n) một lần) rồi tra cứu O(1)/thẻ.
+  const pendingStatusMap = useMemo(() => {
+    const map = new Map();
+    safePending.added.forEach((i) => map.set(i._id, "added"));
+    safePending.updated.forEach((i) => map.set(i._id, "updated"));
+    return map;
+  }, [safePending.added, safePending.updated]);
+
+  const getRowStatus = useCallback(
+    (ing) => pendingStatusMap.get(ing._id) || "normal",
+    [pendingStatusMap]
   );
 
   // ─── Helpers form ───────────────────────────────────────────────────
-  const setField = (key, val) => setForm((prev) => ({ ...prev, [key]: val }));
+  // [TỐI ƯU] Toàn bộ handler dưới đây bọc useCallback để giữ nguyên tham
+  // chiếu hàm giữa các lần render — điều kiện bắt buộc để React.memo trên
+  // IngredientCard/ActionBtn/IconBtn/FieldInput thực sự có tác dụng (nếu
+  // props hàm luôn "mới" thì memo coi như props đã đổi, vẫn re-render).
+  const setField = useCallback((key, val) => setForm((prev) => ({ ...prev, [key]: val })), []);
 
-  const exportData = () => {
+  const exportData = useCallback(() => {
     exportJSON(`${API_URL}/api/ingredients`, "ingredients").catch((err) => {
       console.error("exportData:", err);
     });
-  };
+  }, []);
 
-  const handleImportPick = async () => {
+  const handleImportPick = useCallback(async () => {
     setImportError(null);
     setIsImporting(true);
     try {
@@ -309,26 +397,26 @@ export default function IngredientsPage() {
     } finally {
       setIsImporting(false);
     }
-  };
+  }, [getIngredients]);
 
-  const openAdd = () => {
+  const openAdd = useCallback(() => {
     setForm(EMPTY_ING);
     setModal("add");
-  };
+  }, []);
 
-  const openEdit = (ing) => {
+  const openEdit = useCallback((ing) => {
     setForm({ ...EMPTY_ING, ...ing });
     setEditId(ing._id);
     setModal("edit");
-  };
+  }, []);
 
-  const closeModal = () => {
+  const closeModal = useCallback(() => {
     setModal(null);
     setEditId(null);
-  };
+  }, []);
 
   // ─── CRUD local (chưa gọi API) ────────────────────────────────────────
-  const handleSave = () => {
+  const handleSave = useCallback(() => {
     const name = (form.ingredientName || "").trim();
     if (!name) return;
 
@@ -345,143 +433,173 @@ export default function IngredientsPage() {
       editIngredientLocal({ ...payload, _id: editId });
     }
     closeModal();
-  };
+  }, [form, modal, editId, addIngredientLocal, editIngredientLocal, closeModal]);
 
-  const handleDelete = () => {
+  const handleDelete = useCallback(() => {
     deleteIngredientLocal(deleteId);
     setDeleteId(null);
-  };
+  }, [deleteIngredientLocal, deleteId]);
 
   // ─── Lưu tất cả lên server ──────────────────────────────────────────
-  const handleSaveAll = async () => {
+  const handleSaveAll = useCallback(async () => {
     try {
       await saveAllChanges();
     } catch {
       // Lỗi đã được lưu vào saveError trong zustand
     }
-  };
+  }, [saveAllChanges]);
 
-  // ─── Trạng thái của từng hàng ───────────────────────────────────────
-  const getRowStatus = (ing) => {
-    if (safePending.added.some((i) => i._id === ing._id)) return "added";
-    if (safePending.updated.some((i) => i._id === ing._id)) return "updated";
-    return "normal";
-  };
+  const openDiscard = useCallback(() => setDiscardOpen(true), []);
+  const closeDiscard = useCallback(() => setDiscardOpen(false), []);
+  const closeDeleteModal = useCallback(() => setDeleteId(null), []);
+  const closeImportError = useCallback(() => setImportError(null), []);
+  const confirmDiscard = useCallback(async () => {
+    await discardChanges();
+    setDiscardOpen(false);
+  }, [discardChanges]);
+
+  // [TỐI ƯU] Header (tiêu đề, toolbar, banner lỗi, legend, ô tìm kiếm) tách
+  // thành 1 phần tử riêng để làm ListHeaderComponent cho FlatList bên dưới,
+  // thay vì nằm chung ScrollView với danh sách nguyên liệu như bản cũ.
+  const listHeader = (
+    <View style={{ gap: 14, marginBottom: 14 }}>
+      {/* ── Header ────────────────────────────────────────────────── */}
+      <View>
+        <Text className="text-2xl font-black text-green-900">Nguyên liệu</Text>
+        <Text className="text-gray-500 text-sm mt-0.5">
+          {safeIngredients.length} nguyên liệu trong kho
+          {hasPending && (
+            <Text className="text-amber-600 font-semibold"> • {pendingCount} thay đổi chưa lưu</Text>
+          )}
+        </Text>
+      </View>
+
+      {/* ── Toolbar hành động ────────────────────────────────────── */}
+      <View className="flex-row flex-wrap items-center" style={{ gap: 8 }}>
+        {hasPending && (
+          <ActionBtn icon={X} label="Huỷ thay đổi" variant="outline" onPress={openDiscard} />
+        )}
+        <ActionBtn
+          icon={Save}
+          label={isSaving ? "Đang lưu..." : "Lưu tất cả thay đổi"}
+          variant={hasPending ? "primary" : "secondary"}
+          disabled={!hasPending || isSaving}
+          loading={isSaving}
+          badge={!isSaving ? pendingCount : 0}
+          onPress={handleSaveAll}
+        />
+        <ActionBtn icon={Plus} label="Thêm nguyên liệu" onPress={openAdd} />
+        <ActionBtn icon={FolderOpen} label="Xuất JSON" onPress={exportData} />
+        <ActionBtn
+          icon={Upload}
+          label={isImporting ? "Đang tải lên..." : "Tải lên JSON"}
+          loading={isImporting}
+          onPress={handleImportPick}
+        />
+      </View>
+
+      {/* ── Banner lỗi lưu ───────────────────────────────────────── */}
+      {!!saveError && (
+        <View className="flex-row items-center justify-between gap-3 bg-red-50 border border-red-200 rounded-xl px-4 py-3">
+          <Text className="flex-1 text-red-700 text-sm">{saveError}</Text>
+          <Pressable onPress={clearSaveError}>
+            <X size={16} color={colors.red[600]} />
+          </Pressable>
+        </View>
+      )}
+      {!!importError && (
+        <View className="flex-row items-center justify-between gap-3 bg-red-50 border border-red-200 rounded-xl px-4 py-3">
+          <Text className="flex-1 text-red-700 text-sm">{importError}</Text>
+          <Pressable onPress={closeImportError}>
+            <X size={16} color={colors.red[600]} />
+          </Pressable>
+        </View>
+      )}
+
+      {/* ── Legend pending ───────────────────────────────────────── */}
+      {hasPending && (
+        <View className="flex-row flex-wrap items-center bg-white border border-gray-100 rounded-xl px-4 py-2.5" style={{ gap: 12 }}>
+          <Text className="text-xs font-semibold text-gray-600">Trạng thái chưa lưu:</Text>
+          <View className="flex-row items-center" style={{ gap: 6 }}>
+            <View style={{ width: 10, height: 10, borderRadius: 3, backgroundColor: colors.green[400] }} />
+            <Text className="text-xs text-gray-500">Mới thêm ({safePending.added.length})</Text>
+          </View>
+          <View className="flex-row items-center" style={{ gap: 6 }}>
+            <View style={{ width: 10, height: 10, borderRadius: 3, backgroundColor: "#fbbf24" }} />
+            <Text className="text-xs text-gray-500">Đã sửa ({safePending.updated.length})</Text>
+          </View>
+          <Text className="text-xs text-red-500">Sẽ xóa ({safePending.deleted.length})</Text>
+        </View>
+      )}
+
+      {/* ── Search ───────────────────────────────────────────────── */}
+      <View style={{ position: "relative", justifyContent: "center" }}>
+        <View style={{ position: "absolute", left: 14, zIndex: 1 }}>
+          <Search size={15} color={colors.gray[400]} />
+        </View>
+        <TextInput
+          value={search}
+          onChangeText={setSearch}
+          placeholder="Tìm nguyên liệu..."
+          placeholderTextColor={colors.gray[300]}
+          className="bg-white border border-gray-200 rounded-xl text-sm text-gray-800"
+          style={{ paddingLeft: 38, paddingRight: 16, paddingVertical: 11 }}
+        />
+      </View>
+
+      {isLoading && (
+        <View className="bg-white rounded-2xl border border-gray-100 flex-row items-center justify-center py-16" style={{ gap: 8 }}>
+          <ActivityIndicator size="small" color={colors.gray[400]} />
+          <Text className="text-sm text-gray-400">Đang tải nguyên liệu...</Text>
+        </View>
+      )}
+    </View>
+  );
 
   // ──────────────────────────────────────────────────────────────────────
   return (
     <View style={{ flex: 1 }} className="bg-gray-50">
-      <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40, gap: 14 }} keyboardShouldPersistTaps="handled">
-        {/* ── Header ────────────────────────────────────────────────── */}
-        <View>
-          <Text className="text-2xl font-black text-green-900">Nguyên liệu</Text>
-          <Text className="text-gray-500 text-sm mt-0.5">
-            {safeIngredients.length} nguyên liệu trong kho
-            {hasPending && (
-              <Text className="text-amber-600 font-semibold"> • {pendingCount} thay đổi chưa lưu</Text>
-            )}
-          </Text>
-        </View>
-
-        {/* ── Toolbar hành động ────────────────────────────────────── */}
-        <View className="flex-row flex-wrap items-center" style={{ gap: 8 }}>
-          {hasPending && (
-            <ActionBtn icon={X} label="Huỷ thay đổi" variant="outline" onPress={() => setDiscardOpen(true)} />
-          )}
-          <ActionBtn
-            icon={Save}
-            label={isSaving ? "Đang lưu..." : "Lưu tất cả thay đổi"}
-            variant={hasPending ? "primary" : "secondary"}
-            disabled={!hasPending || isSaving}
-            loading={isSaving}
-            badge={!isSaving ? pendingCount : 0}
-            onPress={handleSaveAll}
-          />
-          <ActionBtn icon={Plus} label="Thêm nguyên liệu" onPress={openAdd} />
-          <ActionBtn icon={FolderOpen} label="Xuất JSON" onPress={exportData} />
-          <ActionBtn
-            icon={Upload}
-            label={isImporting ? "Đang tải lên..." : "Tải lên JSON"}
-            loading={isImporting}
-            onPress={handleImportPick}
-          />
-        </View>
-
-        {/* ── Banner lỗi lưu ───────────────────────────────────────── */}
-        {!!saveError && (
-          <View className="flex-row items-center justify-between gap-3 bg-red-50 border border-red-200 rounded-xl px-4 py-3">
-            <Text className="flex-1 text-red-700 text-sm">{saveError}</Text>
-            <Pressable onPress={clearSaveError}>
-              <X size={16} color={colors.red[600]} />
-            </Pressable>
-          </View>
-        )}
-        {!!importError && (
-          <View className="flex-row items-center justify-between gap-3 bg-red-50 border border-red-200 rounded-xl px-4 py-3">
-            <Text className="flex-1 text-red-700 text-sm">{importError}</Text>
-            <Pressable onPress={() => setImportError(null)}>
-              <X size={16} color={colors.red[600]} />
-            </Pressable>
-          </View>
-        )}
-
-        {/* ── Legend pending ───────────────────────────────────────── */}
-        {hasPending && (
-          <View className="flex-row flex-wrap items-center bg-white border border-gray-100 rounded-xl px-4 py-2.5" style={{ gap: 12 }}>
-            <Text className="text-xs font-semibold text-gray-600">Trạng thái chưa lưu:</Text>
-            <View className="flex-row items-center" style={{ gap: 6 }}>
-              <View style={{ width: 10, height: 10, borderRadius: 3, backgroundColor: colors.green[400] }} />
-              <Text className="text-xs text-gray-500">Mới thêm ({safePending.added.length})</Text>
-            </View>
-            <View className="flex-row items-center" style={{ gap: 6 }}>
-              <View style={{ width: 10, height: 10, borderRadius: 3, backgroundColor: "#fbbf24" }} />
-              <Text className="text-xs text-gray-500">Đã sửa ({safePending.updated.length})</Text>
-            </View>
-            <Text className="text-xs text-red-500">Sẽ xóa ({safePending.deleted.length})</Text>
-          </View>
-        )}
-
-        {/* ── Search ───────────────────────────────────────────────── */}
-        <View style={{ position: "relative", justifyContent: "center" }}>
-          <View style={{ position: "absolute", left: 14, zIndex: 1 }}>
-            <Search size={15} color={colors.gray[400]} />
-          </View>
-          <TextInput
-            value={search}
-            onChangeText={setSearch}
-            placeholder="Tìm nguyên liệu..."
-            placeholderTextColor={colors.gray[300]}
-            className="bg-white border border-gray-200 rounded-xl text-sm text-gray-800"
-            style={{ paddingLeft: 38, paddingRight: 16, paddingVertical: 11 }}
-          />
-        </View>
-
-        {/* ── Danh sách (thay <table>) ─────────────────────────────── */}
-        <View className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
-          {isLoading ? (
-            <View className="flex-row items-center justify-center py-16" style={{ gap: 8 }}>
-              <ActivityIndicator size="small" color={colors.gray[400]} />
-              <Text className="text-sm text-gray-400">Đang tải nguyên liệu...</Text>
-            </View>
-          ) : filtered.length === 0 ? (
-            <View className="items-center py-14 px-6">
+      {/* ── Danh sách: lưới 2 cột, mỗi nguyên liệu 1 thẻ có viền riêng ──
+          [TỐI ƯU] Đổi từ ScrollView + .map() render TOÀN BỘ nguyên liệu
+          cùng lúc sang FlatList — chỉ dựng (mount) các thẻ đang thực sự
+          hiển thị trên màn hình + vài thẻ đệm gần đó (virtualization).
+          Đây là thay đổi có tác động lớn nhất tới độ mượt: với danh sách
+          dài, ScrollView cũ phải vẽ và giữ trong bộ nhớ mọi thẻ ngay từ
+          đầu dù người dùng chưa cuộn tới, còn FlatList chỉ vẽ phần cần
+          thiết rồi tái sử dụng khi cuộn. */}
+      <FlatList
+        data={isLoading ? [] : filtered}
+        keyExtractor={(ing, idx) => ing._id || String(idx)}
+        numColumns={2}
+        columnWrapperStyle={{ justifyContent: "space-between" }}
+        contentContainerStyle={{ padding: 16, paddingBottom: 40, flexGrow: 1 }}
+        keyboardShouldPersistTaps="handled"
+        ListHeaderComponent={listHeader}
+        ListEmptyComponent={
+          !isLoading ? (
+            <View className="bg-white rounded-2xl border border-gray-100 items-center py-14 px-6">
               <Text style={{ fontSize: 34 }}>🥬</Text>
               <Text className="text-sm text-gray-300 font-bold mt-2">Không tìm thấy nguyên liệu nào</Text>
             </View>
-          ) : (
-            filtered.map((ing, idx) => (
-              <IngredientCard
-                key={ing._id || idx}
-                ing={ing}
-                status={getRowStatus(ing)}
-                isLast={idx === filtered.length - 1}
-                onEdit={openEdit}
-                onDelete={(id) => setDeleteId(id)}
-              />
-            ))
-          )}
-        </View>
-      </ScrollView>
+          ) : null
+        }
+        renderItem={({ item }) => (
+          <IngredientCard
+            ing={item}
+            status={getRowStatus(item)}
+            onEdit={openEdit}
+            onDelete={setDeleteId}
+          />
+        )}
+        /* Các tham số dưới đây điều chỉnh mức virtualization: số item vẽ
+           ngay từ đầu, số item vẽ thêm mỗi batch khi cuộn, và "cửa sổ" vùng
+           được giữ vẽ quanh vị trí đang xem — giảm số thẻ tồn tại cùng lúc
+           trong cây render mà không ảnh hưởng trải nghiệm cuộn. */
+        initialNumToRender={8}
+        maxToRenderPerBatch={8}
+        windowSize={7}
+        removeClippedSubviews
+      />
 
       {/* ── Modal Thêm / Sửa ─────────────────────────────────────────── */}
       {!!modal && (
@@ -575,7 +693,7 @@ export default function IngredientsPage() {
 
       {/* ── Modal Xác nhận xóa ──────────────────────────────────────── */}
       {!!deleteId && (
-        <ModalOverlay onClose={() => setDeleteId(null)}>
+        <ModalOverlay onClose={closeDeleteModal}>
           <View className="bg-white rounded-3xl overflow-hidden">
             <View className="px-6 pt-6 pb-4 border-b border-gray-100">
               <Text className="text-base font-black text-green-900">Xác nhận xóa</Text>
@@ -587,7 +705,7 @@ export default function IngredientsPage() {
               </Text>
             </View>
             <View className="flex-row justify-end gap-2 px-5 pb-5">
-              <Pressable onPress={() => setDeleteId(null)} className="px-4 py-2.5 rounded-xl bg-gray-50 border border-gray-200">
+              <Pressable onPress={closeDeleteModal} className="px-4 py-2.5 rounded-xl bg-gray-50 border border-gray-200">
                 <Text className="text-sm font-bold text-gray-600">Hủy</Text>
               </Pressable>
               <Pressable onPress={handleDelete} className="flex-row items-center gap-1.5 px-4 py-2.5 rounded-xl bg-red-600">
@@ -601,7 +719,7 @@ export default function IngredientsPage() {
 
       {/* ── Modal Huỷ thay đổi ──────────────────────────────────────── */}
       {discardOpen && (
-        <ModalOverlay onClose={() => setDiscardOpen(false)}>
+        <ModalOverlay onClose={closeDiscard}>
           <View className="bg-white rounded-3xl overflow-hidden">
             <View className="px-6 pt-6 pb-4 border-b border-gray-100">
               <Text className="text-base font-black text-green-900">Huỷ tất cả thay đổi?</Text>
@@ -612,14 +730,11 @@ export default function IngredientsPage() {
               </Text>
             </View>
             <View className="flex-row justify-end gap-2 px-5 pb-5">
-              <Pressable onPress={() => setDiscardOpen(false)} className="px-4 py-2.5 rounded-xl bg-gray-50 border border-gray-200">
+              <Pressable onPress={closeDiscard} className="px-4 py-2.5 rounded-xl bg-gray-50 border border-gray-200">
                 <Text className="text-sm font-bold text-gray-600">Không</Text>
               </Pressable>
               <Pressable
-                onPress={async () => {
-                  await discardChanges();
-                  setDiscardOpen(false);
-                }}
+                onPress={confirmDiscard}
                 className="flex-row items-center gap-1.5 px-4 py-2.5 rounded-xl bg-red-600"
               >
                 <RefreshCw size={14} color={colors.white} />

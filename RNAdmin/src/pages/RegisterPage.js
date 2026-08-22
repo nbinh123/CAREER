@@ -1,15 +1,3 @@
-// src/pages/RegisterPage.js
-// [UI] Chuyển đổi RegisterPage.js gốc (629 dòng, CSS-in-JS thuần). Giữ
-// nguyên 100% logic: validators (fullName/phone/citizenId/username), gọi
-// thẳng axios.post tới `${API_URL}/api/users/register` với Authorization
-// Bearer accessToken y hệt bản gốc (không đi qua callAPI.js — giữ nguyên
-// theo đúng code gốc), hiện mật khẩu mặc định trả về, rồi reset form thay
-// vì điều hướng đi đâu khác (đúng hành vi cũ: admin có thể tạo liên tiếp
-// nhiều tài khoản).
-//
-// Khác biệt platform duy nhất: <select> role → dãy chip Pressable (5 lựa
-// chọn, đủ ít để không cần dropdown/modal). Nền dùng lại AuthBackground
-// dùng chung với LoginPage.
 import React, { useRef, useState } from "react";
 import { View, Text, TextInput, Pressable, ScrollView, KeyboardAvoidingView, Platform } from "react-native";
 import Animated, { FadeInDown, FadeOutDown } from "react-native-reanimated";

@@ -1,15 +1,3 @@
-// src/pages/HomePage.js
-// [UI] Chuyển đổi HomePage.js gốc (155 dòng). Giữ nguyên 100% logic 3
-// useEffect fetch dữ liệu ([GIU-NGUYEN]: /analyst/stats, /analyst/week-revenue,
-// /analyst/top-dishes) và toàn bộ cách xử lý fallback (DEFAULT_TOP_DISHES,
-// safeMiniRev, safeTopDishes, tính percent thanh top dishes).
-//
-// Khác biệt platform:
-//   - <AreaChart> (recharts) → MiniAreaChart.js (SVG tự vẽ, xem ghi chú ở
-//     component đó về quyết định thư viện chart chính thức còn để ngỏ).
-//   - div/className Tailwind → View/Text + NativeWind className (giữ
-//     nguyên tên class Tailwind gần như 1-1 nhờ NativeWind).
-//   - ScrollView bọc ngoài thay cho body scroll mặc định của web.
 import React, { useEffect, useState } from "react";
 import { View, Text, ScrollView } from "react-native";
 import { ArrowUpRight, DollarSign, Flame, ShoppingCart, TrendingUp } from "lucide-react-native";
