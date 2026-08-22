@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -78,6 +78,7 @@ function avatarColor(seed = "") {
   return AVATAR_COLORS[idx];
 }
 function initials(name = "") {
+  if (typeof name !== "string" || !name) return "?";
   return name.split(" ").filter(Boolean).map((w) => w[0]).join("").slice(0, 2).toUpperCase() || "?";
 }
 function fmtDate(d) {
@@ -124,8 +125,9 @@ function paymentLabel(pm) {
 }
 function orderItemsSummary(items) {
   if (!Array.isArray(items) || items.length === 0) return "";
-  const shown = items.slice(0, 2).map((it) => `${it.foodName || "Món"} ×${it.quantity ?? 1}`);
-  const rest = items.length - shown.length;
+  const clean = items.filter(Boolean);
+  const shown = clean.slice(0, 2).map((it) => `${it.foodName || "Món"} ×${it.quantity ?? 1}`);
+  const rest = clean.length - shown.length;
   return rest > 0 ? `${shown.join(", ")} +${rest} món khác` : shown.join(", ");
 }
 function statusOf(c) {
@@ -444,7 +446,7 @@ function OrdersModal({ customer, onClose }) {
 }
 
 /* ── 1 khách hàng = 1 card (thay cho 1 hàng <tr> ở bản gốc) ─────────────── */
-function CustomerCard({ customer, isLast, onViewOrders, onLock, onUnlock, onReset }) {
+const CustomerCard = React.memo(function CustomerCard({ customer, isLast, onViewOrders, onLock, onUnlock, onReset }) {
   const st = statusOf(customer);
   return (
     <View className={`px-4 py-4 ${isLast ? "" : "border-b border-gray-50"}`} style={{ gap: 10 }}>
@@ -503,7 +505,7 @@ function CustomerCard({ customer, isLast, onViewOrders, onLock, onUnlock, onRese
       </View>
     </View>
   );
-}
+});
 
 /* ── Skeleton card lúc loading (thay .cm-skel-row) ──────────────────────── */
 function SkeletonCard() {
@@ -566,6 +568,9 @@ export default function CustomersPage() {
     }, 400);
     return () => clearTimeout(searchDebounce.current);
   }, [searchInput]);
+
+  /* dọn toast timer khi unmount, tránh setState sau khi unmount */
+  useEffect(() => () => clearTimeout(toastTimer.current), []);
 
   const fetchCustomers = useCallback(async (silent = false) => {
     const fetchId = ++fetchIdRef.current;
@@ -632,8 +637,18 @@ export default function CustomersPage() {
     setConfirmLoading(false);
   }
 
-  /* ── stats ── */
-  const mustChangeCount = list.filter((c) => c.mustChangePassword).length;
+  /* ── stats (derived data) ── */
+  const mustChangeCount = useMemo(
+    () => list.filter((c) => c.mustChangePassword).length,
+    [list]
+  );
+
+  /* ── handlers ổn định cho CustomerCard (React.memo) ──
+     Trước đây được tạo mới bên trong list.map() ở mỗi lần render, khiến
+     memo của CustomerCard vô nghĩa vì prop function luôn đổi reference. */
+  const handleLock = useCallback((cust) => setConfirmAction({ type: "lock", customer: cust }), []);
+  const handleUnlock = useCallback((cust) => setConfirmAction({ type: "unlock", customer: cust }), []);
+  const handleReset = useCallback((cust) => setConfirmAction({ type: "reset", customer: cust }), []);
 
   return (
     <View style={{ flex: 1 }} className="bg-gray-50">
@@ -713,9 +728,9 @@ export default function CustomersPage() {
                 customer={c}
                 isLast={i === list.length - 1}
                 onViewOrders={setOrdersCustomer}
-                onLock={(cust) => setConfirmAction({ type: "lock", customer: cust })}
-                onUnlock={(cust) => setConfirmAction({ type: "unlock", customer: cust })}
-                onReset={(cust) => setConfirmAction({ type: "reset", customer: cust })}
+                onLock={handleLock}
+                onUnlock={handleUnlock}
+                onReset={handleReset}
               />
             ))
           )}

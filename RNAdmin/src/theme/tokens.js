@@ -1,14 +1,3 @@
-// src/theme/tokens.js
-// [NEN-MONG 1.11] Bảng màu dùng lặp lại nhiều nơi trong bản gốc (Tailwind
-// green-50..900, emerald-, red-50/100/500/600, amber-500, blue-500, rose-500,
-// gray-...). Với NativeWind, phần lớn UI vẫn dùng thẳng className
-// ("bg-green-500", "text-emerald-700"...) y hệt bản web — palette mặc định
-// của Tailwind đã khớp 100% vì tailwind.config.js gốc không customize theme.
-//
-// File này chỉ cần cho những chỗ KHÔNG thể dùng className (props nhận thẳng
-// màu: LinearGradient colors=[...], react-native-svg stroke/fill, Reanimated
-// interpolateColor...). Giá trị hex lấy đúng từ Tailwind v3 palette để đảm
-// bảo đồng nhất tuyệt đối với các className đang dùng song song.
 export const colors = {
   green: {
     50: "#f0fdf4",
@@ -57,6 +46,39 @@ export const colors = {
   },
   white: "#ffffff",
   black: "#000000",
+};
+
+export const chart = {
+  greenBar: "#86efac",
+  greenLine: "#15803d",
+  greenGrid: "#f0fdf4",
+  blueBarA: "#60a5fa",
+  blueBarB: "#3b82f6",
+  blueGrid: "#eff6ff",
+  violetBar: "#c4b5fd",
+  violetLine: "#7c3aed",
+  violetGrid: "#f5f3ff",
+  skyBar: "#7dd3fc",
+  skyLine: "#0369a1",
+  skyGrid: "#f0f9ff",
+  amberBar: "#fcd34d",
+  amberLine: "#b45309",
+  amberGrid: "#fffbeb",
+  roseBarCost: "#fca5a5",
+  cyanLine: "#0891b2",
+  indigoBar: "#a5b4fc",
+  indigoGrid: "#eef2ff",
+  orangeLine: "#f59e0b",
+  orangeAmberText: "#fbbf24",
+  purpleGrid: "#f5f3ff",
+  breakevenGreen: "#22c55e",
+  breakevenRed: "#ef4444",
+  breakevenOrange: "#f97316",
+  pidBlue: "#93c5fd",
+  pidOrange: "#f97316",
+  neutralGrid: "#f3f4f6",
+  pieColors: ["#22c55e", "#60a5fa", "#f59e0b", "#f87171", "#a78bfa", "#d1d5db"],
+  heat: ["#f0fdf4", "#bbf7d0", "#4ade80", "#22c55e", "#15803d"],
 };
 
 export default colors;

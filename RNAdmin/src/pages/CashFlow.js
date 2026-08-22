@@ -549,7 +549,7 @@ export default function CashFlowPage() {
     // trang chuẩn.
     const fetchFoodWeightsPage1 = useCallback(async () => {
         const res = await getData({
-            url: "/analyst/food-weights",
+            url: "/analyst/food-weights/paginated",
             params: { days, page: 1, limit: FOOD_WEIGHTS_PAGE_SIZE },
         });
         return res;
@@ -599,7 +599,7 @@ export default function CashFlowPage() {
         try {
             const nextPage = foodWeightsPage + 1;
             const res = await getData({
-                url: "/analyst/food-weights",
+                url: "/analyst/food-weights/paginated",
                 params: { days, page: nextPage, limit: FOOD_WEIGHTS_PAGE_SIZE },
             });
             if (res.success) {
@@ -663,7 +663,7 @@ export default function CashFlowPage() {
         setLoadingUpdate(true);
         setUpdateMsg("");
         try {
-            const res = await getData({ url: "/analyst/food-weights", params: { days } });
+            const res = await getData({ url: "/analyst/food-weights/paginated", params: { days } });
             if (res.success) {
                 setUpdateMsg(`Đã cập nhật ${res.data.updatedCount ?? 0} món`);
                 await fetchAll();

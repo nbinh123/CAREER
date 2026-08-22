@@ -16,6 +16,7 @@ router.get("/pid", authMiddleware, AnalystController.getPidData);
 router.get("/weekly", authMiddleware, AnalystController.getWeeklySummary);
 router.get("/week-revenue", authMiddleware, AnalystController.getLast7DaysRevenue);
 router.get("/food-weights", authMiddleware, AnalystController.updateFoodWeights);
+router.get("/food-weights/paginated", authMiddleware, AnalystController.getFoodWeightsPaginated);
 router.get("/margin", authMiddleware, AnalystController.getMarginAnalytics);
 router.get("/avg-bill-value", authMiddleware, AnalystController.getAvgBillValue);
 // có thể mở lại khi cần

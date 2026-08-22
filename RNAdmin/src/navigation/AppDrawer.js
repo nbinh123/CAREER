@@ -25,6 +25,7 @@ import StoragePage from "../pages/StoragePage";
 import VoucherPage from "../pages/VoucherPage";
 import KitchenPage from "../pages/KitchenPage";
 import OrdersPage from "../pages/OrdersPage";
+import AnalystPage from "../pages/AnalystPage"
 
 const Drawer = createDrawerNavigator();
 const SCREEN_COMPONENTS = {
@@ -38,7 +39,8 @@ const SCREEN_COMPONENTS = {
   Storage: StoragePage,
   Voucher: VoucherPage,
   Orders: OrdersPage,
-  Kitchen: KitchenPage
+  Kitchen: KitchenPage,
+  Analyst: AnalystPage
 };
 const PROTECTED_SCREENS = NAV.map(({ screen, label }) => {
   const RawComponent = SCREEN_COMPONENTS[screen] ?? makePlaceholder(label);
