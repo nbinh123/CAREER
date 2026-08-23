@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useMutation } from "@tanstack/react-query";
 import {
     View,
     Text,
@@ -39,6 +40,7 @@ const MAX_VISIBLE_ORDER_TOASTS = 3; // đơn mới về liên tiếp — chỉ h
 const NEW_CHAT_TOAST_DURATION = 6000; // toast tin nhắn mới tự ẩn sau 6s
 const ACTION_TOAST_DURATION = 3500; // toast kết quả thao tác (thanh toán...) tự ẩn sau 3.5s
 const HISTORY_SEARCH_DEBOUNCE = 350; // [PERF] trì hoãn filter lịch sử để không chạy lại trên mỗi keystroke
+const AUTO_ADVANCE_DELAY = 30000; // [NGHIỆP VỤ] "Đã xác nhận" và "Đang làm" tự chuyển bước tiếp theo sau 30s, không cần bấm nút
 
 const PAYMENT_OPTIONS = [
     ["CASH", "💵 Tiền mặt"],
@@ -47,10 +49,13 @@ const PAYMENT_OPTIONS = [
     ["ZALOPAY", "🔵 ZaloPay"],
 ];
 
+// [NGHIỆP VỤ] Chỉ còn 2 tab lọc "Chờ xác nhận" và "Đang giao" trên UI.
+// "confirmed" và "preparing" vẫn tồn tại trong dữ liệu (activeByStatus vẫn
+// gộp đủ 4 trạng thái cho số liệu "Đang xử lý") và vẫn tự chuyển bước sau
+// 30s như đã làm ở lượt trước — chỉ không còn hiện thành tab riêng để admin
+// thao tác/nhìn thấy nữa, đúng ý "chạy ngầm dưới UI".
 const ACTIVE_COLUMNS = [
     { status: "pending", label: "Chờ xác nhận" },
-    { status: "confirmed", label: "Đã xác nhận" },
-    { status: "preparing", label: "Đang làm" },
     { status: "delivering", label: "Đang giao" },
 ];
 
@@ -199,15 +204,23 @@ const ACTION_VARIANTS = {
     secondary: { box: "bg-white border border-gray-200", text: "text-gray-600" },
     danger: { box: "bg-red-500", text: "text-white" },
 };
-function ActionBtn({ icon: Icon, label, onPress, variant = "secondary", disabled, loading, flex }) {
+// [UI] size="lg" chỉ dùng cho 2 nút "Xác nhận" / "Hoàn thành" trong OrderCard
+// (giờ là 2 nút thao tác chính trên trang) — các nút khác (modal thanh toán,
+// modal huỷ...) giữ nguyên size="md" như cũ, không đổi.
+const ACTION_SIZES = {
+    md: "py-2.5",
+    lg: "py-3.5",
+};
+function ActionBtn({ icon: Icon, label, onPress, variant = "secondary", disabled, loading, flex, size = "md" }) {
     const v = ACTION_VARIANTS[variant] ?? ACTION_VARIANTS.secondary;
+    const paddingClass = ACTION_SIZES[size] ?? ACTION_SIZES.md;
     const iconColor = variant === "primary" || variant === "danger" ? colors.white : colors.gray[600];
     return (
         <Pressable
             onPress={onPress}
             disabled={disabled || loading}
             style={{ opacity: disabled ? 0.5 : 1, flex: flex ? 1 : undefined }}
-            className={`flex-row items-center justify-center gap-1.5 px-4 py-2.5 rounded-xl ${v.box}`}
+            className={`flex-row items-center justify-center gap-1.5 px-4 ${paddingClass} rounded-xl ${v.box}`}
         >
             {loading ? (
                 <ActivityIndicator size="small" color={iconColor} />
@@ -262,7 +275,13 @@ function EmptyState({ icon: Icon, text }) {
 /* [PERF] React.memo: khi danh sách `orders` được cập nhật qua socket, chỉ
    những đơn thực sự đổi nội dung mới nhận object reference mới (nhờ
    mergeOrdersPreservingRefs), nên các card không đổi sẽ bỏ qua re-render. */
+// [NGHIỆP VỤ] "Đã xác nhận" (confirmed) và "Đang làm" (preparing) tự động
+// chuyển bước sau 30s (xem effect tự động chuyển trạng thái ở component
+// cha) nên không cần nút bấm nữa — chỉ còn "Xác nhận" (pending) và
+// "Hoàn thành" (delivering, mở modal thanh toán) là thao tác thủ công.
+const ORDER_CARD_ACTION_STATUSES = new Set(["pending", "delivering"]);
 const OrderCard = React.memo(function OrderCard({ order, onCancel, onAdvance }) {
+    const showAdvanceButton = ORDER_CARD_ACTION_STATUSES.has(order.status);
     return (
         <View className="bg-white rounded-2xl border border-gray-100 p-3.5" style={{ gap: 10 }}>
             <View className="flex-row items-start justify-between" style={{ gap: 8 }}>
@@ -296,14 +315,24 @@ const OrderCard = React.memo(function OrderCard({ order, onCancel, onAdvance }) 
 
             <Text className="font-black text-sm text-green-600">{safeFmtVND(order.totalPrice)}</Text>
 
-            <View className="flex-row" style={{ gap: 6 }}>
+            <View className="flex-row items-stretch" style={{ gap: 6 }}>
                 <Pressable
                     onPress={() => onCancel(order)}
-                    className="w-9 h-9 items-center justify-center rounded-lg border border-red-200"
+                    className="items-center justify-center rounded-lg border border-red-200 py-2.5"
+                    style={{ aspectRatio: 1 }}
                 >
                     <XCircle size={14} color={colors.red[500]} />
                 </Pressable>
-                <ActionBtn icon={ArrowRight} label={NEXT_LABEL[order.status]} onPress={() => onAdvance(order)} variant="primary" flex />
+                {showAdvanceButton && (
+                    <ActionBtn
+                        icon={ArrowRight}
+                        label={NEXT_LABEL[order.status]}
+                        onPress={() => onAdvance(order)}
+                        variant="primary"
+                        flex
+                        size="lg"
+                    />
+                )}
             </View>
         </View>
     );
@@ -665,7 +694,6 @@ export default function OnlineOrdersPage() {
 
     const [checkoutTarget, setCheckoutTarget] = useState(null);
     const [checkoutPayMethod, setCheckoutPayMethod] = useState("CASH");
-    const [checkoutLoading, setCheckoutLoading] = useState(false);
     const [actionToast, setActionToast] = useState(null); // { type: "success"|"error", msg }
 
     const [activeChatCustomerId, setActiveChatCustomerId] = useState(null);
@@ -676,6 +704,13 @@ export default function OnlineOrdersPage() {
     const chatToastTimer = useRef(null);
     const actionToastTimer = useRef(null);
     const activeChatCustomerIdRef = useRef(null);
+    // [NGHIỆP VỤ] orderId -> { timeoutId, status } cho cơ chế tự động chuyển
+    // "Đã xác nhận" → "Đang làm" → "Đang giao" sau 30s không cần bấm nút.
+    const autoAdvanceTimersRef = useRef(new Map());
+    // Bản sao mới nhất của `orders`, đọc trong callback setTimeout để tránh
+    // race: nếu đơn đã bị huỷ / đổi trạng thái khác trước khi timer 30s kịp
+    // chạy, không gửi tín hiệu tự động chuyển bước nữa.
+    const ordersRef = useRef([]);
 
     useEffect(() => {
         activeChatCustomerIdRef.current = activeChatCustomerId;
@@ -767,6 +802,68 @@ export default function OnlineOrdersPage() {
         };
     }, [dismissOrderToast]);
 
+    useEffect(() => {
+        ordersRef.current = orders;
+    }, [orders]);
+
+    // ─── [NGHIỆP VỤ] Tự động chuyển "Đã xác nhận" → "Đang làm" → "Đang giao"
+    // sau 30s, không cần admin bấm nút — gửi lại ĐÚNG event socket
+    // `admin_update_order_status` mà nút bấm thủ công vẫn dùng, nên không
+    // đổi API/socket contract. Mỗi đơn chỉ có 1 timer tại một thời điểm.
+    //
+    // LƯU Ý QUAN TRỌNG (GLOBAL): đây là timer chạy Ở PHÍA CLIENT, chỉ hoạt
+    // động khi trang này đang mở trên ít nhất một thiết bị admin có kết nối
+    // socket. Nếu tất cả admin đều thoát app / mất mạng đúng lúc, đơn sẽ
+    // "kẹt" ở confirmed/preparing cho đến khi có ai mở lại trang. Muốn đảm
+    // bảo 100% (kể cả khi không ai mở app) cần dời lịch hẹn giờ này sang
+    // backend (cron/queue) — việc đó ngoài phạm vi 1 page nên tôi không tự
+    // ý sửa, chỉ báo để bạn cân nhắc.
+    useEffect(() => {
+        const timers = autoAdvanceTimersRef.current;
+        const relevantIds = new Set();
+
+        orders.forEach((order) => {
+            if (order.status !== "confirmed" && order.status !== "preparing") return;
+            relevantIds.add(order.id);
+
+            const existing = timers.get(order.id);
+            if (existing && existing.status === order.status) return; // đã có timer đúng trạng thái, giữ nguyên đếm ngược
+
+            if (existing) clearTimeout(existing.timeoutId);
+
+            const statusAtSchedule = order.status;
+            const nextStatus = NEXT_STATUS[statusAtSchedule];
+            const timeoutId = setTimeout(() => {
+                timers.delete(order.id);
+                // Kiểm tra lại trạng thái mới nhất trước khi bắn tín hiệu — tránh
+                // trường hợp đơn đã bị huỷ hoặc đổi trạng thái khác ngay trước khi
+                // timer chạy tới.
+                const current = ordersRef.current.find((o) => o.id === order.id);
+                if (current && current.status === statusAtSchedule) {
+                    socketRef.current?.emit("admin_update_order_status", { orderId: order.id, status: nextStatus });
+                }
+            }, AUTO_ADVANCE_DELAY);
+            timers.set(order.id, { timeoutId, status: statusAtSchedule });
+        });
+
+        // Dọn timer cho đơn không còn ở confirmed/preparing nữa (đã tự chuyển,
+        // bị huỷ, hoặc bị đổi trạng thái theo cách khác).
+        timers.forEach((info, orderId) => {
+            if (!relevantIds.has(orderId)) {
+                clearTimeout(info.timeoutId);
+                timers.delete(orderId);
+            }
+        });
+    }, [orders]);
+
+    useEffect(
+        () => () => {
+            autoAdvanceTimersRef.current.forEach((info) => clearTimeout(info.timeoutId));
+            autoAdvanceTimersRef.current.clear();
+        },
+        []
+    );
+
     // ─── Derived values [GIU-NGUYEN] ────────────────────────────────────────
     const activeByStatus = useMemo(() => {
         const map = { pending: [], confirmed: [], preparing: [], delivering: [] };
@@ -828,50 +925,63 @@ export default function OnlineOrdersPage() {
         setCancelTarget(null);
     }, []);
 
-    // ─── Xác nhận thanh toán (bước Hoàn thành) [GIU-NGUYEN logic — chỉ đổi
-    // fetch() → postData(), xem ghi chú platform ở đầu file] ────────────────
-    const handleConfirmCheckout = useCallback(async () => {
+    // ─── [REACT QUERY] Thanh toán (bước Hoàn thành) ─────────────────────────
+    // Vẫn gọi ĐÚNG "/orders" qua postData (utils/callAPI.js) như bản gốc —
+    // không tạo axios instance mới, không đổi API contract, không bypass
+    // callAPI.js. Chỉ đổi cách QUẢN LÝ trạng thái loading/error: từ state
+    // thủ công (checkoutLoading + try/catch/finally) sang useMutation của
+    // TanStack Query, dùng chung QueryClient/defaultOptions (retry: 1) đã
+    // cấu hình ở src/config/queryClient.js — đồng bộ với các màn hình khác
+    // trong app đang dùng react-query. Trang này không có request GET nào để
+    // đổi sang useQuery: toàn bộ dữ liệu đơn/chat đến qua Socket.io (state
+    // đẩy real-time), "/orders" là request REST duy nhất trên trang.
+    const checkoutMutation = useMutation({
+        mutationFn: async (payload) => {
+            const res = await postData({ url: "/orders", data: payload });
+            if (!res.success) throw new Error(res.message || `Lỗi lưu đơn (HTTP ${res.status})`);
+            return res.data;
+        },
+    });
+
+    const handleConfirmCheckout = useCallback(() => {
         if (!checkoutTarget) return;
-        setCheckoutLoading(true);
+        const target = checkoutTarget; // chốt tham chiếu tại thời điểm bấm
 
         const payload = {
-            items: checkoutTarget.items.map((i) => ({
+            items: target.items.map((i) => ({
                 foodId: i.foodId,
                 quantity: i.quantity,
-                note: checkoutTarget.note || "",
+                note: target.note || "",
                 channel: "ONLINE",
-                customerName: checkoutTarget.customerName,
-                customerPhone: checkoutTarget.phone,
-                customerAddress: checkoutTarget.address,
+                customerName: target.customerName,
+                customerPhone: target.phone,
+                customerAddress: target.address,
             })),
             discountAmount: 0,
             paymentMethod: checkoutPayMethod,
             isPaid: true,
-            note: checkoutTarget.note || "",
+            note: target.note || "",
             createdBy: "Admin (Online)",
         };
 
-        try {
-            const res = await postData({ url: "/orders", data: payload });
-            if (!res.success) throw new Error(res.message || `Lỗi lưu đơn (HTTP ${res.status})`);
-            const saved = res.data;
+        checkoutMutation.mutate(payload, {
+            onSuccess: (saved) => {
+                socketRef.current?.emit("admin_update_order_status", {
+                    orderId: target.id,
+                    status: "completed",
+                    paymentMethod: checkoutPayMethod,
+                    convertedOrderId: saved?.order?._id,
+                });
+                showActionToast("success", `Đã ghi nhận thanh toán cho ${target.customerName}! 🎉`);
+                setCheckoutTarget(null);
+            },
+            onError: (err) => {
+                console.error("[Checkout online]", err);
+                showActionToast("error", `Thanh toán thất bại: ${err.message}`);
+            },
+        });
+    }, [checkoutTarget, checkoutPayMethod, showActionToast, checkoutMutation.mutate]);
 
-            socketRef.current?.emit("admin_update_order_status", {
-                orderId: checkoutTarget.id,
-                status: "completed",
-                paymentMethod: checkoutPayMethod,
-                convertedOrderId: saved?.order?._id,
-            });
-
-            showActionToast("success", `Đã ghi nhận thanh toán cho ${checkoutTarget.customerName}! 🎉`);
-            setCheckoutTarget(null);
-        } catch (err) {
-            console.error("[Checkout online]", err);
-            showActionToast("error", `Thanh toán thất bại: ${err.message}`);
-        } finally {
-            setCheckoutLoading(false);
-        }
-    }, [checkoutTarget, checkoutPayMethod, showActionToast]);
 
     // ─── Hành động chat [GIU-NGUYEN, sendChatReply đổi tên → handleSendChat
     // và nhận text trực tiếp từ ChatModal thay vì đọc state chatDraft ──────
@@ -1133,11 +1243,11 @@ export default function OnlineOrdersPage() {
                                 <ActionBtn label="Hủy" variant="secondary" flex onPress={() => setCheckoutTarget(null)} />
                                 <ActionBtn
                                     icon={Check}
-                                    label={checkoutLoading ? "Đang xử lý…" : "Xác nhận thanh toán"}
+                                    label={checkoutMutation.isPending ? "Đang xử lý…" : "Xác nhận thanh toán"}
                                     variant="primary"
                                     flex
-                                    loading={checkoutLoading}
-                                    disabled={checkoutLoading}
+                                    loading={checkoutMutation.isPending}
+                                    disabled={checkoutMutation.isPending}
                                     onPress={handleConfirmCheckout}
                                 />
                             </View>
