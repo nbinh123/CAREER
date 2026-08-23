@@ -343,7 +343,7 @@ function ResetResultModal({ customer, tempPassword, onClose }) {
 }
 
 /* ── Lịch sử đơn hàng ────────────────────────────────────────────────────── */
-const ORDERS_PAGE_SIZE = 20;
+const ORDERS_PAGE_SIZE = 3;
 
 function OrdersModal({ customer, onClose }) {
   const { height: winHeight } = useWindowDimensions();
@@ -356,6 +356,8 @@ function OrdersModal({ customer, onClose }) {
 
   const fetchIdRef = useRef(0);
   const loadingMoreRef = useRef(false); // request lock — chặn onScroll bắn nhiều lần cùng lúc
+  const [containerH, setContainerH] = useState(0);
+  const [contentH, setContentH] = useState(0);
 
   const loadPage = useCallback(async (pageToLoad, append) => {
     const fetchId = ++fetchIdRef.current;
@@ -398,6 +400,7 @@ function OrdersModal({ customer, onClose }) {
   useEffect(() => {
     setPage(1);
     setHasMore(true);
+    setContentH(0);
     loadPage(1, false);
   }, [customer._id, loadPage]);
 
@@ -413,6 +416,16 @@ function OrdersModal({ customer, onClose }) {
     const distanceFromBottom = contentSize.height - contentOffset.y - layoutMeasurement.height;
     if (distanceFromBottom < 80) handleLoadMore();
   }, [handleLoadMore]);
+
+  // limit=3 rất nhỏ -> trang đầu (và có thể vài trang tiếp theo) thường không đủ
+  // cao để tràn khỏi khung nhìn, khiến onScroll không bao giờ bắn. Tự động nạp
+  // thêm cho tới khi nội dung lấp đầy khung (hoặc hết dữ liệu), rồi mới để việc
+  // cuộn tiếp tay đảm nhiệm bình thường.
+  useEffect(() => {
+    if (!loading && !loadingMore && hasMore && containerH > 0 && contentH > 0 && contentH <= containerH) {
+      handleLoadMore();
+    }
+  }, [containerH, contentH, loading, loadingMore, hasMore, handleLoadMore]);
 
   return (
     <ModalOverlay onClose={onClose}>
@@ -431,6 +444,8 @@ function OrdersModal({ customer, onClose }) {
           style={{ flexShrink: 1 }}
           className="px-4"
           contentContainerStyle={{ paddingVertical: 14, gap: 8 }}
+          onLayout={(e) => setContainerH(e.nativeEvent.layout.height)}
+          onContentSizeChange={(w, h) => setContentH(h)}
           onScroll={handleScroll}
           scrollEventThrottle={100}
         >

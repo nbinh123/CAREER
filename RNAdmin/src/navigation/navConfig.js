@@ -34,24 +34,20 @@ export const NAV = [
   { screen: "Kitchen", path: "/kitchen", label: "Nhà bếp", icon: ChefHat, roles: ["admin", "chef"] },
 ];
 
-// ─── Quyền admin theo route (đối chiếu 1-1 với ProtectedRoute isAdmin={...}
-// trong App.js gốc — KHÔNG suy ra từ mảng roles ở trên, vì 2 cơ chế này vốn
-// độc lập trong bản gốc: `roles` chỉ lọc hiển thị sidebar, còn ProtectedRoute
-// mới thật sự chặn truy cập theo nhị phân admin/không-admin. Giữ nguyên độ
-// "lỏng" này (VD /fruit isAdmin=false dù roles chỉ liệt kê admin+staff) để
-// không thay đổi hành vi nghiệp vụ đã có. ─────────────────────────────────
-// isAdmin=true : Ingredients, Menu, Analyst, Register, StaffManager,
-//                Storage, CashFlow, Kitchen, Customers, Voucher
-// isAdmin=false: Home, Orders, Shift, Fruit, Online
-export const ADMIN_ONLY_SCREENS = new Set([
-  "Ingredients",
-  "Menu",
-  "Analyst",
-  "Register",
-  "StaffManager",
-  "Storage",
-  "CashFlow",
-  "Kitchen",
-  "Customers",
-  "Voucher",
-]);
+// [PERM-FIX] Đã xoá ADMIN_ONLY_SCREENS (Set riêng dùng làm cổng requireAdmin
+// cho ProtectedScreen). Trước đây danh sách này ĐỘC LẬP với `roles` ở trên,
+// và trên thực tế đã LỆCH nhau ở nhiều chỗ — kiểm chứng lại toàn bộ 5 role
+// cho thấy:
+//   • "Kitchen": roles cho phép chef, nhưng ADMIN_ONLY_SCREENS lại chặn
+//     chef (chỉ admin qua được) → chef thấy mục "Nhà bếp" trong sidebar
+//     nhưng bấm vào thì dính 403, dù đúng ra phải được vào.
+//   • "Online": roles chỉ liệt kê admin (ẩn với mọi role khác trên sidebar),
+//     nhưng KHÔNG có trong ADMIN_ONLY_SCREENS → manager/cashier/chef/staff
+//     đều gọi navigation.navigate("Online") thẳng là vào được, dù sidebar
+//     không hề hiện mục đó cho họ.
+//   • "Fruit", "Orders" với role manager/cashier: roles không liệt kê 2
+//     role này (ẩn sidebar), nhưng cũng không có trong ADMIN_ONLY_SCREENS
+//     → vẫn truy cập thẳng được.
+// Giờ AppDrawer.js lấy thẳng `roles` của từng screen trong NAV để truyền
+// vào ProtectedScreen làm allowedRoles — chỉ còn 1 nguồn duy nhất, không
+// thể lệch nhau nữa.

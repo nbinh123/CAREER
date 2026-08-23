@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -13,12 +13,48 @@ import {
 import * as ImagePicker from "expo-image-picker";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { Package, AlertTriangle, TrendingUp, Trash2 } from "lucide-react-native";
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from "@tanstack/react-query";
 import { getData, postData } from "../utils/callAPI";
 import { API_URL } from "../config/api";
 import useAuthZustand from "../zustand/useAuthZustand";
 import useIngredientZustand from "../zustand/useIngredientZustand";
 import StatCard from "../components/StatCard";
 import colors from "../theme/tokens";
+
+/* ════════════════════════════════════════════════════════════
+   GHI CHÚ BẢN CẬP NHẬT NÀY
+
+   1. [PERF] Toàn bộ state tự quản (rows, stats, pager, loading, error,
+      hàm load()) được thay bằng @tanstack/react-query:
+      - Cache tự động theo (trang, tìm kiếm, loại, khoảng ngày) — quay
+        lại đúng tổ hợp bộ lọc vừa xem trong 15s không cần gọi lại API.
+      - placeholderData: keepPreviousData giữ nguyên danh sách cũ khi
+        đang tải trang/bộ lọc mới, tránh nháy trắng màn hình.
+      - Sau khi nhập kho / ghi nhận hư hỏng thành công, chỉ cần
+        invalidateQueries — không tự gọi lại load() thủ công nữa.
+      Yêu cầu: cần cài đặt `@tanstack/react-query` và bọc App trong
+      `QueryClientProvider` ở gốc cây component (nếu dự án chưa có).
+      (Bản ghi chú này giả định @tanstack/react-query v5 — nếu dự án
+      đang dùng v4 thì đổi `placeholderData: keepPreviousData` thành
+      `keepPreviousData: true` và đổi `isPending` thành `isLoading`.)
+
+   2. [FIX-SCROLL] 2 modal (Nhập kho / Ghi nhận hư hỏng) trước đây kéo
+      không lướt được, dù kéo ở vùng trống giữa các trường hay ở tiêu
+      đề. Nguyên nhân: ScrollView bên trong modal không có `flex: 1`,
+      nên theo mặc định của Yoga (flexShrink: 0), nó tự co giãn theo
+      đúng chiều cao nội dung thay vì bị ép vào phần còn lại của
+      `maxHeight` khung modal cha — tức là bên trong ScrollView không
+      hề có phần "tràn" để cuộn (frame height == content height), mọi
+      thao tác kéo đều vô tác dụng dù phần dưới bị cắt hình do
+      `overflow: hidden` của View cha. Phần tiêu đề (nằm tách hẳn bên
+      ngoài ScrollView) thì dĩ nhiên không thể kéo-cuộn được vì không
+      thuộc vùng scroll.
+      → Đã thêm `flex: 1` cho ScrollView để nó thực sự bị giới hạn
+      chiều cao và có thể cuộn, đồng thời đưa tiêu đề vào làm phần tử
+      đầu tiên (dùng `stickyHeaderIndices={[0]}`) của chính ScrollView
+      đó — tiêu đề vẫn dính ở trên khi cuộn, nhưng kéo bắt đầu từ đó
+      giờ cũng điều khiển được việc cuộn nội dung bên dưới.
+════════════════════════════════════════════════════════════ */
 
 /* ════════════════════════════════════════════════════════════
    CONSTANTS [GIU-NGUYEN]
@@ -29,6 +65,14 @@ const DAMAGE_REASONS = [
   "Hư hỏng khi vận chuyển / nhập hàng",
   "Thất thoát / mất mát",
   "Khác",
+];
+
+// [PERF] Mảng tĩnh, không phụ thuộc state/props — đưa ra ngoài component
+// để không bị tạo lại mỗi lần StoragePage render.
+const TYPE_TABS = [
+  { key: "", label: "Tất cả" },
+  { key: "IMPORT", label: "Nhập kho" },
+  { key: "EXPORT", label: "Hư hỏng" },
 ];
 
 const fmt = {
@@ -130,7 +174,7 @@ function ModalOverlay({ onClose, maxWidth = 440, children }) {
 }
 
 /* ── Ô chọn ngày, thay <input type="date"> ──────────────────────────── */
-function DateField({ label, value, onChange }) {
+const DateField = React.memo(function DateField({ label, value, onChange }) {
   const [show, setShow] = useState(false);
   const dateObj = value ? new Date(`${value}T00:00:00`) : new Date();
 
@@ -178,17 +222,20 @@ function DateField({ label, value, onChange }) {
       )}
     </View>
   );
-}
+});
 
 /* ── Danh sách chọn nguyên liệu có tìm kiếm — thay cho IngredientSearchSelect
    (dropdown tuyệt đối định vị) VÀ <select> thường của ExportModal gốc, xem
    giải thích platform ở đầu file. Hiển thị ngay trong thân modal (đổi chế
    độ hiển thị), không dùng dropdown lơ lửng. ────────────────────────── */
-function IngredientPickerBody({ ingredients, selectedId, onPick, onCancel }) {
+const IngredientPickerBody = React.memo(function IngredientPickerBody({ ingredients, selectedId, onPick, onCancel }) {
   const [q, setQ] = useState("");
-  const filtered = q.trim()
-    ? ingredients.filter((i) => (i.ingredientName || "").toLowerCase().includes(q.trim().toLowerCase()))
-    : ingredients;
+  // [PERF] chỉ lọc lại khi q hoặc danh sách ingredients thực sự đổi, thay vì
+  // mỗi lần component này re-render (ví dụ do selectedId đổi).
+  const filtered = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    return needle ? ingredients.filter((i) => (i.ingredientName || "").toLowerCase().includes(needle)) : ingredients;
+  }, [q, ingredients]);
 
   return (
     <View style={{ gap: 10 }}>
@@ -201,7 +248,7 @@ function IngredientPickerBody({ ingredients, selectedId, onPick, onCancel }) {
         className="bg-[#FAFBFC] border border-gray-200 rounded-xl text-sm text-gray-800"
         style={{ paddingHorizontal: 14, paddingVertical: 10 }}
       />
-      <ScrollView style={{ maxHeight: 320 }} keyboardShouldPersistTaps="handled">
+      <ScrollView style={{ maxHeight: 320 }} keyboardShouldPersistTaps="handled" nestedScrollEnabled>
         {filtered.length === 0 ? (
           <Text className="text-center text-gray-400 text-sm py-6">Không tìm thấy nguyên liệu</Text>
         ) : (
@@ -231,10 +278,13 @@ function IngredientPickerBody({ ingredients, selectedId, onPick, onCancel }) {
       </Pressable>
     </View>
   );
-}
+});
 
 /* ── 1 giao dịch = 1 card (thay cho 1 hàng <tr> ở bản gốc) ──────────── */
-function TransactionCard({ tx, isLast, onViewImage }) {
+// [PERF] React.memo — danh sách này re-render mỗi khi StoragePage render vì
+// lý do khác (vd mở lightbox); memo giúp các card không đổi props bỏ qua
+// việc render lại.
+const TransactionCard = React.memo(function TransactionCard({ tx, isLast, onViewImage }) {
   const ing = tx.ingredientId;
   const user = tx.createdBy;
   const imp = tx.type === "IMPORT";
@@ -293,18 +343,30 @@ function TransactionCard({ tx, isLast, onViewImage }) {
       )}
     </View>
   );
-}
+});
 
 /* ── Modal Nhập kho ──────────────────────────────────────────────────── */
 const EMPTY_IMPORT = { ingredientId: "", quantity: "", note: "" };
 
 function ImportModal({ open, onClose, onSuccess, ingredients }) {
+  const queryClient = useQueryClient();
   const [form, setForm] = useState(EMPTY_IMPORT);
   const [file, setFile] = useState(null);
   const [preview, setPreview] = useState(null);
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [mode, setMode] = useState("form"); // "form" | "picker"
+
+  // [PERF] Thay cho loading/error thủ công + gọi lại onSuccess()->load(1):
+  // mutation tự quản trạng thái loading/error, và khi thành công chỉ cần
+  // invalidate cache của danh sách giao dịch để nó tự tải lại.
+  const importMutation = useMutation({
+    mutationFn: uploadInvoiceImport,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["ingredient-transactions"] });
+      onSuccess?.();
+      onClose();
+    },
+  });
 
   const ing = ingredients.find((i) => i._id === form.ingredientId);
 
@@ -326,7 +388,9 @@ function ImportModal({ open, onClose, onSuccess, ingredients }) {
       setPreview(null);
       setError("");
       setMode("form");
+      importMutation.reset(); // xoá lỗi/trạng thái mutation lần mở trước
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   const pickImage = async () => {
@@ -353,7 +417,6 @@ function ImportModal({ open, onClose, onSuccess, ingredients }) {
     if (!form.ingredientId) return setError("Vui lòng chọn nguyên liệu");
     const qty = parseFloat(form.quantity);
     if (!qty || qty <= 0) return setError("Số lượng phải lớn hơn 0");
-    setLoading(true);
     try {
       const fd = new FormData();
       fd.append("ingredientId", form.ingredientId);
@@ -361,128 +424,130 @@ function ImportModal({ open, onClose, onSuccess, ingredients }) {
       fd.append("amount", amount);
       fd.append("note", form.note);
       if (file) fd.append("invoiceImage", file);
-      await uploadInvoiceImport(fd);
-      onSuccess?.();
-      onClose();
+      await importMutation.mutateAsync(fd);
     } catch (e) {
       setError(e.message || "Đã có lỗi xảy ra");
-    } finally {
-      setLoading(false);
     }
   };
 
   if (!open) return null;
+  const loading = importMutation.isPending;
 
   return (
     <ModalOverlay onClose={onClose}>
       <View className="bg-white rounded-3xl overflow-hidden" style={{ maxHeight: "88%" }}>
-        <View className="px-6 pt-6 pb-4 flex-row items-center justify-between border-b border-gray-100">
-          <Text className="text-base font-black text-green-900">
-            {mode === "picker" ? "Chọn nguyên liệu" : "Nhập kho"}
-          </Text>
-          <Pressable onPress={onClose} className="w-8 h-8 rounded-xl bg-gray-50 items-center justify-center">
-            <Text className="text-gray-400 text-base">✕</Text>
-          </Pressable>
-        </View>
+        {/* [FIX-SCROLL] flex:1 để ScrollView thực sự bị giới hạn chiều cao
+            (chứ không tự co theo nội dung) và stickyHeaderIndices để tiêu
+            đề vẫn nằm trong vùng kéo-cuộn được — xem ghi chú đầu file. */}
+        <ScrollView style={{ flex: 1 }} stickyHeaderIndices={[0]} keyboardShouldPersistTaps="handled">
+          <View className="bg-white px-6 pt-6 pb-4 flex-row items-center justify-between border-b border-gray-100">
+            <Text className="text-base font-black text-green-900">
+              {mode === "picker" ? "Chọn nguyên liệu" : "Nhập kho"}
+            </Text>
+            <Pressable onPress={onClose} className="w-8 h-8 rounded-xl bg-gray-50 items-center justify-center">
+              <Text className="text-gray-400 text-base">✕</Text>
+            </Pressable>
+          </View>
 
-        <ScrollView contentContainerStyle={{ padding: 20, gap: 14 }} keyboardShouldPersistTaps="handled">
-          {mode === "picker" ? (
-            <IngredientPickerBody
-              ingredients={ingredients}
-              selectedId={form.ingredientId}
-              onPick={(id) => {
-                setForm((f) => ({ ...f, ingredientId: id }));
-                setMode("form");
-              }}
-              onCancel={() => setMode("form")}
-            />
-          ) : (
-            <>
-              {!!error && (
-                <View className="bg-red-50 border border-red-200 rounded-xl px-3.5 py-2.5">
-                  <Text className="text-red-600 text-[13px]">{error}</Text>
+          <View style={{ padding: 20, gap: 14 }}>
+            {mode === "picker" ? (
+              <IngredientPickerBody
+                ingredients={ingredients}
+                selectedId={form.ingredientId}
+                onPick={(id) => {
+                  setForm((f) => ({ ...f, ingredientId: id }));
+                  setMode("form");
+                }}
+                onCancel={() => setMode("form")}
+              />
+            ) : (
+              <>
+                {!!error && (
+                  <View className="bg-red-50 border border-red-200 rounded-xl px-3.5 py-2.5">
+                    <Text className="text-red-600 text-[13px]">{error}</Text>
+                  </View>
+                )}
+
+                <View style={{ gap: 5 }}>
+                  <Text className="text-xs font-bold text-gray-600" style={{ letterSpacing: 0.3 }}>
+                    Nguyên liệu <Text className="text-red-500">*</Text>
+                  </Text>
+                  <Pressable
+                    onPress={() => setMode("picker")}
+                    className="bg-[#FAFBFC] border border-gray-200 rounded-xl"
+                    style={{ paddingHorizontal: 14, paddingVertical: 12 }}
+                  >
+                    <Text className={ing ? "text-sm text-gray-800" : "text-sm text-gray-300"}>
+                      {ing ? ing.ingredientName : "Gõ tên nguyên liệu cần nhập..."}
+                    </Text>
+                  </Pressable>
                 </View>
-              )}
 
-              <View style={{ gap: 5 }}>
-                <Text className="text-xs font-bold text-gray-600" style={{ letterSpacing: 0.3 }}>
-                  Nguyên liệu <Text className="text-red-500">*</Text>
-                </Text>
-                <Pressable
-                  onPress={() => setMode("picker")}
-                  className="bg-[#FAFBFC] border border-gray-200 rounded-xl"
-                  style={{ paddingHorizontal: 14, paddingVertical: 12 }}
-                >
-                  <Text className={ing ? "text-sm text-gray-800" : "text-sm text-gray-300"}>
-                    {ing ? ing.ingredientName : "Gõ tên nguyên liệu cần nhập..."}
-                  </Text>
-                </Pressable>
-              </View>
+                {!!ing && (
+                  <View className="bg-gray-50 border border-gray-200 rounded-lg flex-row flex-wrap" style={{ gap: 14, paddingHorizontal: 13, paddingVertical: 10 }}>
+                    <Text className="text-[12.5px] text-gray-600">
+                      Tồn kho: <Text className="font-bold text-gray-800">{fmt.num(ing.quantity)} {ing.smallUnit}</Text>
+                    </Text>
+                    <Text className="text-[12.5px] text-gray-600">
+                      Đơn vị lớn: <Text className="font-bold text-gray-800">{ing.largeUnit}</Text>
+                    </Text>
+                    <Text className="text-[12.5px] text-gray-600">
+                      Giá/{ing.largeUnit}: <Text className="font-bold text-gray-800">{fmt.money(ing.pricePerLargeUnit)}</Text>
+                    </Text>
+                  </View>
+                )}
 
-              {!!ing && (
-                <View className="bg-gray-50 border border-gray-200 rounded-lg flex-row flex-wrap" style={{ gap: 14, paddingHorizontal: 13, paddingVertical: 10 }}>
-                  <Text className="text-[12.5px] text-gray-600">
-                    Tồn kho: <Text className="font-bold text-gray-800">{fmt.num(ing.quantity)} {ing.smallUnit}</Text>
+                <View style={{ gap: 5 }}>
+                  <Text className="text-xs font-bold text-gray-600" style={{ letterSpacing: 0.3 }}>
+                    Số lượng ({ing?.smallUnit || "đơn vị"}) <Text className="text-red-500">*</Text>
                   </Text>
-                  <Text className="text-[12.5px] text-gray-600">
-                    Đơn vị lớn: <Text className="font-bold text-gray-800">{ing.largeUnit}</Text>
-                  </Text>
-                  <Text className="text-[12.5px] text-gray-600">
-                    Giá/{ing.largeUnit}: <Text className="font-bold text-gray-800">{fmt.money(ing.pricePerLargeUnit)}</Text>
-                  </Text>
+                  <TextInput
+                    value={form.quantity}
+                    onChangeText={(t) => setForm((f) => ({ ...f, quantity: t }))}
+                    placeholder="Nhập số lượng..."
+                    placeholderTextColor={colors.gray[300]}
+                    keyboardType="decimal-pad"
+                    className="border border-gray-200 rounded-xl text-sm text-gray-800"
+                    style={{ paddingHorizontal: 14, paddingVertical: 11 }}
+                  />
                 </View>
-              )}
 
-              <View style={{ gap: 5 }}>
-                <Text className="text-xs font-bold text-gray-600" style={{ letterSpacing: 0.3 }}>
-                  Số lượng ({ing?.smallUnit || "đơn vị"}) <Text className="text-red-500">*</Text>
-                </Text>
-                <TextInput
-                  value={form.quantity}
-                  onChangeText={(t) => setForm((f) => ({ ...f, quantity: t }))}
-                  placeholder="Nhập số lượng..."
-                  placeholderTextColor={colors.gray[300]}
-                  keyboardType="decimal-pad"
-                  className="border border-gray-200 rounded-xl text-sm text-gray-800"
-                  style={{ paddingHorizontal: 14, paddingVertical: 11 }}
-                />
-              </View>
+                {amount > 0 && (
+                  <View className="bg-emerald-50 border border-emerald-200 rounded-lg" style={{ paddingHorizontal: 14, paddingVertical: 11 }}>
+                    <Text className="text-emerald-700 font-bold font-mono text-sm">Thành tiền ≈ {fmt.money(amount)}</Text>
+                  </View>
+                )}
 
-              {amount > 0 && (
-                <View className="bg-emerald-50 border border-emerald-200 rounded-lg" style={{ paddingHorizontal: 14, paddingVertical: 11 }}>
-                  <Text className="text-emerald-700 font-bold font-mono text-sm">Thành tiền ≈ {fmt.money(amount)}</Text>
+                <View style={{ gap: 5 }}>
+                  <Text className="text-xs font-bold text-gray-600" style={{ letterSpacing: 0.3 }}>Ảnh hóa đơn</Text>
+                  <Pressable
+                    onPress={pickImage}
+                    className="border border-dashed border-gray-300 rounded-xl items-center justify-center bg-[#FAFBFC]"
+                    style={{ padding: 18, minHeight: 90 }}
+                  >
+                    {preview ? (
+                      <Image source={{ uri: preview }} style={{ width: "100%", height: 120, borderRadius: 8 }} resizeMode="cover" />
+                    ) : (
+                      <Text className="text-[13px] text-gray-400 font-medium">📷 Chạm để tải ảnh hóa đơn</Text>
+                    )}
+                  </Pressable>
                 </View>
-              )}
 
-              <View style={{ gap: 5 }}>
-                <Text className="text-xs font-bold text-gray-600" style={{ letterSpacing: 0.3 }}>Ảnh hóa đơn</Text>
-                <Pressable
-                  onPress={pickImage}
-                  className="border border-dashed border-gray-300 rounded-xl items-center justify-center bg-[#FAFBFC]"
-                  style={{ padding: 18, minHeight: 90 }}
-                >
-                  {preview ? (
-                    <Image source={{ uri: preview }} style={{ width: "100%", height: 120, borderRadius: 8 }} resizeMode="cover" />
-                  ) : (
-                    <Text className="text-[13px] text-gray-400 font-medium">📷 Chạm để tải ảnh hóa đơn</Text>
-                  )}
-                </Pressable>
-              </View>
-
-              <View style={{ gap: 5 }}>
-                <Text className="text-xs font-bold text-gray-600" style={{ letterSpacing: 0.3 }}>Ghi chú</Text>
-                <TextInput
-                  value={form.note}
-                  onChangeText={(t) => setForm((f) => ({ ...f, note: t }))}
-                  placeholder="Ghi chú thêm (không bắt buộc)..."
-                  placeholderTextColor={colors.gray[300]}
-                  multiline
-                  className="border border-gray-200 rounded-xl text-sm text-gray-800"
-                  style={{ paddingHorizontal: 14, paddingVertical: 11, minHeight: 72, textAlignVertical: "top" }}
-                />
-              </View>
-            </>
-          )}
+                <View style={{ gap: 5 }}>
+                  <Text className="text-xs font-bold text-gray-600" style={{ letterSpacing: 0.3 }}>Ghi chú</Text>
+                  <TextInput
+                    value={form.note}
+                    onChangeText={(t) => setForm((f) => ({ ...f, note: t }))}
+                    placeholder="Ghi chú thêm (không bắt buộc)..."
+                    placeholderTextColor={colors.gray[300]}
+                    multiline
+                    className="border border-gray-200 rounded-xl text-sm text-gray-800"
+                    style={{ paddingHorizontal: 14, paddingVertical: 11, minHeight: 72, textAlignVertical: "top" }}
+                  />
+                </View>
+              </>
+            )}
+          </View>
         </ScrollView>
 
         {mode === "form" && (
@@ -510,11 +575,24 @@ function ImportModal({ open, onClose, onSuccess, ingredients }) {
 const EMPTY_EXPORT = { ingredientId: "", quantity: "", reason: "", customNote: "" };
 
 function ExportModal({ open, onClose, onSuccess, ingredients }) {
+  const queryClient = useQueryClient();
   const [form, setForm] = useState(EMPTY_EXPORT);
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [confirmed, setConfirmed] = useState(false);
   const [mode, setMode] = useState("form");
+
+  const exportMutation = useMutation({
+    mutationFn: async (payload) => {
+      const res = await txService.exportStock(payload);
+      if (!res.success) throw new Error(res.message || "Đã có lỗi xảy ra");
+      return res;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["ingredient-transactions"] });
+      onSuccess?.();
+      onClose();
+    },
+  });
 
   const ing = ingredients.find((i) => i._id === form.ingredientId);
   const isOther = form.reason === "Khác";
@@ -526,7 +604,9 @@ function ExportModal({ open, onClose, onSuccess, ingredients }) {
       setError("");
       setConfirmed(false);
       setMode("form");
+      exportMutation.reset();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   // [GIU-NGUYEN] validate y hệt bản gốc
@@ -553,159 +633,157 @@ function ExportModal({ open, onClose, onSuccess, ingredients }) {
       setConfirmed(true);
       return;
     }
-    setLoading(true);
     try {
-      const res = await txService.exportStock({
+      await exportMutation.mutateAsync({
         ingredientId: form.ingredientId,
         quantity: parseFloat(form.quantity),
         note: finalNote,
       });
-      if (!res.success) throw new Error(res.message || "Đã có lỗi xảy ra");
-      onSuccess?.();
-      onClose();
     } catch (e) {
       setError(e.message || "Đã có lỗi xảy ra");
       setConfirmed(false);
-    } finally {
-      setLoading(false);
     }
   };
 
   if (!open) return null;
+  const loading = exportMutation.isPending;
 
   return (
     <ModalOverlay onClose={onClose} maxWidth={480}>
       <View className="bg-white rounded-3xl overflow-hidden" style={{ maxHeight: "88%" }}>
-        <View className="px-6 pt-6 pb-4 flex-row items-center justify-between border-b border-gray-100">
-          <Text className="text-base font-black text-green-900">
-            {mode === "picker" ? "Chọn nguyên liệu" : "Ghi nhận nguyên liệu hư hỏng"}
-          </Text>
-          <Pressable onPress={onClose} className="w-8 h-8 rounded-xl bg-gray-50 items-center justify-center">
-            <Text className="text-gray-400 text-base">✕</Text>
-          </Pressable>
-        </View>
+        {/* [FIX-SCROLL] xem ghi chú đầu file */}
+        <ScrollView style={{ flex: 1 }} stickyHeaderIndices={[0]} keyboardShouldPersistTaps="handled">
+          <View className="bg-white px-6 pt-6 pb-4 flex-row items-center justify-between border-b border-gray-100">
+            <Text className="text-base font-black text-green-900">
+              {mode === "picker" ? "Chọn nguyên liệu" : "Ghi nhận nguyên liệu hư hỏng"}
+            </Text>
+            <Pressable onPress={onClose} className="w-8 h-8 rounded-xl bg-gray-50 items-center justify-center">
+              <Text className="text-gray-400 text-base">✕</Text>
+            </Pressable>
+          </View>
 
-        <ScrollView contentContainerStyle={{ padding: 20, gap: 14 }} keyboardShouldPersistTaps="handled">
-          {mode === "picker" ? (
-            <IngredientPickerBody
-              ingredients={ingredients}
-              selectedId={form.ingredientId}
-              onPick={(id) => {
-                setForm((f) => ({ ...f, ingredientId: id }));
-                setConfirmed(false);
-                setMode("form");
-              }}
-              onCancel={() => setMode("form")}
-            />
-          ) : (
-            <>
-              {!!error && (
-                <View className="bg-red-50 border border-red-200 rounded-xl px-3.5 py-2.5">
-                  <Text className="text-red-600 text-[13px]">{error}</Text>
-                </View>
-              )}
-              {confirmed && !error && (
-                <View className="bg-amber-50 border border-amber-200 rounded-xl px-3.5 py-2.5">
-                  <Text className="text-amber-700 text-[13px]" style={{ lineHeight: 19 }}>
-                    Xác nhận ghi nhận <Text className="font-black">{form.quantity} {ing?.smallUnit}</Text> hư hỏng của{" "}
-                    <Text className="font-black">{ing?.ingredientName}</Text>? Nhấn "Xác nhận ghi nhận" lần nữa để hoàn tất.
-                  </Text>
-                </View>
-              )}
-
-              <View style={{ gap: 5 }}>
-                <Text className="text-xs font-bold text-gray-600" style={{ letterSpacing: 0.3 }}>
-                  Nguyên liệu <Text className="text-red-500">*</Text>
-                </Text>
-                <Pressable
-                  onPress={() => setMode("picker")}
-                  className="bg-[#FAFBFC] border border-gray-200 rounded-xl"
-                  style={{ paddingHorizontal: 14, paddingVertical: 12 }}
-                >
-                  <Text className={ing ? "text-sm text-gray-800" : "text-sm text-gray-300"}>
-                    {ing ? `${ing.ingredientName} (${ing.smallUnit})` : "— Chọn nguyên liệu —"}
-                  </Text>
-                </Pressable>
-              </View>
-
-              {!!ing && (
-                <View className="bg-gray-50 border border-gray-200 rounded-lg flex-row flex-wrap" style={{ gap: 14, paddingHorizontal: 13, paddingVertical: 10 }}>
-                  <Text className="text-[12.5px] text-gray-600">
-                    Tồn kho:{" "}
-                    <Text className="font-bold" style={{ color: ing.quantity <= 0 ? colors.red[600] : colors.green[600] }}>
-                      {fmt.num(ing.quantity)} {ing.smallUnit}
+          <View style={{ padding: 20, gap: 14 }}>
+            {mode === "picker" ? (
+              <IngredientPickerBody
+                ingredients={ingredients}
+                selectedId={form.ingredientId}
+                onPick={(id) => {
+                  setForm((f) => ({ ...f, ingredientId: id }));
+                  setConfirmed(false);
+                  setMode("form");
+                }}
+                onCancel={() => setMode("form")}
+              />
+            ) : (
+              <>
+                {!!error && (
+                  <View className="bg-red-50 border border-red-200 rounded-xl px-3.5 py-2.5">
+                    <Text className="text-red-600 text-[13px]">{error}</Text>
+                  </View>
+                )}
+                {confirmed && !error && (
+                  <View className="bg-amber-50 border border-amber-200 rounded-xl px-3.5 py-2.5">
+                    <Text className="text-amber-700 text-[13px]" style={{ lineHeight: 19 }}>
+                      Xác nhận ghi nhận <Text className="font-black">{form.quantity} {ing?.smallUnit}</Text> hư hỏng của{" "}
+                      <Text className="font-black">{ing?.ingredientName}</Text>? Nhấn "Xác nhận ghi nhận" lần nữa để hoàn tất.
                     </Text>
-                  </Text>
-                  <Text className="text-[12.5px] text-gray-600">
-                    Đơn vị lớn: <Text className="font-bold text-gray-800">{ing.largeUnit}</Text>
-                  </Text>
-                </View>
-              )}
+                  </View>
+                )}
 
-              <View style={{ gap: 5 }}>
-                <Text className="text-xs font-bold text-gray-600" style={{ letterSpacing: 0.3 }}>
-                  Số lượng ({ing?.smallUnit || "đơn vị"}) <Text className="text-red-500">*</Text>
-                </Text>
-                <TextInput
-                  value={form.quantity}
-                  onChangeText={(t) => { setForm((f) => ({ ...f, quantity: t })); setConfirmed(false); }}
-                  placeholder="Nhập số lượng hư hỏng..."
-                  placeholderTextColor={colors.gray[300]}
-                  keyboardType="decimal-pad"
-                  className="border border-gray-200 rounded-xl text-sm text-gray-800"
-                  style={{ paddingHorizontal: 14, paddingVertical: 11 }}
-                />
-              </View>
-
-              <View style={{ gap: 5 }}>
-                <Text className="text-xs font-bold text-gray-600" style={{ letterSpacing: 0.3 }}>
-                  Lý do hư hỏng <Text className="text-red-500">*</Text>
-                </Text>
-                <View style={{ gap: 6 }}>
-                  {DAMAGE_REASONS.map((value) => {
-                    const active = form.reason === value;
-                    return (
-                      <Pressable
-                        key={value}
-                        onPress={() => { setForm((f) => ({ ...f, reason: value, customNote: "" })); setConfirmed(false); }}
-                        className={`flex-row items-center rounded-xl border ${active ? "border-amber-400 bg-amber-50" : "border-gray-200"}`}
-                        style={{ gap: 10, paddingHorizontal: 13, paddingVertical: 10 }}
-                      >
-                        <View
-                          style={{
-                            width: 16, height: 16, borderRadius: 8, borderWidth: 2,
-                            borderColor: active ? colors.amber[500] : colors.gray[300],
-                            backgroundColor: active ? colors.amber[500] : "transparent",
-                            alignItems: "center", justifyContent: "center",
-                          }}
-                        >
-                          {active && <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: colors.white }} />}
-                        </View>
-                        <Text className={`text-[13.5px] ${active ? "font-bold text-amber-700" : "font-medium text-gray-600"}`}>{value}</Text>
-                      </Pressable>
-                    );
-                  })}
-                </View>
-              </View>
-
-              {isOther && (
                 <View style={{ gap: 5 }}>
                   <Text className="text-xs font-bold text-gray-600" style={{ letterSpacing: 0.3 }}>
-                    Lý do cụ thể <Text className="text-red-500">*</Text>
+                    Nguyên liệu <Text className="text-red-500">*</Text>
+                  </Text>
+                  <Pressable
+                    onPress={() => setMode("picker")}
+                    className="bg-[#FAFBFC] border border-gray-200 rounded-xl"
+                    style={{ paddingHorizontal: 14, paddingVertical: 12 }}
+                  >
+                    <Text className={ing ? "text-sm text-gray-800" : "text-sm text-gray-300"}>
+                      {ing ? `${ing.ingredientName} (${ing.smallUnit})` : "— Chọn nguyên liệu —"}
+                    </Text>
+                  </Pressable>
+                </View>
+
+                {!!ing && (
+                  <View className="bg-gray-50 border border-gray-200 rounded-lg flex-row flex-wrap" style={{ gap: 14, paddingHorizontal: 13, paddingVertical: 10 }}>
+                    <Text className="text-[12.5px] text-gray-600">
+                      Tồn kho:{" "}
+                      <Text className="font-bold" style={{ color: ing.quantity <= 0 ? colors.red[600] : colors.green[600] }}>
+                        {fmt.num(ing.quantity)} {ing.smallUnit}
+                      </Text>
+                    </Text>
+                    <Text className="text-[12.5px] text-gray-600">
+                      Đơn vị lớn: <Text className="font-bold text-gray-800">{ing.largeUnit}</Text>
+                    </Text>
+                  </View>
+                )}
+
+                <View style={{ gap: 5 }}>
+                  <Text className="text-xs font-bold text-gray-600" style={{ letterSpacing: 0.3 }}>
+                    Số lượng ({ing?.smallUnit || "đơn vị"}) <Text className="text-red-500">*</Text>
                   </Text>
                   <TextInput
-                    value={form.customNote}
-                    onChangeText={(t) => setForm((f) => ({ ...f, customNote: t }))}
-                    placeholder="Nhập lý do hư hỏng..."
+                    value={form.quantity}
+                    onChangeText={(t) => { setForm((f) => ({ ...f, quantity: t })); setConfirmed(false); }}
+                    placeholder="Nhập số lượng hư hỏng..."
                     placeholderTextColor={colors.gray[300]}
-                    multiline
+                    keyboardType="decimal-pad"
                     className="border border-gray-200 rounded-xl text-sm text-gray-800"
-                    style={{ paddingHorizontal: 14, paddingVertical: 11, minHeight: 72, textAlignVertical: "top" }}
+                    style={{ paddingHorizontal: 14, paddingVertical: 11 }}
                   />
                 </View>
-              )}
-            </>
-          )}
+
+                <View style={{ gap: 5 }}>
+                  <Text className="text-xs font-bold text-gray-600" style={{ letterSpacing: 0.3 }}>
+                    Lý do hư hỏng <Text className="text-red-500">*</Text>
+                  </Text>
+                  <View style={{ gap: 6 }}>
+                    {DAMAGE_REASONS.map((value) => {
+                      const active = form.reason === value;
+                      return (
+                        <Pressable
+                          key={value}
+                          onPress={() => { setForm((f) => ({ ...f, reason: value, customNote: "" })); setConfirmed(false); }}
+                          className={`flex-row items-center rounded-xl border ${active ? "border-amber-400 bg-amber-50" : "border-gray-200"}`}
+                          style={{ gap: 10, paddingHorizontal: 13, paddingVertical: 10 }}
+                        >
+                          <View
+                            style={{
+                              width: 16, height: 16, borderRadius: 8, borderWidth: 2,
+                              borderColor: active ? colors.amber[500] : colors.gray[300],
+                              backgroundColor: active ? colors.amber[500] : "transparent",
+                              alignItems: "center", justifyContent: "center",
+                            }}
+                          >
+                            {active && <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: colors.white }} />}
+                          </View>
+                          <Text className={`text-[13.5px] ${active ? "font-bold text-amber-700" : "font-medium text-gray-600"}`}>{value}</Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                </View>
+
+                {isOther && (
+                  <View style={{ gap: 5 }}>
+                    <Text className="text-xs font-bold text-gray-600" style={{ letterSpacing: 0.3 }}>
+                      Lý do cụ thể <Text className="text-red-500">*</Text>
+                    </Text>
+                    <TextInput
+                      value={form.customNote}
+                      onChangeText={(t) => setForm((f) => ({ ...f, customNote: t }))}
+                      placeholder="Nhập lý do hư hỏng..."
+                      placeholderTextColor={colors.gray[300]}
+                      multiline
+                      className="border border-gray-200 rounded-xl text-sm text-gray-800"
+                      style={{ paddingHorizontal: 14, paddingVertical: 11, minHeight: 72, textAlignVertical: "top" }}
+                    />
+                  </View>
+                )}
+              </>
+            )}
+          </View>
         </ScrollView>
 
         {mode === "form" && (
@@ -748,11 +826,6 @@ export default function StoragePage() {
     getIngredients();
   }, [getIngredients]);
 
-  const [rows, setRows] = useState([]);
-  const [stats, setStats] = useState({ importCount: 0, importTotal: 0, exportCount: 0, exportTotal: 0 });
-  const [pager, setPager] = useState({ page: 1, totalPages: 1, total: 0 });
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
   const [lightbox, setLightbox] = useState(null);
   const [showImport, setShowImport] = useState(false);
   const [showExport, setShowExport] = useState(false);
@@ -760,51 +833,63 @@ export default function StoragePage() {
   // Mặc định lọc theo tháng hiện tại [GIU-NGUYEN]
   const [filters, setFilters] = useState(() => ({ search: "", type: "", ...currentMonthRange() }));
   const [debSearch, setDebSearch] = useState("");
+  const [page, setPage] = useState(1);
 
   useEffect(() => {
     const t = setTimeout(() => setDebSearch(filters.search), 380);
     return () => clearTimeout(t);
   }, [filters.search]);
 
-  const load = useCallback(
-    async (page = 1) => {
-      setLoading(true);
-      setError("");
-      try {
-        const p = { page, limit: 10 };
-        if (debSearch) p.search = debSearch;
-        if (filters.type) p.type = filters.type;
-        if (filters.fromDate) p.fromDate = filters.fromDate;
-        if (filters.toDate) p.toDate = filters.toDate;
-        const res = await txService.list(p);
-        if (!res.success) throw new Error(res.message || "Không thể tải dữ liệu");
-        // Không destructure trực tiếp — nếu backend đổi shape hoặc thiếu
-        // field, destructure sẽ ra undefined và crash render ngay [GIU-NGUYEN]
-        const data = res.data?.data || {};
-        setRows(Array.isArray(data.transactions) ? data.transactions : []);
-        setPager(data.pagination || { page: 1, totalPages: 1, total: 0 });
-        setStats(data.stats || { importCount: 0, importTotal: 0, exportCount: 0, exportTotal: 0 });
-      } catch (e) {
-        setError(e.message || "Không thể tải dữ liệu");
-      } finally {
-        setLoading(false);
-      }
-    },
-    [debSearch, filters.type, filters.fromDate, filters.toDate]
+  // Đổi bộ lọc/tìm kiếm luôn quay về trang 1 — giữ đúng hành vi bản gốc
+  // (bản gốc gọi load(1) mỗi khi các dependency này đổi).
+  useEffect(() => {
+    setPage(1);
+  }, [debSearch, filters.type, filters.fromDate, filters.toDate]);
+
+  const queryParams = useMemo(
+    () => ({
+      page,
+      limit: 10,
+      ...(debSearch ? { search: debSearch } : {}),
+      ...(filters.type ? { type: filters.type } : {}),
+      ...(filters.fromDate ? { fromDate: filters.fromDate } : {}),
+      ...(filters.toDate ? { toDate: filters.toDate } : {}),
+    }),
+    [page, debSearch, filters.type, filters.fromDate, filters.toDate]
   );
 
-  useEffect(() => {
-    load(1);
-  }, [load]);
+  // [PERF] Thay cho rows/stats/pager/loading/error + hàm load() thủ công.
+  const {
+    data: txData,
+    isLoading,
+    isFetching,
+    error: queryError,
+  } = useQuery({
+    queryKey: ["ingredient-transactions", queryParams],
+    queryFn: async () => {
+      const res = await txService.list(queryParams);
+      if (!res.success) throw new Error(res.message || "Không thể tải dữ liệu");
+      // Không destructure trực tiếp — nếu backend đổi shape hoặc thiếu
+      // field, destructure sẽ ra undefined và crash render ngay [GIU-NGUYEN]
+      return res.data?.data || {};
+    },
+    placeholderData: keepPreviousData,
+    staleTime: 15_000,
+  });
 
-  const set = (key, val) => setFilters((f) => ({ ...f, [key]: val }));
-  const reset = () => setFilters({ search: "", type: "", ...currentMonthRange() });
+  const rows = Array.isArray(txData?.transactions) ? txData.transactions : [];
+  const pager = txData?.pagination || { page: 1, totalPages: 1, total: 0 };
+  const stats = txData?.stats || { importCount: 0, importTotal: 0, exportCount: 0, exportTotal: 0 };
+  const error = queryError?.message || "";
 
-  const TYPE_TABS = [
-    { key: "", label: "Tất cả" },
-    { key: "IMPORT", label: "Nhập kho" },
-    { key: "EXPORT", label: "Hư hỏng" },
-  ];
+  // [PERF] callback ổn định (deps rỗng vì dùng setState dạng hàm) để các
+  // component con đã memo (DateField) không nhận prop hàm mới mỗi render.
+  const set = useCallback((key, val) => setFilters((f) => ({ ...f, [key]: val })), []);
+  const reset = useCallback(() => setFilters({ search: "", type: "", ...currentMonthRange() }), []);
+  const handleFromDateChange = useCallback((v) => set("fromDate", v), [set]);
+  const handleToDateChange = useCallback((v) => set("toDate", v), [set]);
+  const handleImportSuccess = useCallback(() => setPage(1), []);
+  const handleExportSuccess = useCallback(() => setPage(1), []);
 
   return (
     <View style={{ flex: 1 }} className="bg-gray-50">
@@ -878,8 +963,8 @@ export default function StoragePage() {
           </View>
 
           <View className="flex-row flex-wrap" style={{ gap: 10 }}>
-            <DateField label="Từ ngày" value={filters.fromDate} onChange={(v) => set("fromDate", v)} />
-            <DateField label="Đến ngày" value={filters.toDate} onChange={(v) => set("toDate", v)} />
+            <DateField label="Từ ngày" value={filters.fromDate} onChange={handleFromDateChange} />
+            <DateField label="Đến ngày" value={filters.toDate} onChange={handleToDateChange} />
           </View>
         </View>
 
@@ -894,12 +979,15 @@ export default function StoragePage() {
         <View className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
           <View className="flex-row items-center justify-between border-b border-gray-100" style={{ paddingHorizontal: 16, paddingTop: 14, paddingBottom: 12 }}>
             <Text className="text-sm font-bold text-gray-800">
-              Lịch sử giao dịch{!loading && <Text className="text-xs text-gray-400 font-normal"> ({fmt.num(pager.total)} giao dịch)</Text>}
+              Lịch sử giao dịch{!isLoading && <Text className="text-xs text-gray-400 font-normal"> ({fmt.num(pager.total)} giao dịch)</Text>}
             </Text>
-            {loading && <ActivityIndicator size="small" color={colors.gray[400]} />}
+            {/* isFetching (không phải isLoading) — chỉ báo đang tải nền khi
+                đổi trang/bộ lọc, trong lúc vẫn hiển thị dữ liệu cũ nhờ
+                keepPreviousData [PERF] */}
+            {isFetching && <ActivityIndicator size="small" color={colors.gray[400]} />}
           </View>
 
-          {loading ? (
+          {isLoading ? (
             <View className="items-center py-14" style={{ gap: 10 }}>
               <ActivityIndicator size="small" color={colors.gray[400]} />
               <Text className="text-[13px] text-gray-400">Đang tải dữ liệu...</Text>
@@ -918,11 +1006,11 @@ export default function StoragePage() {
 
           {/* ── Pagination (đổi từ dải số + "…" sang Trước/Sau, đúng
               quyết định đã áp dụng ở Customers.js) ──────────────────── */}
-          {!loading && rows.length > 0 && pager.totalPages > 1 && (
+          {!isLoading && rows.length > 0 && pager.totalPages > 1 && (
             <View className="flex-row items-center justify-between border-t border-gray-100" style={{ paddingHorizontal: 16, paddingVertical: 13 }}>
               <Pressable
-                onPress={() => load(pager.page - 1)}
-                disabled={pager.page <= 1}
+                onPress={() => setPage((p) => p - 1)}
+                disabled={pager.page <= 1 || isFetching}
                 style={{ opacity: pager.page <= 1 ? 0.4 : 1, paddingHorizontal: 12, paddingVertical: 7 }}
                 className="bg-gray-50 border border-gray-200 rounded-lg"
               >
@@ -930,8 +1018,8 @@ export default function StoragePage() {
               </Pressable>
               <Text className="text-[13px] font-bold text-gray-700">Trang {pager.page} / {pager.totalPages}</Text>
               <Pressable
-                onPress={() => load(pager.page + 1)}
-                disabled={pager.page >= pager.totalPages}
+                onPress={() => setPage((p) => p + 1)}
+                disabled={pager.page >= pager.totalPages || isFetching}
                 style={{ opacity: pager.page >= pager.totalPages ? 0.4 : 1, paddingHorizontal: 12, paddingVertical: 7 }}
                 className="bg-gray-50 border border-gray-200 rounded-lg"
               >
@@ -943,8 +1031,8 @@ export default function StoragePage() {
       </ScrollView>
 
       {/* ── Modals ───────────────────────────────────────────────────── */}
-      <ImportModal open={showImport} ingredients={ingredients} onClose={() => setShowImport(false)} onSuccess={() => load(1)} />
-      <ExportModal open={showExport} ingredients={ingredients} onClose={() => setShowExport(false)} onSuccess={() => load(1)} />
+      <ImportModal open={showImport} ingredients={ingredients} onClose={() => setShowImport(false)} onSuccess={handleImportSuccess} />
+      <ExportModal open={showExport} ingredients={ingredients} onClose={() => setShowExport(false)} onSuccess={handleExportSuccess} />
 
       {/* ── Lightbox hoá đơn ─────────────────────────────────────────── */}
       {!!lightbox && (

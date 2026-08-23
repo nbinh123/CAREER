@@ -32,7 +32,7 @@ import CustomDrawerContent from "./CustomDrawerContent";
 import AppHeader from "./AppHeader";
 import { withProtection } from "./ProtectedScreen";
 import withSuspense from "./withSuspense";
-import { NAV, ADMIN_ONLY_SCREENS } from "./navConfig";
+import { NAV } from "./navConfig";
 import { makePlaceholder } from "../pages/PlaceholderPage";
 
 const HomePage = React.lazy(() => import("../pages/HomePage"));
@@ -63,10 +63,9 @@ const SCREEN_COMPONENTS = {
   Kitchen: KitchenPage,
   Analyst: AnalystPage
 };
-const PROTECTED_SCREENS = NAV.map(({ screen, label }) => {
+const PROTECTED_SCREENS = NAV.map(({ screen, label, roles }) => {
   const RawComponent = SCREEN_COMPONENTS[screen] ?? makePlaceholder(label);
-  const requireAdmin = ADMIN_ONLY_SCREENS.has(screen);
-  return { screen, label, Component: withSuspense(withProtection(RawComponent, { requireAdmin })) };
+  return { screen, label, Component: withSuspense(withProtection(RawComponent, { allowedRoles: roles })) };
 });
 
 export default function AppDrawer() {

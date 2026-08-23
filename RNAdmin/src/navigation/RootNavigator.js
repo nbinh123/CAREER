@@ -27,7 +27,7 @@ const RegisterPage = React.lazy(() => import("../pages/RegisterPage"));
 
 const Stack = createNativeStackNavigator();
 const ShiftScreen = withProtection(makePlaceholder("Ca làm việc"));
-const ProtectedRegister = withSuspense(withProtection(RegisterPage, { requireAdmin: true }));
+const ProtectedRegister = withSuspense(withProtection(RegisterPage, { allowedRoles: ["admin"] }));
 
 export default function RootNavigator() {
   const isAuthenticated = useAuthZustand((s) => s.isAuthenticated);
