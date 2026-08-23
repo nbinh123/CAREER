@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { View, Text, Pressable, ScrollView, RefreshControl } from "react-native";
+import { useIsFocused } from "@react-navigation/native";
 import { DollarSign, ShoppingCart, Users, TrendingUp, RefreshCw } from "lucide-react-native";
 import fmtVND from "../utils/fmtVND";
 import StatCard from "../components/StatCard";
@@ -41,11 +42,22 @@ export default function AnalystPage() {
         }
       : { totalRevenue: 0, totalBills: 0, avgBill: 0, totalCost: 0 };
 
-  // Auto-poll every 60 seconds
+  // [PERF-FIX] NGUYÊN NHÂN CHÍNH gây delay 1-1,5s khi chuyển trang: Drawer
+  // không unmount AnalystPage khi rời tab, nên interval 60s này vẫn chạy
+  // NGẦM vô thời hạn dù đang đứng ở trang khác — mỗi lần bắn, `refresh()`
+  // đổi refreshKey → 8/11 effect bên dưới refetch đồng thời + 10 chart
+  // (EMA/MA/PID/heatmap) re-render lại toàn bộ. Nếu người dùng bấm chuyển
+  // trang đúng lúc tick này nổ ra, JS thread bận xử lý loạt request/re-render
+  // đó, khiến thao tác chuyển trang bị khựng lại 1-1,5s dù không liên quan
+  // gì tới trang đích. Chặn theo isFocused để việc polling dừng hẳn ngay khi
+  // rời trang, chỉ chạy lại khi quay về Analyst.
+  const isFocused = useIsFocused();
+
   useEffect(() => {
+    if (!isFocused) return;
     const id = setInterval(refresh, 60_000);
     return () => clearInterval(id);
-  }, [refresh]);
+  }, [isFocused, refresh]);
 
   // ── Timeframe states ──────────────────────────────────────────────────────
   const [tf2, setTf2] = useState("week");

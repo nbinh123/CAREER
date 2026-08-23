@@ -6,18 +6,28 @@
 // thay vì 1 cây Route phẳng + ProtectedRoute che từng nhánh, RN tách hẳn 2
 // cây điều hướng độc lập theo trạng thái đăng nhập, đúng khuyến nghị chuẩn
 // của React Navigation.
+//
+// [PERF-FIX] File này được App.js require ngay từ đầu (kể cả trước khi
+// đăng nhập, vì import tĩnh của LoginPage/RegisterPage/AppDrawer đều bị
+// evaluate ngay khi module RootNavigator.js được load — không đợi tới lúc
+// isAuthenticated=true). RegisterPage chỉ admin mới dùng, không cần thiết
+// phải trả phí evaluate module ngay từ màn hình Login → chuyển sang
+// React.lazy, bọc Suspense qua withSuspense.js (xem thêm ghi chú tương tự
+// ở AppDrawer.js — nguồn chính của vấn đề nằm ở đó, 12 trang + 10 chart).
 import React from "react";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import useAuthZustand from "../zustand/useAuthZustand";
 import AppDrawer from "./AppDrawer";
 import LoginPage from "../pages/LoginPage";
-import RegisterPage from "../pages/RegisterPage";
 import { withProtection } from "./ProtectedScreen";
+import withSuspense from "./withSuspense";
 import { makePlaceholder } from "../pages/PlaceholderPage";
+
+const RegisterPage = React.lazy(() => import("../pages/RegisterPage"));
 
 const Stack = createNativeStackNavigator();
 const ShiftScreen = withProtection(makePlaceholder("Ca làm việc"));
-const ProtectedRegister = withProtection(RegisterPage, { requireAdmin: true });
+const ProtectedRegister = withSuspense(withProtection(RegisterPage, { requireAdmin: true }));
 
 export default function RootNavigator() {
   const isAuthenticated = useAuthZustand((s) => s.isAuthenticated);

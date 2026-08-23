@@ -7,6 +7,7 @@ import {
   ScrollView,
   Modal,
   ActivityIndicator,
+  useWindowDimensions,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import * as Clipboard from "expo-clipboard";
@@ -74,7 +75,7 @@ const AVATAR_COLORS = [
   ["#0284c7", "#38bdf8"], ["#be123c", "#fb7185"], ["#0f766e", "#2dd4bf"],
 ];
 function avatarColor(seed = "") {
-  const idx = seed ? seed.charCodeAt(seed.length - 1) % AVATAR_COLORS.length : 0;
+  const idx = typeof seed === "string" && seed ? seed.charCodeAt(seed.length - 1) % AVATAR_COLORS.length : 0;
   return AVATAR_COLORS[idx];
 }
 function initials(name = "") {
@@ -175,9 +176,8 @@ function Avatar({ name, seed }) {
   );
 }
 
-function StatusBadge({ customer }) {
-  const st = statusOf(customer);
-  const meta = STATUS_META[st];
+function StatusBadge({ customer, status }) {
+  const meta = STATUS_META[status];
   return (
     <View style={{ gap: 5, alignSelf: "flex-start" }}>
       <View className={`flex-row items-center gap-1.5 px-2.5 py-1 rounded-full ${meta.bgClass}`}>
@@ -343,35 +343,80 @@ function ResetResultModal({ customer, tempPassword, onClose }) {
 }
 
 /* ── Lịch sử đơn hàng ────────────────────────────────────────────────────── */
+const ORDERS_PAGE_SIZE = 20;
+
 function OrdersModal({ customer, onClose }) {
+  const { height: winHeight } = useWindowDimensions();
   const [orders, setOrders] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(true); // loading trang đầu tiên
+  const [loadingMore, setLoadingMore] = useState(false); // loading khi cuộn xuống load thêm
   const [failed, setFailed] = useState(false);
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(true);
+
+  const fetchIdRef = useRef(0);
+  const loadingMoreRef = useRef(false); // request lock — chặn onScroll bắn nhiều lần cùng lúc
+
+  const loadPage = useCallback(async (pageToLoad, append) => {
+    const fetchId = ++fetchIdRef.current;
+    if (append) {
+      loadingMoreRef.current = true;
+      setLoadingMore(true);
+    } else {
+      setLoading(true);
+      setFailed(false);
+    }
+
+    const res = await apiGet(`/customers/${customer._id}/orders`, {
+      page: pageToLoad,
+      limit: ORDERS_PAGE_SIZE,
+    });
+    if (fetchIdRef.current !== fetchId) return; // đã có request mới hơn ghi đè, bỏ qua kết quả cũ
+
+    if (res.success) {
+      // BE có thể trả phẳng { success, orders } hoặc bọc { success, data: { orders } }
+      const payload = res.data ?? res;
+      const rawOrders = payload.orders ?? (Array.isArray(payload) ? payload : []);
+      const clean = Array.isArray(rawOrders) ? rawOrders.filter(Boolean) : [];
+      const total = payload.total ?? clean.length;
+      const totalPages = payload.totalPages ?? Math.max(1, Math.ceil(total / ORDERS_PAGE_SIZE));
+      setOrders((prev) => (append ? [...prev, ...clean] : clean));
+      setHasMore(pageToLoad < totalPages);
+    } else if (!append) {
+      // Trang đầu lỗi -> báo lỗi toàn màn hình.
+      setOrders([]);
+      setFailed(true);
+    }
+    // Load-more lỗi: giữ nguyên list đã có, không báo lỗi toàn màn hình;
+    // hasMore không đổi nên người dùng cuộn lại gần cuối sẽ tự thử lại.
+
+    setLoading(false);
+    setLoadingMore(false);
+    loadingMoreRef.current = false;
+  }, [customer._id]);
 
   useEffect(() => {
-    let alive = true;
-    (async () => {
-      setLoading(true);
-      const res = await apiGet(`/customers/${customer._id}/orders`);
-      if (!alive) return;
-      if (res.success) {
-        // BE có thể trả phẳng { success, orders } hoặc bọc { success, data: { orders } }
-        const payload = res.data ?? res;
-        const rawOrders = payload.orders ?? (Array.isArray(payload) ? payload : []);
-        setOrders(Array.isArray(rawOrders) ? rawOrders : []);
-        setFailed(false);
-      } else {
-        setOrders([]);
-        setFailed(true);
-      }
-      setLoading(false);
-    })();
-    return () => { alive = false; };
-  }, [customer._id]);
+    setPage(1);
+    setHasMore(true);
+    loadPage(1, false);
+  }, [customer._id, loadPage]);
+
+  const handleLoadMore = useCallback(() => {
+    if (loadingMoreRef.current || loading || !hasMore) return;
+    const nextPage = page + 1;
+    setPage(nextPage);
+    loadPage(nextPage, true);
+  }, [page, hasMore, loading, loadPage]);
+
+  const handleScroll = useCallback((e) => {
+    const { contentOffset, layoutMeasurement, contentSize } = e.nativeEvent;
+    const distanceFromBottom = contentSize.height - contentOffset.y - layoutMeasurement.height;
+    if (distanceFromBottom < 80) handleLoadMore();
+  }, [handleLoadMore]);
 
   return (
     <ModalOverlay onClose={onClose}>
-      <View className="bg-white rounded-3xl overflow-hidden" style={{ maxHeight: "85%" }}>
+      <View className="bg-white rounded-3xl overflow-hidden" style={{ maxHeight: winHeight * 0.85 }}>
         <View className="px-6 pt-6 pb-4 flex-row items-start justify-between border-b border-gray-100">
           <View style={{ flex: 1, paddingRight: 12 }}>
             <Text className="text-base font-black text-emerald-900">Lịch sử đơn hàng</Text>
@@ -382,7 +427,13 @@ function OrdersModal({ customer, onClose }) {
           </Pressable>
         </View>
 
-        <ScrollView className="px-4" contentContainerStyle={{ paddingVertical: 14, gap: 8 }}>
+        <ScrollView
+          style={{ flexShrink: 1 }}
+          className="px-4"
+          contentContainerStyle={{ paddingVertical: 14, gap: 8 }}
+          onScroll={handleScroll}
+          scrollEventThrottle={100}
+        >
           {loading ? (
             <View className="items-center py-10">
               <ActivityIndicator color={colors.gray[400]} />
@@ -439,6 +490,15 @@ function OrdersModal({ customer, onClose }) {
               );
             })
           )}
+          {!loading && !failed && orders.length > 0 && (
+            loadingMore ? (
+              <View className="items-center py-4">
+                <ActivityIndicator color={colors.gray[400]} size="small" />
+              </View>
+            ) : !hasMore ? (
+              <Text className="text-center text-[11px] font-bold text-gray-300 py-2">— Đã hết đơn hàng —</Text>
+            ) : null
+          )}
         </ScrollView>
       </View>
     </ModalOverlay>
@@ -460,7 +520,7 @@ const CustomerCard = React.memo(function CustomerCard({ customer, isLast, onView
         </View>
       </View>
 
-      <StatusBadge customer={customer} />
+      <StatusBadge customer={customer} status={st} />
 
       <View className="flex-row flex-wrap items-center" style={{ gap: 6 }}>
         <Text className="text-[11px] font-semibold text-gray-400">Tạo: {fmtDate(customer.createdAt)}</Text>
@@ -558,6 +618,7 @@ export default function CustomersPage() {
   const toastTimer = useRef(null);
   const searchDebounce = useRef(null);
   const fetchIdRef = useRef(0);
+  const hasLoadedOnceRef = useRef(false); // chỉ show skeleton toàn trang ở lần tải đầu tiên
 
   /* debounce search */
   useEffect(() => {
@@ -572,9 +633,9 @@ export default function CustomersPage() {
   /* dọn toast timer khi unmount, tránh setState sau khi unmount */
   useEffect(() => () => clearTimeout(toastTimer.current), []);
 
-  const fetchCustomers = useCallback(async (silent = false) => {
+  const fetchCustomers = useCallback(async () => {
     const fetchId = ++fetchIdRef.current;
-    silent ? setRefreshing(true) : setLoading(true);
+    hasLoadedOnceRef.current ? setRefreshing(true) : setLoading(true);
     const res = await apiGet("/customers", {
       page,
       limit: LIMIT,
@@ -591,6 +652,7 @@ export default function CustomersPage() {
       setList(items);
       setTotal(payload.total ?? items.length);
       setTotalPages(payload.totalPages ?? Math.max(1, Math.ceil((payload.total ?? items.length) / LIMIT)));
+      hasLoadedOnceRef.current = true;
     } else {
       showToast(res.message || "Không thể tải danh sách khách hàng", true);
       setList([]);
@@ -661,7 +723,7 @@ export default function CustomersPage() {
             <Text className="text-sm text-gray-500 mt-0.5">{total} khách hàng trong hệ thống</Text>
           </View>
           <Pressable
-            onPress={() => fetchCustomers(true)}
+            onPress={() => fetchCustomers()}
             disabled={refreshing}
             className="flex-row items-center gap-1.5 bg-white border-2 border-gray-200 rounded-2xl"
             style={{ paddingHorizontal: 14, paddingVertical: 10 }}

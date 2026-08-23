@@ -832,19 +832,32 @@ class CustomerController {
                 });
             }
 
+            const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+            const limit = Math.min(50, Math.max(1, parseInt(req.query.limit, 10) || 20));
+            const skip = (page - 1) * limit;
+
             // accountId: đơn đặt qua app mobile lúc đã đăng nhập (khớp chính xác)
             // phone: đơn đặt ẩn danh trên web bằng cùng số điện thoại
-            const orders = await OnlineOrder.find({
+            const filter = {
                 $or: [{ accountId: customer._id }, { phone: customer.phone }],
-            })
-                .sort({ createdAt: -1 })
-                .limit(100)
-                .lean();
+            };
+
+            const [orders, total] = await Promise.all([
+                OnlineOrder.find(filter)
+                    .sort({ createdAt: -1 })
+                    .skip(skip)
+                    .limit(limit)
+                    .lean(),
+                OnlineOrder.countDocuments(filter),
+            ]);
 
             return res.status(200).json({
                 success: true,
-                total: orders.length,
                 orders,
+                total,
+                page,
+                limit,
+                totalPages: Math.max(1, Math.ceil(total / limit)),
             });
         } catch (error) {
             console.error("adminGetCustomerOrders error:", error);

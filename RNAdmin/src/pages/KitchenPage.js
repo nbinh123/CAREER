@@ -10,6 +10,7 @@ import Animated, {
   Easing,
 } from "react-native-reanimated";
 import { Check, ChefHat, Flame, Wifi, WifiOff } from "lucide-react-native";
+import { useIsFocused } from "@react-navigation/native";
 import socket from "../utils/socket";
 import colors from "../theme/tokens";
 
@@ -183,6 +184,13 @@ export default function KitchenPage() {
   const [toast, setToast] = useState(null); // { type, msg }
   const [doneFlash, setDoneFlash] = useState(() => new Set()); // key vừa bấm xong, để hiệu ứng mờ dần
 
+  // [PERF] Drawer.Navigator không unmount màn hình khi rời tab (mặc định
+  // unmountOnBlur=false) — nếu không chặn theo isFocused, interval 10s bên
+  // dưới vẫn setNow() (→ re-render toàn bộ queue) vô thời hạn kể cả khi đang
+  // đứng ở trang khác, tranh CPU/JS thread đúng lúc người dùng bấm chuyển
+  // trang và gây giật/delay. Dừng hẳn khi rời trang, chạy lại khi quay về.
+  const isFocused = useIsFocused();
+
   // ─── Toast helper ────────────────────────────────────────────────────
   const showToast = useCallback((type, msg) => {
     setToast({ type, msg });
@@ -218,11 +226,13 @@ export default function KitchenPage() {
     };
   }, []);
 
-  // Đồng hồ chờ — cập nhật mỗi 10s để giờ chờ + màu cảnh báo luôn sát thực tế
+  // Đồng hồ chờ — cập nhật mỗi 10s để giờ chờ + màu cảnh báo luôn sát thực tế.
+  // [PERF] Chỉ chạy khi trang đang focus (xem ghi chú isFocused ở trên).
   useEffect(() => {
+    if (!isFocused) return;
     const t = setInterval(() => setNow(Date.now()), 10000);
     return () => clearInterval(t);
-  }, []);
+  }, [isFocused]);
 
   const waitMinutes = useCallback(
     (confirmedAt) => {
