@@ -1,5 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  useQuery,
+  useInfiniteQuery,
+  useMutation,
+  useQueryClient,
+  keepPreviousData,
+} from "@tanstack/react-query";
+import {
   View,
   Text,
   TextInput,
@@ -65,6 +72,67 @@ async function apiPost(url, data) {
   return res.success
     ? normalizeResponse(res.data)
     : { success: false, message: res.message || "Lỗi kết nối server" };
+}
+
+/* ════════════════════════════════════════════════════════════
+   REACT QUERY HOOKS
+   Query key convention: ["customers", {page, search, statusFilter}]
+   và ["customerOrders", customerId] — mọi cache invalidation/update
+   nên khớp với 2 prefix này.
+════════════════════════════════════════════════════════════ */
+function useCustomersQuery({ page, search, statusFilter }) {
+  return useQuery({
+    queryKey: ["customers", { page, search, statusFilter }],
+    queryFn: async () => {
+      const res = await apiGet("/customers", {
+        page,
+        limit: LIMIT,
+        search: search || undefined,
+        status: statusFilter !== "all" ? statusFilter : undefined,
+      });
+      if (!res.success) {
+        throw new Error(res.message || "Không thể tải danh sách khách hàng");
+      }
+      // BE trả phẳng { success, total, page, limit, customers } — không bọc
+      // trong "data", nên fallback về chính res khi res.data không tồn tại.
+      const payload = res.data ?? res;
+      const rawItems = payload.customers ?? payload.items ?? (Array.isArray(payload) ? payload : []);
+      const items = Array.isArray(rawItems) ? rawItems.filter(Boolean) : [];
+      return {
+        items,
+        total: payload.total ?? items.length,
+        totalPages: payload.totalPages ?? Math.max(1, Math.ceil((payload.total ?? items.length) / LIMIT)),
+      };
+    },
+    // Giữ data trang/tab cũ hiển thị trong lúc trang/tab mới đang tải, thay
+    // cho cơ chế hasLoadedOnceRef thủ công trước đây — cùng mục đích chống
+    // chớp skeleton khi đổi trang/tab/tìm kiếm.
+    placeholderData: keepPreviousData,
+  });
+}
+
+function useCustomerOrdersQuery(customerId) {
+  return useInfiniteQuery({
+    queryKey: ["customerOrders", customerId],
+    queryFn: async ({ pageParam }) => {
+      const res = await apiGet(`/customers/${customerId}/orders`, {
+        page: pageParam,
+        limit: ORDERS_PAGE_SIZE,
+      });
+      if (!res.success) {
+        throw new Error(res.message || "Không thể tải đơn hàng");
+      }
+      // BE có thể trả phẳng { success, orders } hoặc bọc { success, data: { orders } }
+      const payload = res.data ?? res;
+      const rawOrders = payload.orders ?? (Array.isArray(payload) ? payload : []);
+      const orders = Array.isArray(rawOrders) ? rawOrders.filter(Boolean) : [];
+      const total = payload.total ?? orders.length;
+      const totalPages = payload.totalPages ?? Math.max(1, Math.ceil(total / ORDERS_PAGE_SIZE));
+      return { orders, page: pageParam, totalPages };
+    },
+    initialPageParam: 1,
+    getNextPageParam: (lastPage) => (lastPage.page < lastPage.totalPages ? lastPage.page + 1 : undefined),
+  });
 }
 
 /* ════════════════════════════════════════════════════════════
@@ -347,69 +415,25 @@ const ORDERS_PAGE_SIZE = 3;
 
 function OrdersModal({ customer, onClose }) {
   const { height: winHeight } = useWindowDimensions();
-  const [orders, setOrders] = useState([]);
-  const [loading, setLoading] = useState(true); // loading trang đầu tiên
-  const [loadingMore, setLoadingMore] = useState(false); // loading khi cuộn xuống load thêm
-  const [failed, setFailed] = useState(false);
-  const [page, setPage] = useState(1);
-  const [hasMore, setHasMore] = useState(true);
+  const {
+    data,
+    isLoading, // true chỉ ở lần tải trang đầu tiên (chưa có cache cho customer này)
+    isError, // trang đầu lỗi
+    isFetchingNextPage,
+    isFetchNextPageError, // load-more lỗi — khác isError, không xoá list đã có
+    hasNextPage,
+    fetchNextPage,
+  } = useCustomerOrdersQuery(customer._id);
 
-  const fetchIdRef = useRef(0);
-  const loadingMoreRef = useRef(false); // request lock — chặn onScroll bắn nhiều lần cùng lúc
+  const orders = useMemo(() => (data ? data.pages.flatMap((p) => p.orders) : []), [data]);
+
   const [containerH, setContainerH] = useState(0);
   const [contentH, setContentH] = useState(0);
 
-  const loadPage = useCallback(async (pageToLoad, append) => {
-    const fetchId = ++fetchIdRef.current;
-    if (append) {
-      loadingMoreRef.current = true;
-      setLoadingMore(true);
-    } else {
-      setLoading(true);
-      setFailed(false);
-    }
-
-    const res = await apiGet(`/customers/${customer._id}/orders`, {
-      page: pageToLoad,
-      limit: ORDERS_PAGE_SIZE,
-    });
-    if (fetchIdRef.current !== fetchId) return; // đã có request mới hơn ghi đè, bỏ qua kết quả cũ
-
-    if (res.success) {
-      // BE có thể trả phẳng { success, orders } hoặc bọc { success, data: { orders } }
-      const payload = res.data ?? res;
-      const rawOrders = payload.orders ?? (Array.isArray(payload) ? payload : []);
-      const clean = Array.isArray(rawOrders) ? rawOrders.filter(Boolean) : [];
-      const total = payload.total ?? clean.length;
-      const totalPages = payload.totalPages ?? Math.max(1, Math.ceil(total / ORDERS_PAGE_SIZE));
-      setOrders((prev) => (append ? [...prev, ...clean] : clean));
-      setHasMore(pageToLoad < totalPages);
-    } else if (!append) {
-      // Trang đầu lỗi -> báo lỗi toàn màn hình.
-      setOrders([]);
-      setFailed(true);
-    }
-    // Load-more lỗi: giữ nguyên list đã có, không báo lỗi toàn màn hình;
-    // hasMore không đổi nên người dùng cuộn lại gần cuối sẽ tự thử lại.
-
-    setLoading(false);
-    setLoadingMore(false);
-    loadingMoreRef.current = false;
-  }, [customer._id]);
-
-  useEffect(() => {
-    setPage(1);
-    setHasMore(true);
-    setContentH(0);
-    loadPage(1, false);
-  }, [customer._id, loadPage]);
-
   const handleLoadMore = useCallback(() => {
-    if (loadingMoreRef.current || loading || !hasMore) return;
-    const nextPage = page + 1;
-    setPage(nextPage);
-    loadPage(nextPage, true);
-  }, [page, hasMore, loading, loadPage]);
+    if (isFetchingNextPage || !hasNextPage) return;
+    fetchNextPage();
+  }, [isFetchingNextPage, hasNextPage, fetchNextPage]);
 
   const handleScroll = useCallback((e) => {
     const { contentOffset, layoutMeasurement, contentSize } = e.nativeEvent;
@@ -422,10 +446,18 @@ function OrdersModal({ customer, onClose }) {
   // thêm cho tới khi nội dung lấp đầy khung (hoặc hết dữ liệu), rồi mới để việc
   // cuộn tiếp tay đảm nhiệm bình thường.
   useEffect(() => {
-    if (!loading && !loadingMore && hasMore && containerH > 0 && contentH > 0 && contentH <= containerH) {
+    if (
+      !isLoading &&
+      !isFetchingNextPage &&
+      !isFetchNextPageError &&
+      hasNextPage &&
+      containerH > 0 &&
+      contentH > 0 &&
+      contentH <= containerH
+    ) {
       handleLoadMore();
     }
-  }, [containerH, contentH, loading, loadingMore, hasMore, handleLoadMore]);
+  }, [containerH, contentH, isLoading, isFetchingNextPage, isFetchNextPageError, hasNextPage, handleLoadMore]);
 
   return (
     <ModalOverlay onClose={onClose}>
@@ -449,12 +481,12 @@ function OrdersModal({ customer, onClose }) {
           onScroll={handleScroll}
           scrollEventThrottle={100}
         >
-          {loading ? (
+          {isLoading ? (
             <View className="items-center py-10">
               <ActivityIndicator color={colors.gray[400]} />
               <Text className="text-[13px] font-bold text-gray-400 mt-2">Đang tải đơn hàng…</Text>
             </View>
-          ) : failed ? (
+          ) : isError ? (
             <View className="items-center py-10">
               <Text style={{ fontSize: 36 }}>🛠️</Text>
               <Text className="text-sm font-bold text-gray-300 mt-2 text-center">Chưa lấy được dữ liệu đơn hàng.</Text>
@@ -505,12 +537,16 @@ function OrdersModal({ customer, onClose }) {
               );
             })
           )}
-          {!loading && !failed && orders.length > 0 && (
-            loadingMore ? (
+          {!isLoading && !isError && orders.length > 0 && (
+            isFetchingNextPage ? (
               <View className="items-center py-4">
                 <ActivityIndicator color={colors.gray[400]} size="small" />
               </View>
-            ) : !hasMore ? (
+            ) : isFetchNextPageError ? (
+              <Text className="text-center text-[11px] font-bold text-red-400 py-2">
+                Không tải được thêm — kéo lại để thử lại
+              </Text>
+            ) : !hasNextPage ? (
               <Text className="text-center text-[11px] font-bold text-gray-300 py-2">— Đã hết đơn hàng —</Text>
             ) : null
           )}
@@ -613,27 +649,20 @@ function SkeletonCard() {
    MAIN COMPONENT
 ════════════════════════════════════════════════════════════ */
 export default function CustomersPage() {
-  const [list, setList] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
+  const queryClient = useQueryClient();
 
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [page, setPage] = useState(1);
-  const [total, setTotal] = useState(0);
-  const [totalPages, setTotalPages] = useState(1);
 
   const [confirmAction, setConfirmAction] = useState(null); // { type: 'lock'|'unlock'|'reset', customer }
-  const [confirmLoading, setConfirmLoading] = useState(false);
   const [resetResult, setResetResult] = useState(null); // { customer, tempPassword }
   const [ordersCustomer, setOrdersCustomer] = useState(null);
 
   const [toast, setToast] = useState(null); // { msg, error }
   const toastTimer = useRef(null);
   const searchDebounce = useRef(null);
-  const fetchIdRef = useRef(0);
-  const hasLoadedOnceRef = useRef(false); // chỉ show skeleton toàn trang ở lần tải đầu tiên
 
   /* debounce search */
   useEffect(() => {
@@ -648,70 +677,85 @@ export default function CustomersPage() {
   /* dọn toast timer khi unmount, tránh setState sau khi unmount */
   useEffect(() => () => clearTimeout(toastTimer.current), []);
 
-  const fetchCustomers = useCallback(async () => {
-    const fetchId = ++fetchIdRef.current;
-    hasLoadedOnceRef.current ? setRefreshing(true) : setLoading(true);
-    const res = await apiGet("/customers", {
-      page,
-      limit: LIMIT,
-      search: search || undefined,
-      status: statusFilter !== "all" ? statusFilter : undefined,
-    });
-    if (fetchIdRef.current !== fetchId) return; // request cũ hơn đã bị request mới ghi đè, bỏ qua
-    if (res.success) {
-      // BE trả phẳng { success, total, page, limit, customers } — không bọc
-      // trong "data", nên fallback về chính res khi res.data không tồn tại.
-      const payload = res.data ?? res;
-      const rawItems = payload.customers ?? payload.items ?? (Array.isArray(payload) ? payload : []);
-      const items = Array.isArray(rawItems) ? rawItems.filter(Boolean) : [];
-      setList(items);
-      setTotal(payload.total ?? items.length);
-      setTotalPages(payload.totalPages ?? Math.max(1, Math.ceil((payload.total ?? items.length) / LIMIT)));
-      hasLoadedOnceRef.current = true;
-    } else {
-      showToast(res.message || "Không thể tải danh sách khách hàng", true);
-      setList([]);
-    }
-    setLoading(false);
-    setRefreshing(false);
-  }, [page, search, statusFilter]);
-
-  useEffect(() => { fetchCustomers(); }, [fetchCustomers]);
-
   function showToast(msg, isError = false) {
     clearTimeout(toastTimer.current);
     setToast({ msg, error: isError });
     toastTimer.current = setTimeout(() => setToast(null), 3000);
   }
 
+  const {
+    data: customersData,
+    isLoading, // chỉ true ở lần tải đầu tiên (chưa có data/placeholder nào)
+    isFetching, // true cho MỌI lần fetch (đổi trang/tab/tìm kiếm + bấm làm mới)
+    isError: customersError,
+    error: customersErrorObj,
+    refetch: refetchCustomers,
+  } = useCustomersQuery({ page, search, statusFilter });
+
+  const list = customersData?.items ?? [];
+  const total = customersData?.total ?? 0;
+  const totalPages = customersData?.totalPages ?? 1;
+
+  useEffect(() => {
+    if (customersError) {
+      showToast(customersErrorObj?.message || "Không thể tải danh sách khách hàng", true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [customersError, customersErrorObj]);
+
+  /* Cập nhật MỌI trang/tab đang cache trong react-query cho 1 khách hàng cụ
+     thể, thay vì chỉ sửa list đang hiển thị — tránh trang khác bị data cũ khi
+     quay lại. */
+  function patchCachedCustomer(customerId, patch) {
+    queryClient.setQueriesData({ queryKey: ["customers"] }, (old) => {
+      if (!old) return old;
+      return { ...old, items: old.items.map((c) => (c._id === customerId ? { ...c, ...patch } : c)) };
+    });
+  }
+
+  const lockUnlockMutation = useMutation({
+    mutationFn: async ({ customer, type }) => {
+      const res = await apiPatch(`/customers/${customer._id}/${type}`);
+      if (!res.success) throw new Error(res.message || "Thao tác thất bại");
+      return { customer, type };
+    },
+    onSuccess: ({ customer, type }) => {
+      patchCachedCustomer(customer._id, { isLocked: type === "lock" });
+      showToast(type === "lock" ? "✅ Đã khoá tài khoản" : "✅ Đã mở khoá tài khoản");
+      setConfirmAction(null);
+    },
+    onError: (err) => showToast(err.message || "Thao tác thất bại", true),
+  });
+
+  const resetPasswordMutation = useMutation({
+    mutationFn: async (customer) => {
+      const res = await apiPost(`/customers/${customer._id}/reset-password`);
+      if (!res.success) throw new Error(res.message || "Reset mật khẩu thất bại");
+      // Tương tự: BE có thể trả phẳng { success, tempPassword } thay vì bọc trong "data"
+      const payload = res.data ?? res;
+      const tempPassword = payload.tempPassword ?? payload.newPassword ?? payload.password ?? null;
+      return { customer, tempPassword };
+    },
+    onSuccess: ({ customer, tempPassword }) => {
+      patchCachedCustomer(customer._id, { mustChangePassword: true });
+      setConfirmAction(null);
+      setResetResult({ customer, tempPassword });
+    },
+    onError: (err) => showToast(err.message || "Reset mật khẩu thất bại", true),
+  });
+
+  const confirmLoading =
+    confirmAction?.type === "reset" ? resetPasswordMutation.isPending : lockUnlockMutation.isPending;
+
   /* ── lock / unlock / reset execution ── */
-  async function runConfirmAction() {
+  function runConfirmAction() {
     if (!confirmAction) return;
     const { type, customer } = confirmAction;
-    setConfirmLoading(true);
-    if (type === "lock" || type === "unlock") {
-      const res = await apiPatch(`/customers/${customer._id}/${type}`);
-      if (res.success) {
-        setList((prev) => prev.map((c) => (c._id === customer._id ? { ...c, isLocked: type === "lock" } : c)));
-        showToast(type === "lock" ? "✅ Đã khoá tài khoản" : "✅ Đã mở khoá tài khoản");
-        setConfirmAction(null);
-      } else {
-        showToast(res.message || "Thao tác thất bại", true);
-      }
-    } else if (type === "reset") {
-      const res = await apiPost(`/customers/${customer._id}/reset-password`);
-      if (res.success) {
-        // Tương tự: BE có thể trả phẳng { success, tempPassword } thay vì bọc trong "data"
-        const payload = res.data ?? res;
-        const tempPassword = payload.tempPassword ?? payload.newPassword ?? payload.password ?? null;
-        setList((prev) => prev.map((c) => (c._id === customer._id ? { ...c, mustChangePassword: true } : c)));
-        setConfirmAction(null);
-        setResetResult({ customer, tempPassword });
-      } else {
-        showToast(res.message || "Reset mật khẩu thất bại", true);
-      }
+    if (type === "reset") {
+      resetPasswordMutation.mutate(customer);
+    } else {
+      lockUnlockMutation.mutate({ customer, type });
     }
-    setConfirmLoading(false);
   }
 
   /* ── stats (derived data) ── */
@@ -738,17 +782,17 @@ export default function CustomersPage() {
             <Text className="text-sm text-gray-500 mt-0.5">{total} khách hàng trong hệ thống</Text>
           </View>
           <Pressable
-            onPress={() => fetchCustomers()}
-            disabled={refreshing}
+            onPress={() => refetchCustomers()}
+            disabled={isFetching}
             className="flex-row items-center gap-1.5 bg-white border-2 border-gray-200 rounded-2xl"
             style={{ paddingHorizontal: 14, paddingVertical: 10 }}
           >
-            {refreshing ? (
+            {isFetching ? (
               <ActivityIndicator size="small" color={colors.gray[600]} />
             ) : (
               <RefreshCw size={14} color={colors.gray[600]} />
             )}
-            <Text className="text-gray-600 font-extrabold text-xs">{refreshing ? "Đang tải…" : "Làm mới"}</Text>
+            <Text className="text-gray-600 font-extrabold text-xs">{isFetching ? "Đang tải…" : "Làm mới"}</Text>
           </Pressable>
         </View>
 
@@ -791,7 +835,7 @@ export default function CustomersPage() {
 
         {/* ── list ── */}
         <View className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
-          {loading ? (
+          {isLoading ? (
             Array.from({ length: 4 }).map((_, i) => <SkeletonCard key={i} />)
           ) : list.length === 0 ? (
             <View className="items-center py-14 px-6">
@@ -813,7 +857,7 @@ export default function CustomersPage() {
           )}
 
           {/* ── pagination ── */}
-          {!loading && list.length > 0 && (
+          {!isLoading && list.length > 0 && (
             <View className="flex-row items-center justify-between px-4 py-3.5 border-t border-gray-100">
               <Text className="text-xs font-bold text-gray-400">{total} khách hàng · {LIMIT}/trang</Text>
               <View className="flex-row items-center gap-2">

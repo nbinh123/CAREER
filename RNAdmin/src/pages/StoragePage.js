@@ -22,41 +22,6 @@ import StatCard from "../components/StatCard";
 import colors from "../theme/tokens";
 
 /* ════════════════════════════════════════════════════════════
-   GHI CHÚ BẢN CẬP NHẬT NÀY
-
-   1. [PERF] Toàn bộ state tự quản (rows, stats, pager, loading, error,
-      hàm load()) được thay bằng @tanstack/react-query:
-      - Cache tự động theo (trang, tìm kiếm, loại, khoảng ngày) — quay
-        lại đúng tổ hợp bộ lọc vừa xem trong 15s không cần gọi lại API.
-      - placeholderData: keepPreviousData giữ nguyên danh sách cũ khi
-        đang tải trang/bộ lọc mới, tránh nháy trắng màn hình.
-      - Sau khi nhập kho / ghi nhận hư hỏng thành công, chỉ cần
-        invalidateQueries — không tự gọi lại load() thủ công nữa.
-      Yêu cầu: cần cài đặt `@tanstack/react-query` và bọc App trong
-      `QueryClientProvider` ở gốc cây component (nếu dự án chưa có).
-      (Bản ghi chú này giả định @tanstack/react-query v5 — nếu dự án
-      đang dùng v4 thì đổi `placeholderData: keepPreviousData` thành
-      `keepPreviousData: true` và đổi `isPending` thành `isLoading`.)
-
-   2. [FIX-SCROLL] 2 modal (Nhập kho / Ghi nhận hư hỏng) trước đây kéo
-      không lướt được, dù kéo ở vùng trống giữa các trường hay ở tiêu
-      đề. Nguyên nhân: ScrollView bên trong modal không có `flex: 1`,
-      nên theo mặc định của Yoga (flexShrink: 0), nó tự co giãn theo
-      đúng chiều cao nội dung thay vì bị ép vào phần còn lại của
-      `maxHeight` khung modal cha — tức là bên trong ScrollView không
-      hề có phần "tràn" để cuộn (frame height == content height), mọi
-      thao tác kéo đều vô tác dụng dù phần dưới bị cắt hình do
-      `overflow: hidden` của View cha. Phần tiêu đề (nằm tách hẳn bên
-      ngoài ScrollView) thì dĩ nhiên không thể kéo-cuộn được vì không
-      thuộc vùng scroll.
-      → Đã thêm `flex: 1` cho ScrollView để nó thực sự bị giới hạn
-      chiều cao và có thể cuộn, đồng thời đưa tiêu đề vào làm phần tử
-      đầu tiên (dùng `stickyHeaderIndices={[0]}`) của chính ScrollView
-      đó — tiêu đề vẫn dính ở trên khi cuộn, nhưng kéo bắt đầu từ đó
-      giờ cũng điều khiển được việc cuộn nội dung bên dưới.
-════════════════════════════════════════════════════════════ */
-
-/* ════════════════════════════════════════════════════════════
    CONSTANTS [GIU-NGUYEN]
 ════════════════════════════════════════════════════════════ */
 const DAMAGE_REASONS = [

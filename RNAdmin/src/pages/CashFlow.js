@@ -22,6 +22,13 @@ import {
     Percent,
     ChevronRight,
 } from "lucide-react-native";
+import {
+    useQuery,
+    useInfiniteQuery,
+    useMutation,
+    useQueryClient,
+    keepPreviousData,
+} from "@tanstack/react-query";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { getData } from "../utils/callAPI";
 import colors from "../theme/tokens";
@@ -34,13 +41,26 @@ function pct(value, decimals = 1) {
     return (value ?? 0).toFixed(decimals) + "%";
 }
 
+// getData() (callAPI.js) trả `{ success, data }` chứ không throw khi BE báo
+// lỗi. react-query cần queryFn/mutationFn THROW để tự set isError/error và
+// áp dụng `retry` từ queryClient dùng chung — helper này là điểm chuyển đổi
+// duy nhất giữa 2 kiểu đó, dùng lại cho mọi query/mutation trong file.
+async function fetchOrThrow(url, params) {
+    const res = await getData({ url, params });
+    if (!res?.success) {
+        throw new Error(res?.data?.message || `Request failed: ${url}`);
+    }
+    return res.data;
+}
+
 const DAY_OPTIONS = [7, 14, 21, 30];
 
 // Số món/trang khi phân trang "Trọng số món ăn".
 const FOOD_WEIGHTS_PAGE_SIZE = 5;
 
 // Key lưu "Chi phí duy trì" trên máy (AsyncStorage) — dữ liệu này KHÔNG có
-// API lưu ở BE, chỉ tồn tại phía client nên phải tự persist.
+// API lưu ở BE, chỉ tồn tại phía client nên phải tự persist (react-query chỉ
+// cache server state, không thay được persistence cho state thuần client).
 const MAINTENANCE_COSTS_STORAGE_KEY = "cashflow:maintenanceCosts:v1";
 
 // ─── DaySelector ────────────────────────────────────────────────────────
@@ -506,25 +526,17 @@ const MaintenanceCostsCard = React.memo(function MaintenanceCostsCard({
 });
 
 export default function CashFlowPage() {
+    const queryClient = useQueryClient();
     const [days, setDays] = useState(7);
-
-    // Remote data
-    const [foodWeights, setFoodWeights] = useState([]);
-    const [foodWeightsPage, setFoodWeightsPage] = useState(1);
-    const [foodWeightsHasMore, setFoodWeightsHasMore] = useState(true);
-    const [loadingMoreWeights, setLoadingMoreWeights] = useState(false);
-    const [compositeMargin, setCompositeMargin] = useState(0);
-    const [avgBillValue, setAvgBillValue] = useState(80000);
-    const [loadingFetch, setLoadingFetch] = useState(false);
-    const [loadingUpdate, setLoadingUpdate] = useState(false);
-    const [updateMsg, setUpdateMsg] = useState("");
 
     // Revenue estimation
     const [customers, setCustomers] = useState("");
     const [customersFocused, setCustomersFocused] = useState(false);
 
     // Maintenance costs (không có API lưu ở BE — persist trên máy qua
-    // AsyncStorage, xem 2 useEffect load/save bên dưới)
+    // AsyncStorage, xem 2 useEffect load/save bên dưới. Đây là state thuần
+    // client nên KHÔNG đưa vào react-query — react-query chỉ dành cho dữ
+    // liệu đến từ server.)
     const [costs, setCosts] = useState([]);
     const [costsLoaded, setCostsLoaded] = useState(false);
     const [newName, setNewName] = useState("");
@@ -532,98 +544,80 @@ export default function CashFlowPage() {
     const [editingId, setEditingId] = useState(null);
     const [editName, setEditName] = useState("");
     const [editValue, setEditValue] = useState("");
+    const [updateMsg, setUpdateMsg] = useState("");
 
-    // ── Fetch ──────────────────────────────────────────────────────────────
-    // GHI CHÚ CHO BACKEND [CẦN SỬA]:
-    // Endpoint `/analyst/food-weights` giờ được gọi kèm `page` và `limit`
-    // (limit = FOOD_WEIGHTS_PAGE_SIZE = 5) để phân trang thay vì trả hết
-    // toàn bộ danh sách một lần. Yêu cầu BE:
-    //   1. Sort theo `aiTrainingWeight` GIẢM DẦN TRƯỚC khi cắt trang (để
-    //      thứ hạng #1, #2, #3... đúng xuyên suốt các trang).
-    //   2. Trả đúng tối đa `limit` item cho `data.weights` của trang `page`.
-    //   3. Thêm field `data.hasMore` (boolean) cho biết còn trang kế tiếp
-    //      hay không.
-    // Trong lúc chờ BE cập nhật, FE tự suy ra `hasMore` bằng
-    // `received.length === limit` và tự lọc trùng `foodId` khi nối trang —
-    // xoá 2 phần fallback này sau khi BE trả đúng field `hasMore` + phân
-    // trang chuẩn.
-    const fetchFoodWeightsPage1 = useCallback(async () => {
-        const res = await getData({
-            url: "/analyst/food-weights/paginated",
-            params: { days, page: 1, limit: FOOD_WEIGHTS_PAGE_SIZE },
-        });
-        return res;
-    }, [days]);
+    // ── React Query: biên lợi nhuận + giá trị bill TB (phụ thuộc `days`) ────
+    // `placeholderData: keepPreviousData` — đổi `days` sẽ giữ nguyên số liệu
+    // cũ trên màn hình trong lúc chờ số liệu mới, thay vì flash về giá trị
+    // mặc định/0 rồi mới nhảy lên số đúng.
+    const marginQuery = useQuery({
+        queryKey: ["analyst", "margin", days],
+        queryFn: () => fetchOrThrow("/analyst/margin", { days }),
+        placeholderData: keepPreviousData,
+    });
 
-    const fetchAll = useCallback(async () => {
-        setLoadingFetch(true);
-        try {
-            const [wRes, mRes, bRes] = await Promise.all([
-                fetchFoodWeightsPage1(),
-                getData({ url: "/analyst/margin", params: { days } }),
-                getData({ url: "/analyst/avg-bill-value", params: { days } }),
-            ]);
-            if (wRes.success && mRes.success && bRes.success) {
-                const received = wRes.data.weights ?? [];
-                // BE đã sort + phân trang (xem ghi chú phía trên) — không
-                // sort lại ở FE nữa.
-                setFoodWeights(received);
-                setFoodWeightsPage(1);
-                setFoodWeightsHasMore(
-                    typeof wRes.data.hasMore === "boolean"
-                        ? wRes.data.hasMore
-                        : received.length === FOOD_WEIGHTS_PAGE_SIZE
-                );
-                setCompositeMargin(mRes.data.compositeMarginPercent ?? 0);
-                if (bRes.data.avgBillValue) setAvgBillValue(bRes.data.avgBillValue);
-            } else {
-                console.error("CashFlow fetchAll: một hoặc nhiều request thất bại");
-            }
-        } catch (err) {
-            console.error("CashFlow fetchAll:", err);
-        } finally {
-            setLoadingFetch(false);
-        }
-    }, [fetchFoodWeightsPage1, days]);
+    const avgBillQuery = useQuery({
+        queryKey: ["analyst", "avgBillValue", days],
+        queryFn: () => fetchOrThrow("/analyst/avg-bill-value", { days }),
+        placeholderData: keepPreviousData,
+    });
 
-    useEffect(() => {
-        fetchAll();
-    }, [fetchAll]);
+    const compositeMargin = marginQuery.data?.compositeMarginPercent ?? 0;
+    const avgBillValue = avgBillQuery.data?.avgBillValue ?? 80000;
 
-    // "Thêm" — tải trang kế tiếp (5 món tiếp theo) và nối vào list hiện có.
-    // Guard bằng `loadingMoreWeights`/`foodWeightsHasMore` để tránh bấm dồn
-    // dập gây gọi API trùng lặp.
-    const handleLoadMoreWeights = useCallback(async () => {
-        if (loadingMoreWeights || !foodWeightsHasMore) return;
-        setLoadingMoreWeights(true);
-        try {
-            const nextPage = foodWeightsPage + 1;
-            const res = await getData({
-                url: "/analyst/food-weights/paginated",
-                params: { days, page: nextPage, limit: FOOD_WEIGHTS_PAGE_SIZE },
-            });
-            if (res.success) {
-                const received = res.data.weights ?? [];
-                setFoodWeights((prev) => {
-                    // Fallback dedup — xoá khi BE đã phân trang chuẩn (xem ghi chú ở fetchAll).
-                    const seen = new Set(prev.map((f) => f.foodId));
-                    return [...prev, ...received.filter((f) => !seen.has(f.foodId))];
-                });
-                setFoodWeightsPage(nextPage);
-                setFoodWeightsHasMore(
-                    typeof res.data.hasMore === "boolean"
-                        ? res.data.hasMore
-                        : received.length === FOOD_WEIGHTS_PAGE_SIZE
-                );
-            } else {
-                console.error("CashFlow loadMoreWeights: request thất bại");
-            }
-        } catch (err) {
-            console.error("CashFlow loadMoreWeights:", err);
-        } finally {
-            setLoadingMoreWeights(false);
-        }
-    }, [days, foodWeightsPage, foodWeightsHasMore, loadingMoreWeights]);
+    // ── React Query: "Trọng số món ăn" — phân trang bằng useInfiniteQuery ──
+    // Không phụ thuộc `days` (xem ghi chú ở BE: aiTrainingWeight là giá trị
+    // đã tính sẵn, đọc không cần khoảng ngày). `staleTime` dài hơn mặc định
+    // của queryClient (10s) vì dữ liệu này chỉ đổi khi bấm "Cập nhật trọng
+    // số" — không cần tự refetch thường xuyên khi quay lại app.
+    const foodWeightsQuery = useInfiniteQuery({
+        queryKey: ["analyst", "foodWeightsPaginated"],
+        queryFn: ({ pageParam }) =>
+            fetchOrThrow("/analyst/food-weights/paginated", {
+                page: pageParam,
+                limit: FOOD_WEIGHTS_PAGE_SIZE,
+            }),
+        initialPageParam: 1,
+        getNextPageParam: (lastPage) => (lastPage.hasMore ? lastPage.page + 1 : undefined),
+        staleTime: 60_000,
+    });
+
+    // Gộp các trang đã tải thành 1 mảng phẳng để render — chỉ tính lại khi
+    // có trang mới (object `data` của useInfiniteQuery đổi identity).
+    const foodWeights = useMemo(
+        () => foodWeightsQuery.data?.pages.flatMap((p) => p.weights) ?? [],
+        [foodWeightsQuery.data]
+    );
+
+    const handleLoadMoreWeights = useCallback(() => {
+        foodWeightsQuery.fetchNextPage();
+        // Guard bấm dồn dập / hết trang đã nằm trong props `disabled` của
+        // nút "Thêm" (loadingMore = isFetchingNextPage, hasMore = hasNextPage).
+    }, [foodWeightsQuery.fetchNextPage]);
+
+    // ── Mutation: "Cập nhật trọng số" — trigger BE tính lại (endpoint cũ,
+    // giữ nguyên /analyst/food-weights, KHÔNG đổi) ─────────────────────────
+    const updateWeightsMutation = useMutation({
+        mutationFn: () => fetchOrThrow("/analyst/food-weights", { days }),
+        onSuccess: (data) => {
+            setUpdateMsg(`Đã cập nhật ${data.updatedCount ?? 0} món`);
+            // Trọng số vừa đổi toàn bộ → xoá cache các trang đã tải và
+            // refetch lại từ trang 1, thay vì invalidate (sẽ refetch lại
+            // TẤT CẢ trang cũ đã tải, tốn request không cần thiết).
+            queryClient.resetQueries({ queryKey: ["analyst", "foodWeightsPaginated"] });
+        },
+        onError: (err) => {
+            console.error("CashFlow updateWeights:", err);
+            setUpdateMsg("Cập nhật thất bại");
+        },
+        onSettled: () => {
+            setTimeout(() => setUpdateMsg(""), 3000);
+        },
+    });
+
+    const handleUpdateWeights = useCallback(() => {
+        updateWeightsMutation.mutate();
+    }, [updateWeightsMutation.mutate]);
 
     // ── Maintenance costs persistence (AsyncStorage) ──────────────────────
     // Load 1 lần khi mount. `costsLoaded` chặn effect ghi (bên dưới) chạy
@@ -658,31 +652,9 @@ export default function CashFlowPage() {
         );
     }, [costs, costsLoaded]);
 
-    // ── Update weights ────────────────────────────────────────────────────
-    const handleUpdateWeights = useCallback(async () => {
-        setLoadingUpdate(true);
-        setUpdateMsg("");
-        try {
-            const res = await getData({ url: "/analyst/food-weights/paginated", params: { days } });
-            if (res.success) {
-                setUpdateMsg(`Đã cập nhật ${res.data.updatedCount ?? 0} món`);
-                await fetchAll();
-            } else {
-                setUpdateMsg("Cập nhật thất bại");
-            }
-        } catch (err) {
-            console.error("CashFlow updateWeights:", err);
-            setUpdateMsg("Cập nhật thất bại");
-        } finally {
-            setLoadingUpdate(false);
-            setTimeout(() => setUpdateMsg(""), 3000);
-        }
-    }, [days, fetchAll]);
-
     // ── Derived numbers ───────────────────────────────────────────────────
-    // useMemo: trước đây các giá trị này được tính lại ở MỌI lần render của
-    // page (kể cả khi chỉ customersFocused hay editName đổi). Giờ chỉ tính
-    // lại khi input liên quan thực sự đổi.
+    // useMemo: tránh tính lại ở những re-render không liên quan (vd. gõ tên
+    // chi phí đang sửa không cần tính lại doanh thu/thuế/lợi nhuận).
     const numCustomers = useMemo(() => parseInt(customers) || 0, [customers]);
     const revenue = useMemo(() => avgBillValue * numCustomers, [avgBillValue, numCustomers]);
     const tax = useMemo(() => revenue * 0.045, [revenue]);
@@ -695,10 +667,8 @@ export default function CashFlowPage() {
         [revenue, tax, totalMaintenance]
     );
 
-    // Tỉ lệ % từng chi phí — trước đây hàm `costRatio(val)` được gọi lại
-    // (và tính lại phép chia) cho từng dòng ở mọi lần render của page. Giờ
-    // tính một lần thành Map, chỉ khi `costs`/`totalMaintenance` đổi, mỗi
-    // dòng tra cứu O(1).
+    // Tỉ lệ % từng chi phí — tính một lần thành Map, chỉ khi
+    // `costs`/`totalMaintenance` đổi, mỗi dòng tra cứu O(1).
     const costRatioMap = useMemo(() => {
         const map = new Map();
         for (const c of costs) {
@@ -770,11 +740,13 @@ export default function CashFlowPage() {
 
                     <Pressable
                         onPress={handleUpdateWeights}
-                        disabled={loadingUpdate || loadingFetch}
-                        style={{ opacity: loadingUpdate || loadingFetch ? 0.6 : 1 }}
+                        disabled={updateWeightsMutation.isPending || foodWeightsQuery.isLoading}
+                        style={{
+                            opacity: updateWeightsMutation.isPending || foodWeightsQuery.isLoading ? 0.6 : 1,
+                        }}
                         className="flex-row items-center gap-2 px-4 py-2.5 bg-green-600 rounded-xl self-start"
                     >
-                        {loadingUpdate ? (
+                        {updateWeightsMutation.isPending ? (
                             <ActivityIndicator size="small" color={colors.white} />
                         ) : (
                             <RefreshCw size={15} color={colors.white} />
@@ -822,9 +794,9 @@ export default function CashFlowPage() {
                 {/* ── Food Weights (đã chuyển xuống dưới) ─────────────────────── */}
                 <FoodWeightsCard
                     foodWeights={foodWeights}
-                    loadingFetch={loadingFetch}
-                    hasMore={foodWeightsHasMore}
-                    loadingMore={loadingMoreWeights}
+                    loadingFetch={foodWeightsQuery.isLoading}
+                    hasMore={Boolean(foodWeightsQuery.hasNextPage)}
+                    loadingMore={foodWeightsQuery.isFetchingNextPage}
                     onLoadMore={handleLoadMoreWeights}
                 />
             </ScrollView>

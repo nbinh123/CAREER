@@ -13,7 +13,9 @@ import {
 } from "react-native";
 import Animated, { FadeInDown, FadeOutDown } from "react-native-reanimated";
 import DateTimePicker from "@react-native-community/datetimepicker";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
+  AlertCircle,
   Bell,
   Check,
   CheckCircle2,
@@ -21,6 +23,7 @@ import {
   Flame,
   Lock,
   MessageCircle,
+  RefreshCw,
   Search,
   Send,
   Trash2,
@@ -418,6 +421,194 @@ const OrderHistoryCard = React.memo(function OrderHistoryCard({ order, isLast, o
   );
 });
 
+/* ── Danh sách tin nhắn trong modal chat ──────────────────────────────────
+   [PERF] Tách riêng + React.memo + forwardRef. Trước đây list này render
+   ngay trong OrdersPage, nên mỗi ký tự gõ vào ô trả lời (chatDraft đổi) làm
+   toàn bộ modal — kể cả danh sách tin nhắn có thể rất dài — re-render lại,
+   gây khựng khi gõ nếu cuộc trò chuyện nhiều tin nhắn. Nhờ tách ra + memo,
+   list chỉ re-render khi `messages` (mảng) thực sự đổi tham chiếu — và nhờ
+   fix ở handleTablesState (giữ nguyên reference bàn không đổi), gõ chat sẽ
+   không còn làm list này vẽ lại nữa. forwardRef để chatScrollRef.scrollToEnd()
+   từ component cha vẫn hoạt động bình thường, không đổi hành vi cuộn. */
+const ChatMessagesList = React.memo(
+  React.forwardRef(function ChatMessagesList({ messages, tableName }, ref) {
+    return (
+      <ScrollView ref={ref} style={{ flex: 1 }} contentContainerStyle={{ padding: 12, gap: 8 }}>
+        {!messages || messages.length === 0 ? (
+          <Text className="text-gray-400 text-xs text-center" style={{ paddingVertical: 40 }}>
+            Chưa có tin nhắn nào với {tableName}
+          </Text>
+        ) : (
+          messages.map((m, idx) => (
+            <View key={m.id || idx} style={{ flexDirection: "row", justifyContent: m.from === "admin" ? "flex-end" : "flex-start" }}>
+              <View
+                style={{ maxWidth: "75%" }}
+                className={`rounded-2xl px-3.5 py-2.5 ${m.from === "admin" ? "bg-green-500 rounded-br-md" : "bg-gray-100 rounded-bl-md"}`}
+              >
+                <Text className={`text-sm ${m.from === "admin" ? "text-white" : "text-gray-700"}`} style={{ lineHeight: 20 }}>
+                  {m.text}
+                </Text>
+                <Text className={`text-[10px] mt-1 ${m.from === "admin" ? "text-green-100" : "text-gray-400"}`}>
+                  {safeFmtDate(m.at instanceof Date ? m.at.toISOString() : m.at)}
+                </Text>
+              </View>
+            </View>
+          ))
+        )}
+      </ScrollView>
+    );
+  })
+);
+
+/* ── Nội dung modal chi tiết bàn (món chờ xác nhận / đã xác nhận / thanh toán)
+   [PERF] Tách riêng + React.memo. Trước đây đây là 1 hàm gọi trực tiếp trong
+   render của OrdersPage (renderTableDetailBody()), nên BẤT KỲ state không
+   liên quan nào đổi ở cấp trên (toast thao tác, tooltip tin nhắn từ 1 bàn
+   khác, connected bật/tắt, cập nhật socket theo thời gian thực...) trong lúc
+   modal này đang mở đều khiến toàn bộ nội dung modal (danh sách món, có thể
+   khá dài) render lại — dù dữ liệu của chính bàn đang xem không đổi. Nhờ
+   React.memo + props ổn định, modal giờ chỉ vẽ lại khi dữ liệu thật sự liên
+   quan (table, selectedPending, confirmLoading, subtotal...) thay đổi. */
+const TableDetailModalBody = React.memo(function TableDetailModalBody({
+  table,
+  subtotal,
+  pendingSubtotal,
+  selectedPending,
+  confirmLoading,
+  onToggleSelectAllPending,
+  onTogglePendingItem,
+  onConfirmItems,
+  onOpenCheckout,
+}) {
+  return (
+    <>
+      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 12, gap: 14 }}>
+        {!!table.since && (
+          <Text className="text-xs text-gray-400">
+            {safeFmtDate(table.since instanceof Date ? table.since.toISOString() : table.since)}
+          </Text>
+        )}
+
+        {/* Món chờ xác nhận */}
+        {table.pendingItems.length > 0 && (
+          <View className="rounded-xl border-2 border-red-200 bg-red-50 p-3" style={{ gap: 10 }}>
+            <View className="flex-row items-center justify-between">
+              <View className="flex-row items-center" style={{ gap: 5 }}>
+                <Bell size={13} color={colors.red[600]} />
+                <Text className="text-xs font-bold text-red-600 uppercase" style={{ letterSpacing: 0.4 }}>
+                  Cần xác nhận
+                </Text>
+              </View>
+              <Pressable onPress={onToggleSelectAllPending}>
+                <Text className="text-[11px] font-semibold text-red-500">
+                  {selectedPending.size === table.pendingItems.length ? "Bỏ chọn tất cả" : "Chọn tất cả"}
+                </Text>
+              </Pressable>
+            </View>
+
+            <View style={{ gap: 6 }}>
+              {table.pendingItems.map((item) => (
+                <Pressable
+                  key={item.id}
+                  onPress={() => onTogglePendingItem(item.id)}
+                  className="flex-row items-center bg-white rounded-lg p-2"
+                  style={{ gap: 12 }}
+                >
+                  <PendingCheckBox checked={selectedPending.has(String(item.id))} />
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Text className="text-xs font-bold text-gray-700" numberOfLines={1}>
+                      {item.foodName}
+                    </Text>
+                    <Text className="text-xs text-gray-400">
+                      {safeFmtVND(item.unitPrice)} × {item.quantity}
+                    </Text>
+                    {!!item.note && <Text className="text-xs text-gray-500 mt-0.5">{item.note}</Text>}
+                  </View>
+                </Pressable>
+              ))}
+            </View>
+
+            <ActionBtn
+              icon={Check}
+              label={`Xác nhận đã chọn (${selectedPending.size}) & gửi bếp`}
+              variant="danger"
+              flex
+              disabled={selectedPending.size === 0}
+              loading={confirmLoading}
+              onPress={() => onConfirmItems(Array.from(selectedPending))}
+            />
+            {table.pendingItems.length > 1 && (
+              <Pressable disabled={confirmLoading} onPress={() => onConfirmItems(table.pendingItems.map((i) => String(i.id)))}>
+                <Text className="text-center text-xs font-semibold text-red-500">
+                  Xác nhận tất cả ({table.pendingItems.length} món)
+                </Text>
+              </Pressable>
+            )}
+          </View>
+        )}
+
+        {/* Món đã xác nhận */}
+        {table.items.length === 0 && table.pendingItems.length === 0 ? (
+          <EmptyState icon={ChefHat} text="Chưa có món nào" subtext="Khách gọi món sẽ hiện tại đây" />
+        ) : (
+          table.items.length > 0 && (
+            <View style={{ gap: 8 }}>
+              <Text className="text-xs text-gray-400 font-bold uppercase" style={{ letterSpacing: 0.4 }}>
+                Đã xác nhận
+              </Text>
+              {table.items.map((item, idx) => (
+                <View key={item.id || idx} className="flex-row items-center bg-gray-50 rounded-xl p-3.5" style={{ gap: 10 }}>
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Text className="text-xs font-bold text-gray-700" numberOfLines={1}>
+                      {item.foodName}
+                    </Text>
+                    <Text className="text-xs text-gray-400">
+                      {safeFmtVND(item.unitPrice)} × {item.quantity}
+                    </Text>
+                    {!!item.note && <Text className="text-[11px] text-gray-400 mt-0.5">{item.note}</Text>}
+                  </View>
+                  {item.status === "ready" ? (
+                    <View className="flex-row items-center bg-green-100 rounded-full px-2 py-1" style={{ gap: 4 }}>
+                      <CheckCircle2 size={12} color={colors.green[600]} />
+                      <Text className="text-[11px] font-bold text-green-600">Sẵn sàng</Text>
+                    </View>
+                  ) : (
+                    <View className="flex-row items-center bg-orange-100 rounded-full px-2 py-1" style={{ gap: 4 }}>
+                      <Flame size={12} color="#ea580c" />
+                      <Text className="text-[11px] font-bold text-orange-600">Đang nấu</Text>
+                    </View>
+                  )}
+                </View>
+              ))}
+            </View>
+          )
+        )}
+      </ScrollView>
+
+      {/* Tổng & Thanh toán */}
+      <View className="p-4 border-t border-gray-100 bg-green-50/50" style={{ gap: 4 }}>
+        <View className="flex-row justify-between items-center">
+          <Text className="text-sm font-bold text-gray-700">Tổng cộng</Text>
+          <Text className="text-xl font-black text-green-600">{safeFmtVND(subtotal)}</Text>
+        </View>
+        {pendingSubtotal > 0 && (
+          <Text className="text-xs text-red-500 text-right">+ {safeFmtVND(pendingSubtotal)} đang chờ xác nhận</Text>
+        )}
+        <ActionBtn
+          icon={Check}
+          label="Thanh toán"
+          variant="primary"
+          disabled={!table.items.length || table.pendingItems.length > 0}
+          onPress={onOpenCheckout}
+        />
+        {table.pendingItems.length > 0 && (
+          <Text className="text-[11px] text-center text-gray-400">Xác nhận hết món đang chờ trước khi thanh toán</Text>
+        )}
+      </View>
+    </>
+  );
+});
+
 /* ════════════════════════════════════════════════════════════
    MAIN COMPONENT
 ════════════════════════════════════════════════════════════ */
@@ -430,7 +621,8 @@ export default function OrdersPage() {
   const [selectedPending, setSelectedPending] = useState(() => new Set());
   const [checkoutOpen, setCheckoutOpen] = useState(false);
   const [payMethod, setPayMethod] = useState("CASH");
-  const [orders, setOrders] = useState([]);
+  // [PERF] `orders` giờ do React Query quản lý (useQuery bên dưới) — không
+  // còn state cục bộ, không còn tự fetch bằng tay nữa.
   // [PERF] Tách "giá trị đang gõ" (histSearchInput, cập nhật ngay để ô nhập
   // không bị giật) khỏi "giá trị dùng để lọc" (histSearch, debounce 350ms) —
   // tránh chạy lại filtHist.filter() trên toàn bộ orders sau mỗi phím gõ.
@@ -440,9 +632,15 @@ export default function OrdersPage() {
   const [paymentFilter, setPaymentFilter] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  // [PERF] Cùng lý do với histSearch — tách input tức thời khỏi giá trị dùng
+  // để lọc, debounce 350ms, tránh filtHist.filter() chạy lại trên toàn bộ
+  // orders ở mỗi ký tự số gõ vào 2 ô này.
+  const [minAmountInput, setMinAmountInput] = useState("");
+  const [maxAmountInput, setMaxAmountInput] = useState("");
   const [minAmount, setMinAmount] = useState("");
   const [maxAmount, setMaxAmount] = useState("");
-  const [checkoutLoading, setCheckoutLoading] = useState(false);
+  // [PERF] `checkoutLoading` giờ lấy từ checkoutMutation.isPending — bỏ state
+  // trùng lặp, tránh 1 nguồn "loading" thứ hai có thể lệch với mutation thật.
   const [confirmLoading, setConfirmLoading] = useState(false);
   const [actionToast, setActionToast] = useState(null); // { type: "success"|"error", msg }
 
@@ -460,6 +658,11 @@ export default function OrdersPage() {
   const chatOpenTableIdRef = useRef(null);
   const actionToastTimer = useRef(null);
 
+  // Lấy QueryClient từ QueryClientProvider ở gốc app (src/config/queryClient.js)
+  // — dùng hook thay vì import thẳng singleton để không phụ thuộc cứng vào
+  // đúng 1 instance module-level, đúng khuyến nghị của React Query.
+  const queryClient = useQueryClient();
+
   useEffect(() => {
     chatOpenTableIdRef.current = chatOpenTableId;
   }, [chatOpenTableId]);
@@ -472,24 +675,33 @@ export default function OrdersPage() {
     actionToastTimer.current = setTimeout(() => setActionToast(null), ACTION_TOAST_DURATION);
   }, []);
 
-  // ─── Lấy lịch sử đơn [GIU-NGUYEN — xem ghi chú quirk ở đầu file] ─────────
-  const fetchOrders = useCallback(async () => {
-    const res = await getData({ url: "/orders" });
-    if (res.success) setOrders(Array.isArray(res.data) ? res.data : []);
-    else console.error("[fetchOrders]", res.message);
-  }, []);
-
-  // [PERF-FIX] Bản gốc dùng `if (orders.length === 0) fetchOrders()` với
-  // dependency là `orders` — nếu quán chưa có đơn nào (data thật sự rỗng),
-  // fetchOrders() trả về mảng [] mới (khác reference với state cũ) khiến
-  // effect này chạy lại, gọi fetchOrders() lần nữa, cứ thế lặp vô hạn.
-  // Sửa: chỉ fetch đúng 1 lần khi mount, dùng ref để chặn gọi lại.
-  const hasFetchedOrdersRef = useRef(false);
-  useEffect(() => {
-    if (hasFetchedOrdersRef.current) return;
-    hasFetchedOrdersRef.current = true;
-    fetchOrders();
-  }, [fetchOrders]);
+  // ─── Lấy lịch sử đơn — chuyển sang React Query ───────────────────────────
+  // [PERF] Thay cho fetchOrders() + useEffect tự quản lý "đã fetch chưa":
+  //  - Không còn nguy cơ lặp vô hạn khi orders rỗng thật (bug cũ đã gặp) —
+  //    React Query theo dõi trạng thái theo query, không theo hình dạng data.
+  //  - Cache nằm ở QueryClient (ngoài component): rời màn Orders rồi quay lại
+  //    trong vòng staleTime (queryClient.js đang set 10s) → hiện dữ liệu cũ
+  //    ngay lập tức, KHÔNG gọi lại API — trước đây `orders` là state cục bộ,
+  //    mất sạch mỗi khi unmount nên quay lại màn hình là fetch lại từ đầu.
+  //  - Có sẵn isLoading/isError/refetch để hiển thị trạng thái tải & cho phép
+  //    thử lại — trước đây lỗi fetch chỉ console.error rồi thôi, người dùng
+  //    kẹt với danh sách rỗng không có cách nào tải lại ngoài reload cả app.
+  //  - vẫn gọi qua getData() của callAPI.js, không tạo axios instance mới,
+  //    không đổi endpoint/contract.
+  const {
+    data: orders = [],
+    isLoading: ordersLoading,
+    isError: ordersError,
+    error: ordersErrorObj,
+    refetch: refetchOrders,
+  } = useQuery({
+    queryKey: ["orders"],
+    queryFn: async () => {
+      const res = await getData({ url: "/orders" });
+      if (!res.success) throw new Error(res.message || "Không tải được lịch sử đơn");
+      return Array.isArray(res.data) ? res.data : [];
+    },
+  });
 
   // ─── Socket setup [GIU-NGUYEN] ──────────────────────────────────────────
   useEffect(() => {
@@ -577,6 +789,16 @@ export default function OrdersPage() {
     const t = setTimeout(() => setHistSearch(histSearchInput), 350);
     return () => clearTimeout(t);
   }, [histSearchInput]);
+
+  // [PERF] Debounce 2 ô lọc theo khoảng tiền — cùng lý do với histSearch.
+  useEffect(() => {
+    const t = setTimeout(() => setMinAmount(minAmountInput), 350);
+    return () => clearTimeout(t);
+  }, [minAmountInput]);
+  useEffect(() => {
+    const t = setTimeout(() => setMaxAmount(maxAmountInput), 350);
+    return () => clearTimeout(t);
+  }, [maxAmountInput]);
 
   // Mở hộp thoại chat → cuộn xuống cuối + focus ô nhập. RN không có
   // scrollTop, dùng ref.scrollToEnd — xem ghi chú platform ở đầu file.
@@ -683,10 +905,28 @@ export default function OrdersPage() {
     setClearChatConfirmOpen(false);
   }, [chatOpenTableId]);
 
-  // ─── Thanh toán [GIU-NGUYEN logic — chỉ đổi fetch() → postData()] ───────
+  // ─── Thanh toán — chuyển sang React Query useMutation ───────────────────
+  // [PERF] mutationFn vẫn gọi qua postData() của callAPI.js — không đổi
+  // endpoint/payload/contract. `checkoutMutation.isPending` thay thế state
+  // `checkoutLoading` cục bộ trước đây, bớt 1 nguồn "loading" phải tự đồng
+  // bộ tay. onSuccess ghi thẳng đơn mới vào cache ["orders"] — y hệt
+  // `setOrders((p) => [saved.order, ...p])` trước đây; không cần
+  // refetch/invalidate vì response của chính POST này đã là dữ liệu chuẩn
+  // từ server (không có gì để lấy mới hơn).
+  const checkoutMutation = useMutation({
+    mutationFn: async (payload) => {
+      const res = await postData({ url: "/orders", data: payload });
+      if (!res.success) throw new Error(res.message || `Lỗi lưu đơn (HTTP ${res.status})`);
+      return res.data; // { order }
+    },
+    onSuccess: (saved) => {
+      queryClient.setQueryData(["orders"], (prev) => [saved.order, ...(prev || [])]);
+    },
+  });
+
+  // ─── Thanh toán [GIU-NGUYEN logic] ───────────────────────────────────────
   const handleCheckout = useCallback(async () => {
     if (!activeTable || !activeTable.items.length) return;
-    setCheckoutLoading(true);
 
     const mergedForOrder = new Map();
     activeTable.items.forEach((i) => {
@@ -707,11 +947,7 @@ export default function OrdersPage() {
     };
 
     try {
-      const res = await postData({ url: "/orders", data: payload });
-      if (!res.success) throw new Error(res.message || `Lỗi lưu đơn (HTTP ${res.status})`);
-      const saved = res.data;
-
-      setOrders((p) => [saved.order, ...p]);
+      await checkoutMutation.mutateAsync(payload);
       socketRef.current?.emit("checkout_table", { tableId: activeTable.id });
 
       setCheckoutOpen(false);
@@ -720,10 +956,8 @@ export default function OrdersPage() {
     } catch (err) {
       console.error("[Checkout]", err);
       showActionToast("error", `Thanh toán thất bại: ${err.message}`);
-    } finally {
-      setCheckoutLoading(false);
     }
-  }, [activeTable, payMethod, showActionToast]);
+  }, [activeTable, payMethod, showActionToast, checkoutMutation.mutateAsync]);
 
   // [PERF] Callback ổn định cho OrderHistoryCard (React.memo) — tránh tạo 1
   // arrow function mới cho mỗi dòng lịch sử ở mỗi lần render danh sách.
@@ -754,138 +988,9 @@ export default function OrdersPage() {
     });
   }, [orders, histSearch, statusFilter, paymentFilter, dateFrom, dateTo, minAmount, maxAmount]);
 
-  // ─── Nội dung chi tiết bàn — dùng chung cho Modal (RN chỉ có 1 biến thể,
-  // xem ghi chú platform ở đầu file) ───────────────────────────────────────
-  const renderTableDetailBody = () => {
-    if (!activeTable) return null;
-    return (
-      <>
-        <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 12, gap: 14 }}>
-          {!!activeTable.since && (
-            <Text className="text-xs text-gray-400">
-              {safeFmtDate(activeTable.since instanceof Date ? activeTable.since.toISOString() : activeTable.since)}
-            </Text>
-          )}
-
-          {/* Món chờ xác nhận */}
-          {activeTable.pendingItems.length > 0 && (
-            <View className="rounded-xl border-2 border-red-200 bg-red-50 p-3" style={{ gap: 10 }}>
-              <View className="flex-row items-center justify-between">
-                <View className="flex-row items-center" style={{ gap: 5 }}>
-                  <Bell size={13} color={colors.red[600]} />
-                  <Text className="text-xs font-bold text-red-600 uppercase" style={{ letterSpacing: 0.4 }}>
-                    Cần xác nhận
-                  </Text>
-                </View>
-                <Pressable onPress={toggleSelectAllPending}>
-                  <Text className="text-[11px] font-semibold text-red-500">
-                    {selectedPending.size === activeTable.pendingItems.length ? "Bỏ chọn tất cả" : "Chọn tất cả"}
-                  </Text>
-                </Pressable>
-              </View>
-
-              <View style={{ gap: 6 }}>
-                {activeTable.pendingItems.map((item) => (
-                  <Pressable
-                    key={item.id}
-                    onPress={() => togglePending(item.id)}
-                    className="flex-row items-center bg-white rounded-lg p-2"
-                    style={{ gap: 12 }}
-                  >
-                    <PendingCheckBox checked={selectedPending.has(String(item.id))} />
-                    <View style={{ flex: 1, minWidth: 0 }}>
-                      <Text className="text-xs font-bold text-gray-700" numberOfLines={1}>
-                        {item.foodName}
-                      </Text>
-                      <Text className="text-xs text-gray-400">
-                        {safeFmtVND(item.unitPrice)} × {item.quantity}
-                      </Text>
-                      {!!item.note && <Text className="text-xs text-gray-500 mt-0.5">{item.note}</Text>}
-                    </View>
-                  </Pressable>
-                ))}
-              </View>
-
-              <ActionBtn
-                icon={Check}
-                label={`Xác nhận đã chọn (${selectedPending.size}) & gửi bếp`}
-                variant="danger"
-                flex
-                disabled={selectedPending.size === 0}
-                loading={confirmLoading}
-                onPress={() => confirmItems(Array.from(selectedPending))}
-              />
-              {activeTable.pendingItems.length > 1 && (
-                <Pressable disabled={confirmLoading} onPress={() => confirmItems(activeTable.pendingItems.map((i) => String(i.id)))}>
-                  <Text className="text-center text-xs font-semibold text-red-500">
-                    Xác nhận tất cả ({activeTable.pendingItems.length} món)
-                  </Text>
-                </Pressable>
-              )}
-            </View>
-          )}
-
-          {/* Món đã xác nhận */}
-          {activeTable.items.length === 0 && activeTable.pendingItems.length === 0 ? (
-            <EmptyState icon={ChefHat} text="Chưa có món nào" subtext="Khách gọi món sẽ hiện tại đây" />
-          ) : (
-            activeTable.items.length > 0 && (
-              <View style={{ gap: 8 }}>
-                <Text className="text-xs text-gray-400 font-bold uppercase" style={{ letterSpacing: 0.4 }}>
-                  Đã xác nhận
-                </Text>
-                {activeTable.items.map((item, idx) => (
-                  <View key={item.id || idx} className="flex-row items-center bg-gray-50 rounded-xl p-3.5" style={{ gap: 10 }}>
-                    <View style={{ flex: 1, minWidth: 0 }}>
-                      <Text className="text-xs font-bold text-gray-700" numberOfLines={1}>
-                        {item.foodName}
-                      </Text>
-                      <Text className="text-xs text-gray-400">
-                        {safeFmtVND(item.unitPrice)} × {item.quantity}
-                      </Text>
-                      {!!item.note && <Text className="text-[11px] text-gray-400 mt-0.5">{item.note}</Text>}
-                    </View>
-                    {item.status === "ready" ? (
-                      <View className="flex-row items-center bg-green-100 rounded-full px-2 py-1" style={{ gap: 4 }}>
-                        <CheckCircle2 size={12} color={colors.green[600]} />
-                        <Text className="text-[11px] font-bold text-green-600">Sẵn sàng</Text>
-                      </View>
-                    ) : (
-                      <View className="flex-row items-center bg-orange-100 rounded-full px-2 py-1" style={{ gap: 4 }}>
-                        <Flame size={12} color="#ea580c" />
-                        <Text className="text-[11px] font-bold text-orange-600">Đang nấu</Text>
-                      </View>
-                    )}
-                  </View>
-                ))}
-              </View>
-            )
-          )}
-        </ScrollView>
-
-        {/* Tổng & Thanh toán */}
-        <View className="p-4 border-t border-gray-100 bg-green-50/50" style={{ gap: 4 }}>
-          <View className="flex-row justify-between items-center">
-            <Text className="text-sm font-bold text-gray-700">Tổng cộng</Text>
-            <Text className="text-xl font-black text-green-600">{safeFmtVND(subtotal)}</Text>
-          </View>
-          {pendingSubtotal > 0 && (
-            <Text className="text-xs text-red-500 text-right">+ {safeFmtVND(pendingSubtotal)} đang chờ xác nhận</Text>
-          )}
-          <ActionBtn
-            icon={Check}
-            label="Thanh toán"
-            variant="primary"
-            disabled={!activeTable.items.length || activeTable.pendingItems.length > 0}
-            onPress={() => setCheckoutOpen(true)}
-          />
-          {activeTable.pendingItems.length > 0 && (
-            <Text className="text-[11px] text-center text-gray-400">Xác nhận hết món đang chờ trước khi thanh toán</Text>
-          )}
-        </View>
-      </>
-    );
-  };
+  // [PERF] Callback ổn định cho nút "Thanh toán" trong TableDetailModalBody —
+  // không đổi tham chiếu qua các render.
+  const openCheckoutModal = useCallback(() => setCheckoutOpen(true), []);
 
   // ──────────────────────────────────────────────────────────────────────
   return (
@@ -1044,8 +1149,8 @@ export default function OrdersPage() {
 
               <View className="flex-row" style={{ gap: 10 }}>
                 <TextInput
-                  value={minAmount}
-                  onChangeText={setMinAmount}
+                  value={minAmountInput}
+                  onChangeText={setMinAmountInput}
                   keyboardType="numeric"
                   placeholder="Tiền từ"
                   placeholderTextColor={colors.gray[300]}
@@ -1053,8 +1158,8 @@ export default function OrdersPage() {
                   style={{ paddingHorizontal: 14, paddingVertical: 11 }}
                 />
                 <TextInput
-                  value={maxAmount}
-                  onChangeText={setMaxAmount}
+                  value={maxAmountInput}
+                  onChangeText={setMaxAmountInput}
                   keyboardType="numeric"
                   placeholder="Tiền đến"
                   placeholderTextColor={colors.gray[300]}
@@ -1065,7 +1170,28 @@ export default function OrdersPage() {
             </View>
 
             <View className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
-              {filtHist.length === 0 ? (
+              {ordersLoading ? (
+                <View className="items-center py-14 px-6">
+                  <ActivityIndicator size="small" color={colors.green[500]} />
+                  <Text className="text-sm text-gray-400 font-bold mt-3">Đang tải lịch sử đơn…</Text>
+                </View>
+              ) : ordersError ? (
+                <View className="items-center py-14 px-6">
+                  <AlertCircle size={32} color={colors.red[300]} style={{ opacity: 0.8 }} />
+                  <Text className="text-sm text-gray-400 font-bold mt-2 text-center">Không tải được lịch sử đơn</Text>
+                  {!!ordersErrorObj?.message && (
+                    <Text className="text-xs text-gray-300 mt-1 text-center">{ordersErrorObj.message}</Text>
+                  )}
+                  <Pressable
+                    onPress={() => refetchOrders()}
+                    className="flex-row items-center bg-green-500 rounded-xl px-4 py-2 mt-4"
+                    style={{ gap: 6 }}
+                  >
+                    <RefreshCw size={13} color={colors.white} />
+                    <Text className="text-white text-xs font-bold">Thử lại</Text>
+                  </Pressable>
+                </View>
+              ) : filtHist.length === 0 ? (
                 <EmptyState icon={Search} text="Không có đơn nào phù hợp" />
               ) : (
                 filtHist.slice(0, 50).map((ord, idx) => (
@@ -1091,7 +1217,17 @@ export default function OrdersPage() {
               title={[activeTable.name, activeTable.guestName, activeTable.guestPhone].filter(Boolean).join(" - ")}
               onClose={() => setSelectedId(null)}
             />
-            {renderTableDetailBody()}
+            <TableDetailModalBody
+              table={activeTable}
+              subtotal={subtotal}
+              pendingSubtotal={pendingSubtotal}
+              selectedPending={selectedPending}
+              confirmLoading={confirmLoading}
+              onToggleSelectAllPending={toggleSelectAllPending}
+              onTogglePendingItem={togglePending}
+              onConfirmItems={confirmItems}
+              onOpenCheckout={openCheckoutModal}
+            />
           </View>
         </ModalOverlay>
       )}
@@ -1140,11 +1276,11 @@ export default function OrdersPage() {
                 <ActionBtn label="Hủy" variant="secondary" flex onPress={() => setCheckoutOpen(false)} />
                 <ActionBtn
                   icon={Check}
-                  label={checkoutLoading ? "Đang xử lý…" : "Xác nhận thanh toán"}
+                  label={checkoutMutation.isPending ? "Đang xử lý…" : "Xác nhận thanh toán"}
                   variant="primary"
                   flex
-                  loading={checkoutLoading}
-                  disabled={checkoutLoading}
+                  loading={checkoutMutation.isPending}
+                  disabled={checkoutMutation.isPending}
                   onPress={handleCheckout}
                 />
               </View>
@@ -1167,29 +1303,7 @@ export default function OrdersPage() {
               </View>
             )}
             <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
-              <ScrollView ref={chatScrollRef} style={{ flex: 1 }} contentContainerStyle={{ padding: 12, gap: 8 }}>
-                {(!chatTable.messages || chatTable.messages.length === 0) ? (
-                  <Text className="text-gray-400 text-xs text-center" style={{ paddingVertical: 40 }}>
-                    Chưa có tin nhắn nào với {chatTable.name}
-                  </Text>
-                ) : (
-                  chatTable.messages.map((m, idx) => (
-                    <View key={m.id || idx} style={{ flexDirection: "row", justifyContent: m.from === "admin" ? "flex-end" : "flex-start" }}>
-                      <View
-                        style={{ maxWidth: "75%" }}
-                        className={`rounded-2xl px-3.5 py-2.5 ${m.from === "admin" ? "bg-green-500 rounded-br-md" : "bg-gray-100 rounded-bl-md"}`}
-                      >
-                        <Text className={`text-sm ${m.from === "admin" ? "text-white" : "text-gray-700"}`} style={{ lineHeight: 20 }}>
-                          {m.text}
-                        </Text>
-                        <Text className={`text-[10px] mt-1 ${m.from === "admin" ? "text-green-100" : "text-gray-400"}`}>
-                          {safeFmtDate(m.at instanceof Date ? m.at.toISOString() : m.at)}
-                        </Text>
-                      </View>
-                    </View>
-                  ))
-                )}
-              </ScrollView>
+              <ChatMessagesList ref={chatScrollRef} messages={chatTable.messages} tableName={chatTable.name} />
               <View className="flex-row items-center border-t border-gray-100" style={{ gap: 8, padding: 12 }}>
                 <TextInput
                   ref={chatInputRef}

@@ -1,9 +1,25 @@
 // src/zustand/useFoodZustand.js
-// [GIU-NGUYEN] Copy nguyên vẹn 100% state + actions từ bản web. Đã rà soát
-// kỹ (2.4) — không có API DOM-only nào lọt vào file này, toàn bộ chỉ gọi
-// FoodService (đã tự adapt phần platform-specific ở service/FoodService.js).
+// [GIU-NGUYEN] Toàn bộ business logic (staged add/update/remove, save-all,
+// discard, immediate mutations...) giữ nguyên 100% hành vi so với bản gốc.
+//
+// [RQ-INTEGRATION] Tương tự useFruitZustand.js — xem chú thích chi tiết ở đó.
+// Tóm tắt: refreshFoods() giờ đọc qua queryClient.fetchQuery (cache theo
+// staleTime dùng chung + dedupe request trùng), saveAllChanges() invalidate
+// cache "foods" trước khi refetch để không dính cache cũ sau khi lưu,
+// refreshCosts() ghi thẳng data mới vào cache bằng setQueryData để tránh 1
+// lần fetch thừa. Toàn bộ tên field/action export ra giữ NGUYÊN SI — App.js
+// và các màn hình khác đang dùng store này không cần sửa gì.
+//
+// Guard `if (get().foods.length > 0) return;` trong getFoods() được GIỮ
+// NGUYÊN như bản gốc (không thay bằng "luôn gọi refreshFoods rồi để
+// react-query tự quyết định fresh/stale") vì refreshFoods() reset
+// pendingChanges mỗi lần chạy — bỏ guard sẽ vô tình xoá draft chưa lưu của
+// người dùng mỗi khi màn hình mount lại.
 import { create } from "zustand";
 import FoodService from "../service/FoodService";
+import { queryClient } from "../config/queryClient";
+
+const FOODS_QUERY_KEY = ["foods"];
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
 const replaceById = (arr, updated) => arr.map((f) => (f._id === updated._id ? updated : f));
@@ -31,7 +47,10 @@ const useFoodZustand = create((set, get) => ({
   refreshFoods: async () => {
     set({ loading: true, error: null });
     try {
-      const foods = await FoodService.getAllFoods();
+      const foods = await queryClient.fetchQuery({
+        queryKey: FOODS_QUERY_KEY,
+        queryFn: () => FoodService.getAllFoods(),
+      });
       set({ foods, loading: false, pendingChanges: new Map() });
     } catch (err) {
       set({ error: err.message, loading: false });
@@ -103,6 +122,9 @@ const useFoodZustand = create((set, get) => ({
     const results = await Promise.allSettled(tasks);
     const failed = results.filter((r) => r.status === "rejected");
 
+    // [RQ-INTEGRATION] Đánh dấu cache "foods" đã cũ để refreshFoods() ngay
+    // sau đây bắt buộc gọi lại server, không trả nhầm bản cache từ trước khi lưu.
+    await queryClient.invalidateQueries({ queryKey: FOODS_QUERY_KEY });
     await get().refreshFoods();
 
     if (failed.length > 0) {
@@ -113,6 +135,9 @@ const useFoodZustand = create((set, get) => ({
     }
   },
 
+  // [RQ-INTEGRATION] Không cần invalidate: huỷ thay đổi chỉ bỏ draft cục bộ,
+  // dữ liệu server chưa hề đổi nên dùng lại cache hiện có (nếu còn mới) là
+  // đúng và nhanh hơn so với luôn phải gọi lại server.
   discardChanges: async () => {
     await get().refreshFoods();
   },
@@ -123,6 +148,7 @@ const useFoodZustand = create((set, get) => ({
     try {
       const newFood = await FoodService.createFood(food, imageFile);
       set((state) => ({ foods: [newFood, ...state.foods], loading: false }));
+      queryClient.invalidateQueries({ queryKey: FOODS_QUERY_KEY });
       return newFood;
     } catch (err) {
       set({ error: err.message, loading: false });
@@ -136,6 +162,7 @@ const useFoodZustand = create((set, get) => ({
     try {
       const updated = await FoodService.updateFood(food, imageFile);
       set((state) => ({ foods: replaceById(state.foods, updated) }));
+      queryClient.invalidateQueries({ queryKey: FOODS_QUERY_KEY });
       return updated;
     } catch (err) {
       set({ foods: prev, error: err.message });
@@ -148,6 +175,7 @@ const useFoodZustand = create((set, get) => ({
     set((state) => ({ foods: state.foods.filter((f) => f._id !== id) }));
     try {
       await FoodService.deleteFood(id);
+      queryClient.invalidateQueries({ queryKey: FOODS_QUERY_KEY });
     } catch (err) {
       set({ foods: prev, error: err.message });
       throw err;
@@ -159,6 +187,10 @@ const useFoodZustand = create((set, get) => ({
     try {
       const { updatedCount, foods } = await FoodService.refreshIngredientPrices();
       set({ foods, loading: false });
+      // [RQ-INTEGRATION] Đã có data mới nhất trong tay ngay tại đây — ghi
+      // thẳng vào cache bằng setQueryData thay vì invalidate rồi phải fetch
+      // lại, tránh 1 network request thừa cho lần đọc "foods" tiếp theo.
+      queryClient.setQueryData(FOODS_QUERY_KEY, foods);
       return { updatedCount };
     } catch (err) {
       set({ error: err.message, loading: false });

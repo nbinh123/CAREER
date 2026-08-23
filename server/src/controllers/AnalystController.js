@@ -321,7 +321,7 @@ class AnalystController {
             res.status(500).json({ success: false, message: err.message });
         }
     }
-
+    
 
     // ── 5. Top món bán chạy – pie chart (chart 9) ────────────────────────────
     // GET /api/analyst/top-dishes?period=day|week
@@ -746,6 +746,44 @@ class AnalystController {
         }
     }
 
+    async getFoodWeightsPaginated(req, res) {
+        try {
+            const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+            // Chặn limit quá lớn để tránh client vô tình (hoặc cố ý) kéo hết bảng food về 1 lần.
+            const limit = Math.min(50, Math.max(1, parseInt(req.query.limit, 10) || 5));
+
+            const total = await Food.countDocuments({});
+
+            // GHI CHÚ: nếu bảng food lớn, nên thêm index cho aiTrainingWeight
+            // (sort giảm dần) trong FoodModel để tránh collection scan mỗi lần phân trang.
+            const foods = await Food.find({})
+                .sort({ aiTrainingWeight: -1 })
+                .skip((page - 1) * limit)
+                .limit(limit)
+                .lean();
+
+            const weights = foods.map(food => ({
+                foodId: food._id,
+                foodName: food.foodName,
+                aiTrainingWeight: food.aiTrainingWeight ?? 0
+            }));
+
+            return res.json({
+                page,
+                limit,
+                total,
+                hasMore: page * limit < total,
+                weights
+            });
+
+        } catch (error) {
+            console.error("Error getting paginated food weights:", error);
+            return res.status(500).json({
+                message: error.message || "Internal server error"
+            });
+        }
+    }
+
     // =====================================================
     // 2 & 3. BIÊN LỢI NHUẬN TƯƠNG ĐỐI TỪNG MÓN
     //         + BIÊN LỢI NHUẬN TỔNG HỢP (%)
@@ -897,83 +935,6 @@ class AnalystController {
         } catch (error) {
             console.error("Error getting avg bill value:", error);
             return res.status(500).json({
-                message: error.message || "Internal server error"
-            });
-        }
-    }
-
-    async getFoodWeightsPaginated(req, res) {
-        try {
-            const days = parseInt(req.query.days) || 30;
-            const page = Math.max(parseInt(req.query.page) || 1, 1);
-            const limit = Math.min(
-                Math.max(parseInt(req.query.limit) || 5, 1),
-                100
-            );
-
-            if (!_validateDays(days)) {
-                return res.status(400).json({
-                    message: "days must be one of: 7, 14, 21, 30"
-                });
-            }
-
-            // -------------------------------------------------
-            // Tính vị trí bắt đầu của trang
-            // page 1, limit 5 -> skip 0
-            // page 2, limit 5 -> skip 5
-            // page 3, limit 5 -> skip 10
-            // -------------------------------------------------
-            const skip = (page - 1) * limit;
-
-            // -------------------------------------------------
-            // Lấy tổng số món
-            // -------------------------------------------------
-            const total = await Food.countDocuments();
-
-            // -------------------------------------------------
-            // Lấy đúng dữ liệu của trang hiện tại
-            //
-            // Sort giảm dần theo aiTrainingWeight trước,
-            // sau đó dùng _id để đảm bảo thứ tự ổn định
-            // khi nhiều món có cùng weight.
-            // -------------------------------------------------
-            const foods = await Food.find({})
-                .sort({
-                    aiTrainingWeight: -1,
-                    _id: 1
-                })
-                .skip(skip)
-                .limit(limit)
-                .select("_id foodName aiTrainingWeight")
-                .lean();
-
-            // -------------------------------------------------
-            // Còn trang tiếp theo hay không?
-            // -------------------------------------------------
-            const hasMore = skip + foods.length < total;
-
-            // -------------------------------------------------
-            // Format đúng với frontend hiện tại
-            // -------------------------------------------------
-            return res.json({
-                success: true,
-                data: {
-                    weights: foods.map(food => ({
-                        foodId: food._id,
-                        foodName: food.foodName,
-                        aiTrainingWeight: food.aiTrainingWeight ?? 0
-                    })),
-                    page,
-                    limit,
-                    hasMore
-                }
-            });
-
-        } catch (error) {
-            console.error("Error getting paginated food weights:", error);
-
-            return res.status(500).json({
-                success: false,
                 message: error.message || "Internal server error"
             });
         }

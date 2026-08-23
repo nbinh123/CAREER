@@ -1,7 +1,33 @@
 // src/zustand/useFruitZustand.js
-// [GIU-NGUYEN] Copy nguyên vẹn 100% từ bản web — không có API DOM-only.
+// [GIU-NGUYEN] Toàn bộ business logic (staged add/update/remove, save-all,
+// discard, immediate mutations...) giữ nguyên 100% hành vi so với bản gốc.
+//
+// [RQ-INTEGRATION] Phần thay đổi DUY NHẤT: lớp đọc dữ liệu server
+// (refreshFruits) giờ đi qua `queryClient.fetchQuery` của @tanstack/react-query
+// thay vì gọi thẳng FruitService. Lợi ích:
+//   - Cache theo `staleTime` cấu hình chung ở queryClient.js (10s) — nếu data
+//     còn mới, fetchQuery trả ngay từ cache, không tốn network request.
+//   - Dedupe: nếu 2 nơi trong app cùng gọi refreshFruits gần như đồng thời,
+//     react-query gộp lại thành 1 request duy nhất thay vì bắn trùng.
+//   - saveAllChanges() invalidate cache trước khi refetch để đảm bảo luôn lấy
+//     dữ liệu MỚI NHẤT từ server sau khi lưu (không dính cache cũ).
+// Toàn bộ tên field/action export ra (fruits, loading, error, getFruits,
+// stageAddFruit, saveAllChanges, pendingChanges, clearError...) giữ NGUYÊN
+// SI — không cần sửa bất kỳ màn hình nào đang dùng store này (FruitPage.js,
+// App.js...).
+//
+// Lưu ý: guard `if (get().fruits.length > 0) return;` trong getFruits() vẫn
+// được GIỮ NGUYÊN như bản gốc — không thay bằng việc luôn gọi refreshFruits()
+// và trông chờ react-query tự quyết định fresh/stale. Lý do: refreshFruits()
+// reset pendingChanges về Map rỗng mỗi lần chạy; nếu bỏ guard, mỗi lần
+// FruitPage.js mount lại sẽ vô tình xoá sạch các thay đổi đang staged chưa
+// lưu của người dùng. Cache của react-query chỉ có tác dụng ở những lần
+// refreshFruits() THỰC SỰ chạy (lần đầu, discardChanges, sau saveAllChanges).
 import { create } from "zustand";
 import FruitService from "../service/FruitService";
+import { queryClient } from "../config/queryClient";
+
+const FRUITS_QUERY_KEY = ["fruits"];
 
 const replaceById = (arr, updated) => arr.map((f) => (f._id === updated._id ? updated : f));
 const pendingKey = (type, id) => `${type}:${id}`;
@@ -22,7 +48,10 @@ const useFruitZustand = create((set, get) => ({
   refreshFruits: async () => {
     set({ loading: true, error: null });
     try {
-      const raw = await FruitService.getAllFruits();
+      const raw = await queryClient.fetchQuery({
+        queryKey: FRUITS_QUERY_KEY,
+        queryFn: () => FruitService.getAllFruits(),
+      });
       const fruits = Array.isArray(raw) ? raw : [];
       if (!Array.isArray(raw)) {
         console.error("[useFruitZustand] /api/fruits không trả về mảng, nhận được:", raw);
@@ -96,6 +125,9 @@ const useFruitZustand = create((set, get) => ({
     const results = await Promise.allSettled(tasks);
     const failed = results.filter((r) => r.status === "rejected");
 
+    // [RQ-INTEGRATION] Đánh dấu cache "fruits" đã cũ để refreshFruits() ngay
+    // sau đây bắt buộc gọi lại server, không trả nhầm bản cache từ trước khi lưu.
+    await queryClient.invalidateQueries({ queryKey: FRUITS_QUERY_KEY });
     await get().refreshFruits();
 
     if (failed.length > 0) {
@@ -106,6 +138,9 @@ const useFruitZustand = create((set, get) => ({
     }
   },
 
+  // [RQ-INTEGRATION] Không cần invalidate ở đây: huỷ thay đổi chỉ bỏ draft cục
+  // bộ, dữ liệu server chưa hề đổi nên dùng lại cache hiện có (nếu còn mới)
+  // là đúng và nhanh hơn hẳn so với luôn phải gọi lại server.
   discardChanges: async () => {
     await get().refreshFruits();
   },
@@ -115,6 +150,7 @@ const useFruitZustand = create((set, get) => ({
     try {
       const newFruit = await FruitService.createFruit(fruit, imageFile);
       set((state) => ({ fruits: [newFruit, ...state.fruits], loading: false }));
+      queryClient.invalidateQueries({ queryKey: FRUITS_QUERY_KEY });
       return newFruit;
     } catch (err) {
       set({ error: err.message, loading: false });
@@ -128,6 +164,7 @@ const useFruitZustand = create((set, get) => ({
     try {
       const updated = await FruitService.updateFruit(fruit, imageFile);
       set((state) => ({ fruits: replaceById(state.fruits, updated) }));
+      queryClient.invalidateQueries({ queryKey: FRUITS_QUERY_KEY });
       return updated;
     } catch (err) {
       set({ fruits: prev, error: err.message });
@@ -140,6 +177,7 @@ const useFruitZustand = create((set, get) => ({
     set((state) => ({ fruits: state.fruits.filter((f) => f._id !== id) }));
     try {
       await FruitService.deleteFruit(id);
+      queryClient.invalidateQueries({ queryKey: FRUITS_QUERY_KEY });
     } catch (err) {
       set({ fruits: prev, error: err.message });
       throw err;

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
     View,
     Text,
@@ -12,6 +12,7 @@ import {
     Platform,
 } from "react-native";
 import DateTimePicker from "@react-native-community/datetimepicker";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
     Plus,
     Search,
@@ -120,6 +121,45 @@ const formatDateVN = (isoOrDate, options = { day: "2-digit", month: "2-digit" })
 // lùi 1 ngày ở múi giờ VN (+7), đúng cách StoragePage.js đã xử lý.
 const pad2 = (n) => String(n).padStart(2, "0");
 const toISODateLocal = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+
+/* ════════════════════════════════════════════════════════════
+   REACT-QUERY: query functions thuần
+   Đặt ở module scope, không phụ thuộc bất kỳ closure nào của
+   component — chỉ nhận giá trị qua queryKey. Nhờ vậy react-query
+   tự quản lý cache/dedupe theo key, không cần workaround giữ
+   closure ổn định (searchRef/statsRangeRef của bản trước đã bỏ).
+════════════════════════════════════════════════════════════ */
+const fetchVoucherStats = async ({ queryKey }) => {
+    const [, range] = queryKey;
+    const rangeParam = range === "all" ? "" : `?range=${range}`;
+    try {
+        const res = await getData({ url: `/vouchers/stats${rangeParam}` });
+        const data = res?.data?.data;
+        return data && typeof data === "object" ? data : {};
+    } catch (err) {
+        console.error("Failed to fetch voucher stats:", err);
+        throw err; // để react-query đánh dấu isError, tự retry theo defaultOptions của queryClient
+    }
+};
+
+const fetchVouchersList = async ({ queryKey }) => {
+    const [, searchTerm] = queryKey;
+    const q = (searchTerm || "").trim();
+    const query = q ? `?search=${encodeURIComponent(q)}` : "";
+    try {
+        const res = await getData({ url: `/vouchers${query}` });
+        // Chấp nhận cả 2 dạng: res.data là mảng trực tiếp, HOẶC res.data.data
+        // là mảng (bọc trong {success,data}) — xem ghi chú ở bản gốc.
+        return Array.isArray(res?.data)
+            ? res.data
+            : Array.isArray(res?.data?.data)
+                ? res.data.data
+                : [];
+    } catch (err) {
+        console.error("Failed to fetch vouchers:", err);
+        throw err;
+    }
+};
 
 /* ════════════════════════════════════════════════════════════
    UI HELPERS cục bộ (không có Button/Modal/FormInput dùng chung
@@ -354,19 +394,25 @@ const Row = React.memo(function Row({ label, value }) {
     );
 });
 
+/* Viền phân cách giữa các card — thay cho việc VoucherCard tự tính "có
+   phải card cuối" (isLast). FlatList tự động KHÔNG render separator sau
+   item cuối, nên renderItem không còn phải phụ thuộc độ dài danh sách
+   nữa — đây chính là nguyên nhân khiến việc đổi status filter trước đây
+   ép toàn bộ card render lại (identity của renderItem đổi theo length). */
+const ItemSeparator = React.memo(function ItemSeparator() {
+    return <View style={{ height: 1, backgroundColor: colors.gray[50] }} />;
+});
+
 /* 1 voucher = 1 card (thay cho 1 hàng <tr> ở bản gốc). KHÔNG bớt field nào
    so với bảng 9 cột gốc — dòng 3 gộp "Loại giảm" + "Giá trị" lại vì cùng
    diễn đạt 1 ý ("Giảm 10%" / "Giảm 20.000₫"). Bọc React.memo vì đây là
-   item của danh sách (nay là FlatList renderItem) — tránh re-render mọi
-   card khi chỉ 1 card thay đổi hoặc khi component cha re-render vì lý do
-   khác (gõ search, mở modal...). */
-const VoucherCard = React.memo(function VoucherCard({ voucher, isLast, onView, onEdit, onToggleActive }) {
+   item của FlatList — tránh re-render mọi card khi chỉ 1 card thay đổi
+   hoặc khi component cha re-render vì lý do khác (gõ search, đổi filter,
+   mở modal...). */
+const VoucherCard = React.memo(function VoucherCard({ voucher, onView, onEdit, onToggleActive }) {
     const meta = getStatusMeta(voucher.status);
     return (
-        <View
-            style={{ borderBottomWidth: isLast ? 0 : 1, borderBottomColor: colors.gray[50] }}
-            className="px-4 py-3.5"
-        >
+        <View className="px-4 py-3.5">
             <View className="flex-row items-start justify-between" style={{ gap: 8 }}>
                 <View style={{ flex: 1, minWidth: 0 }}>
                     <View className="flex-row items-center flex-wrap" style={{ gap: 6 }}>
@@ -413,31 +459,142 @@ const VoucherCard = React.memo(function VoucherCard({ voucher, isLast, onView, o
     );
 });
 
+/* ── Các mảnh của header, tách theo đúng phạm vi state liên quan ────
+   Trước đây toàn bộ header (title, 6 StatCard, ô search, filter chip)
+   nằm trong 1 khối useMemo có statusFilter là dependency → bấm 1 chip
+   filter kéo theo re-render cả 6 StatCard dù chúng không đổi. Tách
+   riêng theo đúng "ai phụ thuộc cái gì" để mỗi phần chỉ re-render khi
+   dữ liệu của chính nó đổi. */
+const HeaderTop = React.memo(function HeaderTop({ todayLabel, onCreate }) {
+    return (
+        <View className="flex-row items-start justify-between" style={{ gap: 12 }}>
+            <View>
+                <Text className="text-2xl font-black text-green-900">Quản lý Voucher</Text>
+                <Text className="text-gray-500 text-sm mt-0.5">{todayLabel}</Text>
+            </View>
+            <Pressable
+                onPress={onCreate}
+                className="flex-row items-center gap-1.5 bg-green-600 rounded-xl"
+                style={{ paddingHorizontal: 16, paddingVertical: 10 }}
+            >
+                <Plus size={16} color={colors.white} />
+                <Text className="text-white text-sm font-bold">Tạo voucher</Text>
+            </Pressable>
+        </View>
+    );
+});
+
+// Chỉ phụ thuộc dữ liệu THỐNG KÊ — không biết gì về statusFilter/search,
+// nên bấm status filter hay gõ search không làm nó (và 6 StatCard bên
+// trong) re-render.
+const StatsSection = React.memo(function StatsSection({
+    statsRange, onRangeChange, statsError, statsLoading, stats, rangeSubLabel,
+}) {
+    return (
+        <View style={{ gap: 8 }}>
+            <Text className="text-xs text-gray-500 font-semibold">Thống kê giảm giá:</Text>
+            <View className="flex-row flex-wrap" style={{ gap: 8 }}>
+                {RANGE_OPTIONS.map((opt) => (
+                    <Pressable
+                        key={opt.value}
+                        onPress={() => onRangeChange(opt.value)}
+                        className={`rounded-lg ${statsRange === opt.value ? "bg-green-600" : "bg-white border border-gray-100"}`}
+                        style={{ paddingHorizontal: 12, paddingVertical: 6 }}
+                    >
+                        <Text className={`text-xs font-bold ${statsRange === opt.value ? "text-white" : "text-gray-500"}`}>
+                            {opt.label}
+                        </Text>
+                    </Pressable>
+                ))}
+            </View>
+            {!!statsError && (
+                <View className="flex-row items-center" style={{ gap: 5 }}>
+                    <AlertTriangle size={13} color="#e11d48" />
+                    <Text className="text-xs text-rose-600 font-semibold">{statsError}</Text>
+                </View>
+            )}
+            <View className="flex-row flex-wrap" style={{ gap: 12 }}>
+                <StatCard icon={Ticket} label="Tổng voucher" value={statsLoading ? "…" : stats?.totalVouchers ?? 0} sub="Toàn bộ mã đang có" color="blue" />
+                <StatCard icon={CheckCircle2} label="Đang hoạt động" value={statsLoading ? "…" : stats?.active ?? 0} sub="Khách có thể dùng ngay" color="green" />
+                <StatCard icon={Hourglass} label="Sắp hết hạn" value={statsLoading ? "…" : stats?.expiringSoon ?? 0} sub="Còn ≤ 3 ngày" color="amber" />
+                <StatCard icon={Ban} label="Đã hết hạn" value={statsLoading ? "…" : stats?.expired ?? 0} sub="Hết hạn hoặc đã tắt" color="rose" />
+                <StatCard icon={DollarSign} label="Tổng tiền đã giảm" value={statsLoading ? "…" : fmtVND(stats?.totalDiscountAmount)} sub={rangeSubLabel} color="green" />
+                <StatCard icon={BarChart3} label="Số lượt sử dụng" value={statsLoading ? "…" : stats?.totalUses ?? 0} sub={rangeSubLabel} color="blue" />
+            </View>
+        </View>
+    );
+});
+
+// Đây là phần DUY NHẤT thực sự cần re-render khi bấm status filter — nhẹ
+// (1 ô input + vài Pressable nhỏ), không kéo theo StatCard nào.
+const ListToolbar = React.memo(function ListToolbar({
+    search, onSearchChange, statusFilter, onStatusFilterChange, listError,
+}) {
+    return (
+        <View className="bg-white rounded-2xl border border-gray-100" style={{ padding: 16, gap: 12 }}>
+            <Text className="font-bold text-gray-700">Danh sách voucher</Text>
+
+            <View style={{ position: "relative", justifyContent: "center" }}>
+                <View style={{ position: "absolute", left: 13, zIndex: 1 }}>
+                    <Search size={15} color={colors.gray[400]} />
+                </View>
+                <TextInput
+                    value={search}
+                    onChangeText={onSearchChange}
+                    placeholder="Tìm theo mã voucher..."
+                    placeholderTextColor={colors.gray[300]}
+                    className="bg-white border border-gray-100 rounded-xl text-sm text-gray-800"
+                    style={{ paddingLeft: 36, paddingRight: 14, paddingVertical: 10 }}
+                />
+            </View>
+
+            <View className="flex-row flex-wrap" style={{ gap: 8 }}>
+                {STATUS_FILTERS.map((f) => (
+                    <Pressable
+                        key={f.value}
+                        onPress={() => onStatusFilterChange(f.value)}
+                        className={`rounded-lg ${statusFilter === f.value ? "bg-green-600" : "bg-green-50"}`}
+                        style={{ paddingHorizontal: 12, paddingVertical: 6 }}
+                    >
+                        <Text className={`text-xs font-bold ${statusFilter === f.value ? "text-white" : "text-gray-500"}`}>
+                            {f.label}
+                        </Text>
+                    </Pressable>
+                ))}
+            </View>
+
+            {!!listError && (
+                <View className="flex-row items-center" style={{ gap: 5 }}>
+                    <AlertTriangle size={13} color="#e11d48" />
+                    <Text className="text-xs text-rose-600 font-semibold">{listError}</Text>
+                </View>
+            )}
+        </View>
+    );
+});
+
 /* ════════════════════════════════════════════════════════════
    MAIN COMPONENT
 ════════════════════════════════════════════════════════════ */
 export default function VoucherPage() {
-    const [stats, setStats] = useState({});
     const [statsRange, setStatsRange] = useState("all");
-    const [statsLoading, setStatsLoading] = useState(true);
-    const [statsError, setStatsError] = useState(null);
 
-    const [vouchers, setVouchers] = useState([]);
-    const [listLoading, setListLoading] = useState(true);
-    const [listError, setListError] = useState(null);
     const [search, setSearch] = useState("");
+    const [debouncedSearch, setDebouncedSearch] = useState("");
     const [statusFilter, setStatusFilter] = useState("ALL");
 
     const [formOpen, setFormOpen] = useState(false);
     const [editingVoucher, setEditingVoucher] = useState(null); // null = đang tạo mới
     const [form, setForm] = useState(emptyForm);
     const [formErrors, setFormErrors] = useState({});
-    const [submitting, setSubmitting] = useState(false);
     const [pickerMode, setPickerMode] = useState(null); // null | "categories" | "foods"
 
     const [viewingVoucher, setViewingVoucher] = useState(null);
 
     // ── Dữ liệu món ăn / danh mục cho phần "áp dụng cho" trong form ──
+    // Vẫn dùng Zustand như bản gốc — đây là store dùng chung nhiều trang
+    // (GLOBAL ARCHITECTURE), không migrate sang react-query trong phạm vi
+    // tối ưu VoucherPage này.
     const foods = useFoodZustand((s) => s.foods);
     const foodsLoading = useFoodZustand((s) => s.loading);
     const getFoods = useFoodZustand((s) => s.getFoods);
@@ -479,85 +636,83 @@ export default function VoucherPage() {
         [foodOptions]
     );
 
-    /* ── Tối ưu: giữ fetchStats/fetchVouchers ổn định identity ──────
-       Đọc statsRange/search qua ref thay vì đóng gói trực tiếp trong
-       closure, để các hàm này không cần nằm trong dependency array
-       của bất kỳ useCallback/useEffect nào khác (handleToggleActive,
-       handleSubmit...) — tránh việc các hàm đó bị tạo lại theo
-       statsRange/search dù không thực sự liên quan. */
-    const searchRef = useRef(search);
+    // ── Debounce ô tìm kiếm — giữ nguyên 350ms như bản gốc. Khác biệt: giờ
+    // chỉ cập nhật debouncedSearch, để nó trở thành 1 phần của queryKey bên
+    // dưới; react-query tự lo phần gọi API + cache + huỷ request cũ khi
+    // key đổi (loại bỏ hoàn toàn race condition tiềm ẩn của cách cũ).
     useEffect(() => {
-        searchRef.current = search;
+        const timer = setTimeout(() => setDebouncedSearch(search), 350);
+        return () => clearTimeout(timer);
     }, [search]);
 
-    const statsRangeRef = useRef(statsRange);
-    useEffect(() => {
-        statsRangeRef.current = statsRange;
-    }, [statsRange]);
+    // ── REACT-QUERY: thống kê voucher ────────────────────────────────
+    // placeholderData giữ số liệu cũ khi đổi statsRange, tránh nháy "…"
+    // đè lên 6 stat card trong lúc chờ số liệu mới — đây chính là 1 phần
+    // nguyên nhân gây cảm giác "khựng" khi thao tác nhanh trên trang này.
+    const {
+        data: stats = {},
+        isLoading: statsLoading,
+        isError: statsIsError,
+    } = useQuery({
+        queryKey: ["voucherStats", statsRange],
+        queryFn: fetchVoucherStats,
+        placeholderData: (prev) => prev,
+    });
+    const statsError = statsIsError ? "Không tải được thống kê voucher" : null;
 
-    // ── Fetch thống kê ──────────────────────────────────────────────
-    const fetchStats = useCallback(() => {
-        setStatsLoading(true);
-        setStatsError(null);
-        const r = statsRangeRef.current;
-        const rangeParam = r === "all" ? "" : `?range=${r}`;
-        getData({ url: `/vouchers/stats${rangeParam}` })
-            .then((res) => {
-                // Phòng trường hợp response thiếu field / sai shape (res.data hoặc
-                // res.data.data không tồn tại) — không để crash khi setState.
-                const data = res?.data?.data;
-                setStats(data && typeof data === "object" ? data : {});
-            })
-            .catch((err) => {
-                console.error("Failed to fetch voucher stats:", err);
-                setStats({});
-                setStatsError("Không tải được thống kê voucher");
-            })
-            .finally(() => setStatsLoading(false));
-    }, []);
-
-    useEffect(() => {
-        fetchStats();
-    }, [statsRange, fetchStats]);
-
-    // ── Fetch danh sách ─────────────────────────────────────────────
-    const fetchVouchers = useCallback(() => {
-        setListLoading(true);
-        setListError(null);
-        const q = searchRef.current.trim();
-        const query = q ? `?search=${encodeURIComponent(q)}` : "";
-        getData({ url: `/vouchers${query}` })
-            .then((res) => {
-                // Chấp nhận cả 2 dạng: res.data là mảng trực tiếp, HOẶC res.data.data
-                // là mảng (bọc trong {success,data}) — xem ghi chú ở bản gốc.
-                const list = Array.isArray(res?.data)
-                    ? res.data
-                    : Array.isArray(res?.data?.data)
-                        ? res.data.data
-                        : [];
-                setVouchers(list);
-            })
-            .catch((err) => {
-                console.error("Failed to fetch vouchers:", err);
-                setVouchers([]);
-                setListError("Không tải được danh sách voucher");
-            })
-            .finally(() => setListLoading(false));
-    }, []);
-
-    useEffect(() => {
-        const timer = setTimeout(fetchVouchers, 350); // debounce ô tìm kiếm
-        return () => clearTimeout(timer);
-    }, [search, fetchVouchers]);
+    // ── REACT-QUERY: danh sách voucher ───────────────────────────────
+    // placeholderData giữ list cũ trong lúc chờ kết quả search mới — list
+    // không còn bị xoá trắng/spinner đè lên mỗi lần gõ, chỉ thay thế êm
+    // khi có dữ liệu mới về.
+    const {
+        data: vouchers = [],
+        isLoading: listLoading,
+        isError: listIsError,
+    } = useQuery({
+        queryKey: ["vouchers", debouncedSearch],
+        queryFn: fetchVouchersList,
+        placeholderData: (prev) => prev,
+    });
+    const listError = listIsError ? "Không tải được danh sách voucher" : null;
 
     // status là virtual field server trả sẵn trong mỗi voucher — lọc ngay
     // trên client, không cần thêm query param vì backend chưa hỗ trợ filter
-    // theo status tính toán.
+    // theo status tính toán. Đây vẫn luôn là filter thuần client-side, KHÔNG
+    // đụng tới react-query — chính vì vậy đổi status filter không bao giờ
+    // nên kéo theo network request nào cả.
     const filteredVouchers = useMemo(() => {
         const list = Array.isArray(vouchers) ? vouchers.filter(Boolean) : [];
         if (statusFilter === "ALL") return list;
         return list.filter((v) => v.status === statusFilter);
     }, [vouchers, statusFilter]);
+
+    // ── React-query: mutation cho tạo/sửa và bật-tắt ─────────────────
+    const queryClient = useQueryClient();
+
+    const invalidateVoucherQueries = useCallback(() => {
+        queryClient.invalidateQueries({ queryKey: ["vouchers"] });
+        queryClient.invalidateQueries({ queryKey: ["voucherStats"] });
+    }, [queryClient]);
+
+    const saveVoucherMutation = useMutation({
+        mutationFn: async ({ id, payload }) =>
+            id
+                ? await putData({ url: `/vouchers/${id}`, data: payload })
+                : await postData({ url: "/vouchers", data: payload }),
+    });
+
+    const toggleActiveMutation = useMutation({
+        mutationFn: async (voucher) => {
+            const res = await putData({
+                url: `/vouchers/${voucher._id}`,
+                data: { isActive: !voucher.isActive },
+            });
+            if (!res?.success) throw new Error(res?.message || "Toggle voucher failed");
+            return res;
+        },
+        onSuccess: () => invalidateVoucherQueries(),
+        onError: (err) => console.error("Failed to toggle voucher:", err),
+    });
 
     // ── Mở form ─────────────────────────────────────────────────────
     const openCreateForm = useCallback(() => {
@@ -626,7 +781,7 @@ export default function VoucherPage() {
         }));
     }, []);
 
-    /* ── Tối ưu: handler ổn định cho từng field text của form ────────
+    /* ── Handler ổn định cho từng field text của form ────────────────
        Trước đây mỗi FieldInput nhận 1 arrow function tạo mới ngay
        trong JSX mỗi lần VoucherPage render → dù FieldInput đã memo,
        props onChangeText luôn "mới" nên memo vô nghĩa, gõ vào 1 ô
@@ -688,21 +843,14 @@ export default function VoucherPage() {
             isActive: form.isActive,
         };
 
-        setSubmitting(true);
-
         let res;
         try {
-            res = editingVoucher
-                ? await putData({ url: `/vouchers/${editingVoucher._id}`, data: payload })
-                : await postData({ url: "/vouchers", data: payload });
+            res = await saveVoucherMutation.mutateAsync({ id: editingVoucher?._id, payload });
         } catch (err) {
             console.error("Failed to save voucher:", err);
-            setSubmitting(false);
             setFormErrors({ submit: "Không lưu được voucher, vui lòng thử lại" });
             return;
         }
-
-        setSubmitting(false);
 
         if (!res?.success) {
             setFormErrors({ submit: res?.message || "Không lưu được voucher, vui lòng thử lại" });
@@ -710,33 +858,16 @@ export default function VoucherPage() {
         }
 
         closeForm();
-        fetchVouchers();
-        fetchStats();
-    }, [form, editingVoucher, closeForm, fetchVouchers, fetchStats]);
+        invalidateVoucherQueries();
+    }, [form, editingVoucher, saveVoucherMutation, closeForm, invalidateVoucherQueries]);
 
     // ── Tắt / bật nhanh từ danh sách ────────────────────────────────
     const handleToggleActive = useCallback(
-        async (voucher) => {
+        (voucher) => {
             if (!voucher?._id) return;
-
-            try {
-                const res = await putData({
-                    url: `/vouchers/${voucher._id}`,
-                    data: { isActive: !voucher.isActive },
-                });
-
-                if (!res?.success) {
-                    console.error("Failed to toggle voucher:", res?.message);
-                    return;
-                }
-
-                fetchVouchers();
-                fetchStats();
-            } catch (err) {
-                console.error("Failed to toggle voucher:", err);
-            }
+            toggleActiveMutation.mutate(voucher);
         },
-        [fetchVouchers, fetchStats]
+        [toggleActiveMutation]
     );
 
     const todayLabel = new Date().toLocaleDateString("vi-VN", {
@@ -748,164 +879,70 @@ export default function VoucherPage() {
 
     const rangeSubLabel = RANGE_OPTIONS.find((r) => r.value === statsRange)?.label;
 
-    /* ── Tối ưu FlatList: keyExtractor + renderItem ổn định ──────────
-       renderVoucherItem chỉ đổi identity khi filteredVouchers.length,
-       openEditForm hoặc handleToggleActive thực sự đổi (2 hàm này đã
-       ổn định gần như vĩnh viễn nhờ useCallback ở trên) — giúp
-       FlatList tránh re-render toàn bộ item khi không cần thiết. */
+    /* ── FlatList: keyExtractor + renderItem ổn định ─────────────────
+       renderVoucherItem KHÔNG còn phụ thuộc filteredVouchers.length
+       (isLast đã chuyển sang ItemSeparatorComponent) — chỉ phụ thuộc
+       2 callback đã ổn định vĩnh viễn nhờ useCallback ở trên. Đây là
+       fix trực tiếp cho hiện tượng giật khi đổi status filter. */
     const keyExtractor = useCallback((item, index) => item?._id || `voucher-${index}`, []);
 
     const renderVoucherItem = useCallback(
-        ({ item, index }) => (
+        ({ item }) => (
             <VoucherCard
                 voucher={item}
-                isLast={index === filteredVouchers.length - 1}
                 onView={setViewingVoucher}
                 onEdit={openEditForm}
                 onToggleActive={handleToggleActive}
             />
         ),
-        [filteredVouchers.length, openEditForm, handleToggleActive]
+        [openEditForm, handleToggleActive]
     );
 
-    const listHeader = useMemo(
-        () => (
-            <View style={{ paddingHorizontal: 16, paddingTop: 16, gap: 14 }}>
-                {/* ── Header ────────────────────────────────────────────── */}
-                <View className="flex-row items-start justify-between" style={{ gap: 12 }}>
-                    <View>
-                        <Text className="text-2xl font-black text-green-900">Quản lý Voucher</Text>
-                        <Text className="text-gray-500 text-sm mt-0.5">{todayLabel}</Text>
-                    </View>
-                    <Pressable
-                        onPress={openCreateForm}
-                        className="flex-row items-center gap-1.5 bg-green-600 rounded-xl"
-                        style={{ paddingHorizontal: 16, paddingVertical: 10 }}
-                    >
-                        <Plus size={16} color={colors.white} />
-                        <Text className="text-white text-sm font-bold">Tạo voucher</Text>
-                    </Pressable>
-                </View>
-
-                {/* ── Bộ lọc khoảng thời gian cho 2 thẻ cuối ────────────── */}
-                <View style={{ gap: 8 }}>
-                    <Text className="text-xs text-gray-500 font-semibold">Thống kê giảm giá:</Text>
-                    <View className="flex-row flex-wrap" style={{ gap: 8 }}>
-                        {RANGE_OPTIONS.map((opt) => (
-                            <Pressable
-                                key={opt.value}
-                                onPress={() => setStatsRange(opt.value)}
-                                className={`rounded-lg ${statsRange === opt.value ? "bg-green-600" : "bg-white border border-gray-100"}`}
-                                style={{ paddingHorizontal: 12, paddingVertical: 6 }}
-                            >
-                                <Text className={`text-xs font-bold ${statsRange === opt.value ? "text-white" : "text-gray-500"}`}>
-                                    {opt.label}
-                                </Text>
-                            </Pressable>
-                        ))}
-                    </View>
-                    {!!statsError && (
-                        <View className="flex-row items-center" style={{ gap: 5 }}>
-                            <AlertTriangle size={13} color="#e11d48" />
-                            <Text className="text-xs text-rose-600 font-semibold">{statsError}</Text>
-                        </View>
-                    )}
-                </View>
-
-                {/* ── 6 thẻ thống kê ───────────────────────────────────── */}
-                <View className="flex-row flex-wrap" style={{ gap: 12 }}>
-                    <StatCard icon={Ticket} label="Tổng voucher" value={statsLoading ? "…" : stats?.totalVouchers ?? 0} sub="Toàn bộ mã đang có" color="blue" />
-                    <StatCard icon={CheckCircle2} label="Đang hoạt động" value={statsLoading ? "…" : stats?.active ?? 0} sub="Khách có thể dùng ngay" color="green" />
-                    <StatCard icon={Hourglass} label="Sắp hết hạn" value={statsLoading ? "…" : stats?.expiringSoon ?? 0} sub="Còn ≤ 3 ngày" color="amber" />
-                    <StatCard icon={Ban} label="Đã hết hạn" value={statsLoading ? "…" : stats?.expired ?? 0} sub="Hết hạn hoặc đã tắt" color="rose" />
-                    <StatCard icon={DollarSign} label="Tổng tiền đã giảm" value={statsLoading ? "…" : fmtVND(stats?.totalDiscountAmount)} sub={rangeSubLabel} color="green" />
-                    <StatCard icon={BarChart3} label="Số lượt sử dụng" value={statsLoading ? "…" : stats?.totalUses ?? 0} sub={rangeSubLabel} color="blue" />
-                </View>
-
-                {/* ── Thanh công cụ danh sách (title + search + filter) ─── */}
-                <View className="bg-white rounded-2xl border border-gray-100" style={{ padding: 16, gap: 12 }}>
-                    <Text className="font-bold text-gray-700">Danh sách voucher</Text>
-
-                    <View style={{ position: "relative", justifyContent: "center" }}>
-                        <View style={{ position: "absolute", left: 13, zIndex: 1 }}>
-                            <Search size={15} color={colors.gray[400]} />
-                        </View>
-                        <TextInput
-                            value={search}
-                            onChangeText={setSearch}
-                            placeholder="Tìm theo mã voucher..."
-                            placeholderTextColor={colors.gray[300]}
-                            className="bg-white border border-gray-100 rounded-xl text-sm text-gray-800"
-                            style={{ paddingLeft: 36, paddingRight: 14, paddingVertical: 10 }}
-                        />
-                    </View>
-
-                    <View className="flex-row flex-wrap" style={{ gap: 8 }}>
-                        {STATUS_FILTERS.map((f) => (
-                            <Pressable
-                                key={f.value}
-                                onPress={() => setStatusFilter(f.value)}
-                                className={`rounded-lg ${statusFilter === f.value ? "bg-green-600" : "bg-green-50"}`}
-                                style={{ paddingHorizontal: 12, paddingVertical: 6 }}
-                            >
-                                <Text className={`text-xs font-bold ${statusFilter === f.value ? "text-white" : "text-gray-500"}`}>
-                                    {f.label}
-                                </Text>
-                            </Pressable>
-                        ))}
-                    </View>
-
-                    {!!listError && (
-                        <View className="flex-row items-center" style={{ gap: 5 }}>
-                            <AlertTriangle size={13} color="#e11d48" />
-                            <Text className="text-xs text-rose-600 font-semibold">{listError}</Text>
-                        </View>
-                    )}
-                </View>
-            </View>
-        ),
-        [
-            todayLabel,
-            openCreateForm,
-            statsRange,
-            statsError,
-            statsLoading,
-            stats,
-            rangeSubLabel,
-            search,
-            statusFilter,
-            listError,
-        ]
+    const listHeader = (
+        <View style={{ paddingHorizontal: 16, paddingTop: 16, gap: 14 }}>
+            <HeaderTop todayLabel={todayLabel} onCreate={openCreateForm} />
+            <StatsSection
+                statsRange={statsRange}
+                onRangeChange={setStatsRange}
+                statsError={statsError}
+                statsLoading={statsLoading}
+                stats={stats}
+                rangeSubLabel={rangeSubLabel}
+            />
+            <ListToolbar
+                search={search}
+                onSearchChange={setSearch}
+                statusFilter={statusFilter}
+                onStatusFilterChange={setStatusFilter}
+                listError={listError}
+            />
+        </View>
     );
 
-    const listEmpty = useMemo(
-        () =>
-            listLoading ? (
-                <View className="flex-row items-center justify-center py-16" style={{ gap: 8 }}>
-                    <ActivityIndicator size="small" color={colors.gray[400]} />
-                    <Text className="text-sm text-gray-400">Đang tải...</Text>
-                </View>
-            ) : (
-                <View className="items-center py-14 px-6">
-                    <Text style={{ fontSize: 34 }}>🎟️</Text>
-                    <Text className="text-sm text-gray-300 font-bold mt-2">Chưa có voucher nào</Text>
-                </View>
-            ),
-        [listLoading]
+    const listEmpty = listLoading ? (
+        <View className="flex-row items-center justify-center py-16" style={{ gap: 8 }}>
+            <ActivityIndicator size="small" color={colors.gray[400]} />
+            <Text className="text-sm text-gray-400">Đang tải...</Text>
+        </View>
+    ) : (
+        <View className="items-center py-14 px-6">
+            <Text style={{ fontSize: 34 }}>🎟️</Text>
+            <Text className="text-sm text-gray-300 font-bold mt-2">Chưa có voucher nào</Text>
+        </View>
     );
 
     return (
         <View style={{ flex: 1 }} className="bg-gray-50">
-            {/* Danh sách voucher — trước đây ScrollView + filteredVouchers.map(),
-                nay dùng FlatList để chỉ render số item lấp đầy khung hình + buffer
-                (giảm mount cost/RAM, scroll mượt hơn khi số voucher lớn). Header
-                (title, thống kê, ô search, filter) đưa vào ListHeaderComponent để
-                FlatList vẫn là scroll container duy nhất của trang — không lồng
-                FlatList trong ScrollView. */}
+            {/* Danh sách voucher — FlatList: chỉ render số item lấp đầy khung
+                hình + buffer (giảm mount cost/RAM, scroll mượt hơn khi số
+                voucher lớn). Header (title, thống kê, ô search, filter) đưa
+                vào ListHeaderComponent để FlatList vẫn là scroll container
+                duy nhất của trang — không lồng FlatList trong ScrollView. */}
             <FlatList
                 data={filteredVouchers}
                 keyExtractor={keyExtractor}
                 renderItem={renderVoucherItem}
+                ItemSeparatorComponent={ItemSeparator}
                 ListHeaderComponent={listHeader}
                 ListEmptyComponent={listEmpty}
                 style={{
@@ -1151,11 +1188,11 @@ export default function VoucherPage() {
                                 </Pressable>
                                 <Pressable
                                     onPress={handleSubmit}
-                                    disabled={submitting}
-                                    style={{ opacity: submitting ? 0.6 : 1, paddingVertical: 12 }}
+                                    disabled={saveVoucherMutation.isPending}
+                                    style={{ opacity: saveVoucherMutation.isPending ? 0.6 : 1, paddingVertical: 12 }}
                                     className="flex-1 items-center rounded-xl bg-green-600"
                                 >
-                                    {submitting ? (
+                                    {saveVoucherMutation.isPending ? (
                                         <ActivityIndicator size="small" color={colors.white} />
                                     ) : (
                                         <Text className="text-sm font-bold text-white">{editingVoucher ? "Lưu thay đổi" : "Tạo voucher"}</Text>
