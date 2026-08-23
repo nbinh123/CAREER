@@ -7,7 +7,7 @@
 import React from "react";
 import Svg, { Polyline, Circle, Line } from "react-native-svg";
 
-export default function MiniSparkline({ data, predicted = null, color = "#22c55e", w = 110, h = 38 }) {
+function MiniSparkline({ data, predicted = null, color = "#22c55e", w = 110, h = 38 }) {
   if (!data || data.length < 2) return null;
   const allVals = predicted != null ? [...data, predicted] : data;
   const yMin = Math.min(...allVals),
@@ -43,3 +43,5 @@ export default function MiniSparkline({ data, predicted = null, color = "#22c55e
     </Svg>
   );
 }
+
+export default React.memo(MiniSparkline);

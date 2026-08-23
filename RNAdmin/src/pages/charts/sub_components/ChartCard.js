@@ -3,8 +3,10 @@
 import React from "react";
 import { View } from "react-native";
 
-export default function ChartCard({ children, className = "" }) {
+function ChartCard({ children, className = "" }) {
   return (
     <View className={`bg-white rounded-2xl p-5 border border-gray-100 ${className}`}>{children}</View>
   );
 }
+
+export default React.memo(ChartCard);

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
     View,
     Text,
@@ -321,6 +321,14 @@ const RevenueEstimationCard = React.memo(function RevenueEstimationCard({
 });
 
 // ─── MaintenanceCostRow ─────────────────────────────────────────────────
+// onStartEdit/onSaveEdit/onDelete nhận vào PHẢI là hàm ổn định (page truyền
+// xuống với useCallback deps rỗng) — việc "curry" cost/cost.id/editName/
+// editValue được làm NGAY TẠI ĐÂY, bên trong onPress, chứ không phải ở
+// component cha lúc .map(). Nếu curry ở cha kiểu
+// `onDelete={() => onDelete(cost.id)}` trong .map(), mỗi lần cha render sẽ
+// tạo ra 1 closure MỚI cho MỖI dòng — khiến React.memo của TẤT CẢ các dòng
+// (không chỉ dòng đổi) bị vô hiệu hoá. Curry ở đây (component lá, không có
+// con nào được memo bên dưới) thì vô hại vì không còn ai để "phá memo" nữa.
 const MaintenanceCostRow = React.memo(function MaintenanceCostRow({
     cost,
     isEditing,
@@ -382,7 +390,10 @@ const MaintenanceCostRow = React.memo(function MaintenanceCostRow({
             <View className="flex-row items-center justify-end gap-1" style={{ width: 72 }}>
                 {isEditing ? (
                     <>
-                        <Pressable onPress={onSaveEdit} className="p-1.5 rounded-lg">
+                        <Pressable
+                            onPress={() => onSaveEdit(cost.id, editName, editValue)}
+                            className="p-1.5 rounded-lg"
+                        >
                             <Check size={14} color={colors.green[600]} />
                         </Pressable>
                         <Pressable onPress={onCancelEdit} className="p-1.5 rounded-lg">
@@ -391,10 +402,10 @@ const MaintenanceCostRow = React.memo(function MaintenanceCostRow({
                     </>
                 ) : (
                     <>
-                        <Pressable onPress={onStartEdit} className="p-1.5 rounded-lg">
+                        <Pressable onPress={() => onStartEdit(cost)} className="p-1.5 rounded-lg">
                             <Edit2 size={14} color={colors.gray[400]} />
                         </Pressable>
-                        <Pressable onPress={onDelete} className="p-1.5 rounded-lg">
+                        <Pressable onPress={() => onDelete(cost.id)} className="p-1.5 rounded-lg">
                             <Trash2 size={14} color={colors.gray[400]} />
                         </Pressable>
                     </>
@@ -452,23 +463,32 @@ const MaintenanceCostsCard = React.memo(function MaintenanceCostsCard({
                             <View style={{ width: 72 }} />
                         </View>
 
-                        {costs.map((cost, idx) => (
-                            <MaintenanceCostRow
-                                key={cost.id}
-                                cost={cost}
-                                isLast={idx === costs.length - 1}
-                                isEditing={editingId === cost.id}
-                                ratio={costRatioMap.get(cost.id) ?? "—"}
-                                editName={editName}
-                                editValue={editValue}
-                                onChangeEditName={onChangeEditName}
-                                onChangeEditValue={onChangeEditValue}
-                                onSaveEdit={onSaveEdit}
-                                onCancelEdit={onCancelEdit}
-                                onStartEdit={() => onStartEdit(cost)}
-                                onDelete={() => onDelete(cost.id)}
-                            />
-                        ))}
+                        {costs.map((cost, idx) => {
+                            const isEditing = editingId === cost.id;
+                            return (
+                                <MaintenanceCostRow
+                                    key={cost.id}
+                                    cost={cost}
+                                    isLast={idx === costs.length - 1}
+                                    isEditing={isEditing}
+                                    ratio={costRatioMap.get(cost.id) ?? "—"}
+                                    // Chỉ dòng ĐANG SỬA mới nhận editName/editValue "sống" —
+                                    // mọi dòng khác luôn nhận `undefined` (hằng số). Nhờ vậy
+                                    // gõ phím ở dòng đang sửa không làm đổi props của các
+                                    // dòng còn lại → React.memo của chúng vẫn có tác dụng.
+                                    editName={isEditing ? editName : undefined}
+                                    editValue={isEditing ? editValue : undefined}
+                                    onChangeEditName={onChangeEditName}
+                                    onChangeEditValue={onChangeEditValue}
+                                    // Truyền THẲNG, không bọc arrow function ở đây — xem ghi
+                                    // chú ở đầu MaintenanceCostRow.
+                                    onSaveEdit={onSaveEdit}
+                                    onCancelEdit={onCancelEdit}
+                                    onStartEdit={onStartEdit}
+                                    onDelete={onDelete}
+                                />
+                            );
+                        })}
 
                         {/* Footer total */}
                         <View
@@ -610,18 +630,32 @@ export default function CashFlowPage() {
             console.error("CashFlow updateWeights:", err);
             setUpdateMsg("Cập nhật thất bại");
         },
-        onSettled: () => {
-            setTimeout(() => setUpdateMsg(""), 3000);
-        },
     });
 
     const handleUpdateWeights = useCallback(() => {
         updateWeightsMutation.mutate();
     }, [updateWeightsMutation.mutate]);
 
+    // Toast tự ẩn sau 3s. Dùng useEffect (thay vì setTimeout rời trong
+    // onSettled của mutation như trước) để tự clearTimeout khi component
+    // unmount hoặc khi `updateMsg` đổi trước khi hết 3s — trước đây nếu rời
+    // trang trong lúc toast đang chờ tắt, setTimeout cũ vẫn chạy và gọi
+    // setState trên component đã unmount (React cảnh báo + rò rỉ nhỏ); nếu
+    // bấm nút 2 lần liên tiếp, 2 timer cũ/mới có thể chồng nhau.
+    useEffect(() => {
+        if (!updateMsg) return;
+        const timer = setTimeout(() => setUpdateMsg(""), 3000);
+        return () => clearTimeout(timer);
+    }, [updateMsg]);
+
     // ── Maintenance costs persistence (AsyncStorage) ──────────────────────
     // Load 1 lần khi mount. `costsLoaded` chặn effect ghi (bên dưới) chạy
     // trước khi load xong, để không bị ghi đè dữ liệu đã lưu bằng mảng [].
+    // `skipNextCostsWriteRef` bỏ qua lần ghi ĐẦU TIÊN ngay sau khi load
+    // xong — thời điểm đó `costs` y hệt dữ liệu vừa đọc từ AsyncStorage,
+    // ghi lại là dư thừa (1 lần/mỗi lần mở app, không đáng kể nhưng thừa).
+    const skipNextCostsWriteRef = useRef(true);
+
     useEffect(() => {
         let mounted = true;
         (async () => {
@@ -642,9 +676,14 @@ export default function CashFlowPage() {
         };
     }, []);
 
-    // Ghi lại mỗi khi `costs` đổi (thêm/sửa/xoá), chỉ sau khi đã load xong.
+    // Ghi lại mỗi khi `costs` đổi (thêm/sửa/xoá), chỉ sau khi đã load xong —
+    // và bỏ qua đúng 1 lần ngay sau khi load (xem ghi chú ở ref phía trên).
     useEffect(() => {
         if (!costsLoaded) return;
+        if (skipNextCostsWriteRef.current) {
+            skipNextCostsWriteRef.current = false;
+            return;
+        }
         AsyncStorage.setItem(MAINTENANCE_COSTS_STORAGE_KEY, JSON.stringify(costs)).catch(
             (err) => {
                 console.error("CashFlow saveCosts:", err);
@@ -699,16 +738,24 @@ export default function CashFlowPage() {
 
     const cancelEdit = useCallback(() => setEditingId(null), []);
 
-    const saveEdit = useCallback(() => {
+    // Nhận (id, name, value) trực tiếp từ nơi gọi — dòng đang sửa
+    // (MaintenanceCostRow) luôn có sẵn editName/editValue mới nhất trong
+    // props của chính nó — thay vì đọc editingId/editName/editValue qua
+    // closure. Nhờ vậy hàm này có identity ỔN ĐỊNH VĨNH VIỄN (deps rỗng).
+    // TRƯỚC ĐÂY: mỗi lần gõ phím (editName/editValue đổi) → saveEdit bị tạo
+    // lại → vì nó được truyền xuống MỌI dòng chi phí (không chỉ dòng đang
+    // sửa) → React.memo của TẤT CẢ các dòng bị vô hiệu hoá → gõ 1 phím
+    // render lại toàn bộ danh sách chi phí duy trì, dù chỉ 1 dòng thực sự
+    // đổi. Đây là nguyên nhân chính khiến việc gõ vào ô sửa/thêm chi phí
+    // gây khựng khi danh sách dài.
+    const saveEdit = useCallback((id, name, value) => {
         setCosts((prev) =>
             prev.map((c) =>
-                c.id === editingId
-                    ? { ...c, name: editName.trim(), value: parseFloat(editValue) || 0 }
-                    : c
+                c.id === id ? { ...c, name: name.trim(), value: parseFloat(value) || 0 } : c
             )
         );
         setEditingId(null);
-    }, [editingId, editName, editValue]);
+    }, []);
 
     // Stable input handlers — giữ nguyên identity giữa các lần render của
     // page, để các card con (đã bọc React.memo) không bị coi là "props đổi"

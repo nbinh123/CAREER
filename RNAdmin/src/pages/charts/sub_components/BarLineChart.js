@@ -16,7 +16,20 @@
 //     để xem số" (tap-to-inspect), mặc định chọn sẵn cột cuối cùng.
 //   - Bar bo tròn đều 4 góc (rx/ry) thay vì chỉ bo 2 góc trên — react-native-svg
 //     <Rect> không hỗ trợ bo riêng từng góc.
-import React, { useState, useMemo } from "react";
+//
+// [SUA — tối ưu hiệu suất, đợt 2]
+//   1) Vùng chạm chọn cột trước đây là N <Pressable> xếp hàng ngang (N = số
+//      category — Chart02/Chart03 tháng có thể tới ~31) → giờ gộp về ĐÚNG 1
+//      Pressable, tự tính cột bị chạm từ locationX (đo layout 1 lần qua
+//      onLayout, quy đổi tỉ lệ) — giảm số native view phải mount/layout mỗi
+//      lần chart này render, cùng cách làm với RangeSlider.js.
+//   2) Bọc React.memo — component này chiếm phần lớn cây SVG của trang, nếu
+//      không memo thì bất kỳ re-render nào ở AnalystPage (dù không đổi data/
+//      cấu hình của CHÍNH chart này) cũng vẽ lại toàn bộ SVG bên trong. Điều
+//      kiện để memo có tác dụng: props mảng/object (bars/lines/barAxis/...)
+//      phải ổn định tham chiếu giữa các render — trách nhiệm này nằm ở từng
+//      Chart0X.js (bọc useMemo trước khi truyền xuống đây, xem ghi chú ở đó).
+import React, { useState, useMemo, useCallback } from "react";
 import { View, Text, Pressable } from "react-native";
 import Svg, { Rect, Polyline, Line as SvgLine, Text as SvgText } from "react-native-svg";
 
@@ -39,7 +52,7 @@ function buildLineSegments(data, key, scaleFn, xOfIndex) {
   return segments;
 }
 
-export default function BarLineChart({
+function BarLineChart({
   data = [],
   height = 240,
   bars = [], // [{ key, color, name, colorByIndex?: (i) => color }]
@@ -52,6 +65,7 @@ export default function BarLineChart({
   emptyLabel = "Chưa có dữ liệu",
 }) {
   const [selected, setSelected] = useState(data.length ? data.length - 1 : null);
+  const [overlayWidth, setOverlayWidth] = useState(0);
   const effectiveSelected = selected != null && selected < data.length ? selected : data.length - 1;
 
   const hasDualAxis = !!lineAxis;
@@ -85,6 +99,17 @@ export default function BarLineChart({
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, lines, barAxis, lineAxis, slotW]);
+
+  // 1 Pressable duy nhất thay vì N — tự suy ra cột bị chạm từ locationX.
+  const handleOverlayPress = useCallback(
+    (evt) => {
+      if (overlayWidth <= 0 || n === 0) return;
+      const ratio = Math.min(1, Math.max(0, evt.nativeEvent.locationX / overlayWidth));
+      const idx = Math.min(n - 1, Math.floor(ratio * n));
+      setSelected(idx);
+    },
+    [overlayWidth, n]
+  );
 
   if (n === 0) {
     return (
@@ -175,12 +200,12 @@ export default function BarLineChart({
         })}
       </Svg>
 
-      {/* Vùng chạm để chọn cột (tap-to-inspect, thay hover tooltip) */}
-      <View style={{ flexDirection: "row", marginTop: -height, height: height - padB }}>
-        {data.map((_, i) => (
-          <Pressable key={i} onPress={() => setSelected(i)} style={{ width: `${100 / n}%` }} />
-        ))}
-      </View>
+      {/* Vùng chạm chọn cột — 1 Pressable duy nhất (xem ghi chú tối ưu đầu file) */}
+      <Pressable
+        onLayout={(e) => setOverlayWidth(e.nativeEvent.layout.width)}
+        onPress={handleOverlayPress}
+        style={{ marginTop: -height, height: height - padB }}
+      />
 
       {/* Nhãn trục X */}
       <View className="flex-row" style={{ paddingLeft: `${(padL / VIEW_W) * 100}%`, paddingRight: `${(padR / VIEW_W) * 100}%` }}>
@@ -221,3 +246,5 @@ export default function BarLineChart({
     </View>
   );
 }
+
+export default React.memo(BarLineChart);

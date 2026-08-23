@@ -15,11 +15,11 @@ import Animated, {
   useSharedValue,
   withTiming,
 } from "react-native-reanimated";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
   Check,
   Edit2,
-  FolderOpen,
   Plus,
   RefreshCw,
   Save,
@@ -29,10 +29,11 @@ import {
   Upload,
 } from "lucide-react-native";
 import fmtVND from "../utils/fmtVND";
-import exportJSON from "../utils/exportJSON";
 import importJSON, { pickJSONFile } from "../utils/importJSON";
 import { API_URL } from "../config/api";
-import useIngredientZustand from "../zustand/useIngredientZustand";
+import useIngredientsQuery, { INGREDIENTS_QUERY_KEY } from "../hooks/useIngredientsQuery";
+import useSaveAllIngredientChanges from "../hooks/useSaveAllIngredientChanges";
+import useIngredientDraftZustand from "../zustand/useIngredientDraftZustand";
 import colors from "../theme/tokens";
 
 // ─── Constants [GIU-NGUYEN] ─────────────────────────────────────────────
@@ -52,9 +53,21 @@ const EMPTY_PENDING = { added: [], updated: [], deleted: [] };
 
 const NUMERIC_FIELDS = ["displayOrder", "quantity", "pricePerLargeUnit", "expiryDays"];
 
-// [TỐI ƯU] Thời gian debounce cho ô tìm kiếm (ms). Tách thành constant để
-// dễ chỉnh nếu cần, không hardcode rải rác trong component.
+// [TỐI ƯU] Thời gian debounce cho ô tìm kiếm (ms).
 const SEARCH_DEBOUNCE_MS = 300;
+
+// [TỐI ƯU] Hoist các giá trị/element KHÔNG phụ thuộc props/state ra ngoài
+// component — tránh bị tạo mới (object/array/JSX mới) trên MỌI lần render
+// của IngredientsPage. Cùng tinh thần với EMPTY_ING/EMPTY_PENDING đã có.
+const EMPTY_LIST = [];
+const COLUMN_WRAPPER_STYLE = { justifyContent: "space-between" };
+const LIST_CONTENT_CONTAINER_STYLE = { padding: 16, paddingBottom: 40, flexGrow: 1 };
+const EMPTY_STATE = (
+  <View className="bg-white rounded-2xl border border-gray-100 items-center py-14 px-6">
+    <Text style={{ fontSize: 34 }}>🥬</Text>
+    <Text className="text-sm text-gray-300 font-bold mt-2">Không tìm thấy nguyên liệu nào</Text>
+  </View>
+);
 
 /* ════════════════════════════════════════════════════════════
    UI HELPERS cục bộ (thay Btn/Modal/FormInput dùng chung ở bản web)
@@ -142,7 +155,15 @@ const IconBtn = React.memo(function IconBtn({ icon: Icon, onPress, danger }) {
 
 // [TỐI ƯU] React.memo — form Thêm/Sửa có 8 field, mỗi lần gõ 1 ô thì cả 7 ô
 // còn lại không cần vẽ lại nếu value/onChangeText của chúng không đổi.
-const FieldInput = React.memo(function FieldInput({ label, required, value, onChangeText, keyboardType = "default", multiline, full }) {
+//
+// [TỐI ƯU] `field` + `onChange` thay vì nhận thẳng `onChangeText` đã bind
+// sẵn: handler onChangeText giờ được tạo NGAY BÊN TRONG FieldInput qua
+// useCallback, phụ thuộc `field` (string cố định) và `onChange` (chính là
+// `setField` ở component cha — đã ổn định qua useCallback). Nhờ vậy gõ 1
+// ô chỉ đúng 1 FieldInput đó vẽ lại, 7 ô còn lại giữ nguyên.
+const FieldInput = React.memo(function FieldInput({ label, required, field, value, onChange, keyboardType = "default", multiline, full }) {
+  const handleChangeText = useCallback((t) => onChange(field, t), [onChange, field]);
+
   return (
     <View className={full ? "w-full" : "w-[47%]"} style={{ marginBottom: 12 }}>
       <Text className="text-xs font-semibold text-gray-500 mb-1.5">
@@ -151,7 +172,7 @@ const FieldInput = React.memo(function FieldInput({ label, required, value, onCh
       </Text>
       <TextInput
         value={value}
-        onChangeText={onChangeText}
+        onChangeText={handleChangeText}
         keyboardType={keyboardType}
         multiline={multiline}
         placeholderTextColor={colors.gray[300]}
@@ -162,12 +183,15 @@ const FieldInput = React.memo(function FieldInput({ label, required, value, onCh
   );
 });
 
-/* Overlay dùng chung cho cả 3 modal — tương đương e.stopPropagation() */
+/* Overlay dùng chung cho cả 3 modal.
+   [SỬA LỖI] Backdrop (đóng khi bấm ra ngoài) và nội dung modal là 2 phần
+   tử NGANG HÀNG (anh em) thay vì cha–con, để không có Pressable nào bọc
+   quanh nội dung "nuốt" mất cử chỉ kéo khi bắt đầu từ vùng trống bên
+   trong ScrollView của form. */
 function ModalOverlay({ onClose, children }) {
   return (
     <Modal transparent animationType="fade" onRequestClose={onClose}>
-      <Pressable
-        onPress={onClose}
+      <View
         style={{
           flex: 1,
           backgroundColor: "rgba(20,83,45,0.35)",
@@ -176,10 +200,14 @@ function ModalOverlay({ onClose, children }) {
           padding: 20,
         }}
       >
-        <Pressable onPress={() => {}} style={{ width: "100%", maxWidth: 440 }}>
+        <Pressable
+          onPress={onClose}
+          style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0 }}
+        />
+        <View style={{ width: "100%", maxWidth: 440 }} pointerEvents="box-none">
           {children}
-        </Pressable>
-      </Pressable>
+        </View>
+      </View>
     </Modal>
   );
 }
@@ -190,8 +218,6 @@ function ModalOverlay({ onClose, children }) {
    (theo yêu cầu), nên trạng thái pending đổi màu toàn bộ viền + nền. */
 const ROW_ACCENT = {
   added: { backgroundColor: colors.green[50], borderColor: colors.green[400] },
-  // amber-50/amber-400 không có sẵn trong tokens.js (chỉ có amber[500]) —
-  // ghi hex trực tiếp, cùng tinh thần ORDER_STATUS_COLORS ở Customers.js.
   updated: { backgroundColor: "#fffbeb", borderColor: "#fbbf24" },
   normal: { backgroundColor: colors.white, borderColor: colors.gray[100] },
 };
@@ -224,21 +250,19 @@ function expiryMeta(expiryDays) {
 }
 
 /* ── 1 nguyên liệu = 1 thẻ có viền riêng, xếp lưới 2 cột ─────────────────
-   Đổi từ "1 hàng trong bảng" (isLast quyết định borderBottom) sang
-   "1 thẻ độc lập" (width 48%, border bao quanh, bo góc) để render được
-   2 nguyên liệu / hàng theo yêu cầu.
-
-   [TỐI ƯU] React.memo — đây là component nặng nhất vì lặp lại theo số
-   nguyên liệu (có thể hàng chục/hàng trăm thẻ). Nếu không memo, mỗi lần
-   IngredientsPage re-render vì lý do bất kỳ (gõ ô tìm kiếm, đóng/mở modal,
-   isSaving đổi...) thì TOÀN BỘ thẻ vẽ lại dù dữ liệu không đổi — đây là
-   nguyên nhân chính gây giật/lag. Memo chỉ có tác dụng khi props (ing,
-   status, onEdit, onDelete) giữ nguyên tham chiếu giữa các lần render, nên
-   onEdit/onDelete ở component cha đã được bọc useCallback tương ứng. */
+   [TỐI ƯU] React.memo — component nặng nhất vì lặp lại theo số nguyên
+   liệu. Memo chỉ có tác dụng khi props (ing, status, onEdit, onDelete)
+   giữ nguyên tham chiếu giữa các lần render. */
 const IngredientCard = React.memo(function IngredientCard({ ing, status, onEdit, onDelete }) {
   const quantity = ing.quantity ?? 0;
   const expiry = expiryMeta(ing.expiryDays);
   const accent = ROW_ACCENT[status] ?? ROW_ACCENT.normal;
+
+  // [TỐI ƯU] useCallback theo `ing`/`onEdit`/`onDelete` — tránh tạo hàm
+  // onPress mới cho IconBtn mỗi lần IngredientCard render lại (kể cả khi
+  // chỉ đổi `status`), giữ đúng tác dụng React.memo trên IconBtn.
+  const handleEditPress = useCallback(() => onEdit(ing), [onEdit, ing]);
+  const handleDeletePress = useCallback(() => onDelete(ing._id), [onDelete, ing._id]);
 
   return (
     <View
@@ -259,8 +283,8 @@ const IngredientCard = React.memo(function IngredientCard({ ing, status, onEdit,
           </Text>
         </View>
         <View className="flex-row" style={{ gap: 6 }}>
-          <IconBtn icon={Edit2} onPress={() => onEdit(ing)} />
-          <IconBtn icon={Trash2} danger onPress={() => onDelete(ing._id)} />
+          <IconBtn icon={Edit2} onPress={handleEditPress} />
+          <IconBtn icon={Trash2} danger onPress={handleDeletePress} />
         </View>
       </View>
 
@@ -290,8 +314,6 @@ const IngredientCard = React.memo(function IngredientCard({ ing, status, onEdit,
 
       {ing.needContinuousRestock && (
         <View className="flex-row items-center mt-2" style={{ gap: 4 }}>
-          {/* orange-600 không có trong tokens.js — hex trực tiếp khớp
-              className text-orange-600 đang dùng cho phần chữ. */}
           <AlertTriangle size={12} color="#ea580c" />
           <Text className="text-xs font-semibold text-orange-600">Cần bổ sung liên tục</Text>
         </View>
@@ -304,22 +326,42 @@ const IngredientCard = React.memo(function IngredientCard({ ing, status, onEdit,
    MAIN COMPONENT
 ════════════════════════════════════════════════════════════ */
 export default function IngredientsPage() {
-  // ─── Selectors Zustand [GIU-NGUYEN] ───────────────────────────────────
-  const ingredients = useIngredientZustand((s) => s.ingredients);
-  const pendingChanges = useIngredientZustand((s) => s.pendingChanges);
-  const isLoading = useIngredientZustand((s) => s.isLoading);
-  const isSaving = useIngredientZustand((s) => s.isSaving);
-  const saveError = useIngredientZustand((s) => s.saveError);
-  const getIngredients = useIngredientZustand((s) => s.getIngredients);
-  const addIngredientLocal = useIngredientZustand((s) => s.addIngredientLocal);
-  const editIngredientLocal = useIngredientZustand((s) => s.editIngredientLocal);
-  const deleteIngredientLocal = useIngredientZustand((s) => s.deleteIngredientLocal);
-  const saveAllChanges = useIngredientZustand((s) => s.saveAllChanges);
-  const discardChanges = useIngredientZustand((s) => s.discardChanges);
-  const clearSaveError = useIngredientZustand((s) => s.clearSaveError);
+  // ─── Dữ liệu server: react-query [TỐI ƯU - react-query] ───────────────
+  // Danh sách nguyên liệu từ server giờ do react-query quản lý: fetch,
+  // cache, dedupe request trùng, tự retry theo cấu hình trong
+  // queryClient.js, tự refetch khi mất mạng có lại/quay lại app (nhờ
+  // useOnlineManager/useAppState đã gắn ở App.js). Không cần tự viết
+  // isLoading/getIngredients() + useEffect gọi lúc mount như trước.
+  //
+  // [GLOBAL - LƯU Ý] useIngredientZustand.js gốc (ingredients/isLoading/
+  // getIngredients...) được GIỮ NGUYÊN, không đụng tới — rất có thể còn
+  // màn hình khác (vd IngredientPicker trong form món ăn/trái cây, theo
+  // comment trong chính store đó) đang phụ thuộc đúng interface cũ. Trang
+  // này chuyển sang nguồn dữ liệu MỚI, độc lập, không ảnh hưởng màn hình
+  // khác. Muốn migrate toàn app sang react-query cần rà từng nơi dùng
+  // useIngredientZustand — nằm ngoài phạm vi trang này.
+  const ingredientsQuery = useIngredientsQuery();
+  const serverIngredients = ingredientsQuery.data ?? EMPTY_LIST;
+  const isLoading = ingredientsQuery.isLoading;
 
-  // ─── Dữ liệu store, ép kiểu an toàn [GIU-NGUYEN] ──────────────────────
-  const safeIngredients = Array.isArray(ingredients) ? ingredients : [];
+  const queryClient = useQueryClient();
+
+  // ─── Bản nháp thêm/sửa/xóa chưa lưu: Zustand (store mới, tách riêng) ──
+  const pendingChanges = useIngredientDraftZustand((s) => s.pendingChanges);
+  const addLocal = useIngredientDraftZustand((s) => s.addLocal);
+  const editLocal = useIngredientDraftZustand((s) => s.editLocal);
+  const deleteLocal = useIngredientDraftZustand((s) => s.deleteLocal);
+  const clearPending = useIngredientDraftZustand((s) => s.clearPending);
+
+  // ─── Lưu tất cả thay đổi: react-query mutation ────────────────────────
+  // isPending/error có sẵn từ react-query, không cần tự quản lý
+  // isSaving/saveError thủ công như bản Zustand cũ.
+  const saveAllMutation = useSaveAllIngredientChanges();
+  const isSaving = saveAllMutation.isPending;
+  const saveError = saveAllMutation.error?.message ?? null;
+  const resetSaveError = saveAllMutation.reset;
+
+  // ─── Dữ liệu, ép kiểu an toàn [GIU-NGUYEN tinh thần bản gốc] ──────────
   const safePending =
     pendingChanges &&
     Array.isArray(pendingChanges.added) &&
@@ -328,6 +370,21 @@ export default function IngredientsPage() {
       ? pendingChanges
       : EMPTY_PENDING;
 
+  // [TỐI ƯU - react-query] "ingredients" hiển thị = dữ liệu server (từ
+  // react-query) đè thêm bản nháp pending (added/updated/deleted) — đúng
+  // 1:1 kết quả mà bản Zustand cũ tạo ra bằng cách mutate incremental,
+  // chỉ khác là giờ tính lại (useMemo) từ 2 nguồn thay vì lưu sẵn 1 bản
+  // trộn sẵn. Thứ tự giữ nguyên: nguyên liệu cũ giữ đúng vị trí, nguyên
+  // liệu mới thêm nối vào cuối — khớp hành vi addIngredientLocal gốc.
+  const safeIngredients = useMemo(() => {
+    const deletedSet = new Set(safePending.deleted);
+    const updatedMap = new Map(safePending.updated.map((i) => [i._id, i]));
+    const base = serverIngredients
+      .filter((i) => !deletedSet.has(i._id))
+      .map((i) => updatedMap.get(i._id) ?? i);
+    return [...base, ...safePending.added];
+  }, [serverIngredients, safePending]);
+
   const [isImporting, setIsImporting] = useState(false);
   const [importError, setImportError] = useState(null);
 
@@ -335,8 +392,7 @@ export default function IngredientsPage() {
   // [TỐI ƯU] Debounce search — `search` phản ánh tức thời những gì người
   // dùng gõ (để ô input mượt, không giật), còn `debouncedSearch` mới là
   // giá trị dùng để lọc danh sách, chỉ cập nhật 300ms sau khi người dùng
-  // ngừng gõ. Nhờ vậy `.filter()` trên toàn bộ nguyên liệu không chạy lại
-  // trên từng ký tự gõ (có thể hàng chục lần/giây) mà chỉ chạy 1 lần.
+  // ngừng gõ.
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [modal, setModal] = useState(null); // null | "add" | "edit"
   const [form, setForm] = useState(EMPTY_ING);
@@ -344,15 +400,9 @@ export default function IngredientsPage() {
   const [deleteId, setDeleteId] = useState(null);
   const [discardOpen, setDiscardOpen] = useState(false);
 
-  // Fetch dữ liệu lần đầu
-  useEffect(() => {
-    getIngredients();
-  }, [getIngredients]);
-
-  // [TỐI ƯU] Debounce timer cho search — huỷ timer cũ mỗi khi `search` đổi
-  // (người dùng gõ tiếp) để chỉ set `debouncedSearch` sau khi họ dừng gõ
-  // đủ SEARCH_DEBOUNCE_MS. Cleanup clearTimeout tránh set state sau khi
-  // component unmount hoặc sau khi có ký tự mới hơn.
+  // [TỐI ƯU] Debounce timer cho search — huỷ timer cũ mỗi khi `search`
+  // đổi, chỉ set `debouncedSearch` sau khi người dùng dừng gõ đủ
+  // SEARCH_DEBOUNCE_MS.
   useEffect(() => {
     const timer = setTimeout(() => {
       setDebouncedSearch(search);
@@ -365,12 +415,6 @@ export default function IngredientsPage() {
   const hasPending = pendingCount > 0;
 
   // ─── Danh sách sau khi lọc tìm kiếm ───────────────────────────────────
-  // [TỐI ƯU] useMemo — trước đây .filter() chạy lại trên MỌI lần render
-  // (kể cả khi chỉ mở/đóng modal hay gõ trong ô ghi chú của form), dù
-  // "search" và danh sách gốc không đổi. Chỉ tính lại khi 1 trong 2 dep đổi.
-  // Dùng `debouncedSearch` (thay vì `search` gõ trực tiếp) để việc lọc chỉ
-  // chạy sau khi người dùng ngừng gõ, và tính `toLowerCase()`/`trim()` của
-  // từ khoá 1 lần bên ngoài vòng lặp thay vì lặp lại cho từng phần tử.
   const filtered = useMemo(() => {
     const q = debouncedSearch.trim().toLowerCase();
     if (!q) return safeIngredients;
@@ -380,9 +424,6 @@ export default function IngredientsPage() {
   }, [safeIngredients, debouncedSearch]);
 
   // ─── Tra trạng thái pending theo id — O(1) thay vì .some() từng phần tử ─
-  // [TỐI ƯU] Bản cũ gọi safePending.added.some()/updated.some() cho MỖI
-  // nguyên liệu trên MỖI lần render, tức O(số nguyên liệu × số thay đổi
-  // pending). Gom trước thành 1 Map (O(n) một lần) rồi tra cứu O(1)/thẻ.
   const pendingStatusMap = useMemo(() => {
     const map = new Map();
     safePending.added.forEach((i) => map.set(i._id, "added"));
@@ -396,18 +437,15 @@ export default function IngredientsPage() {
   );
 
   // ─── Helpers form ───────────────────────────────────────────────────
-  // [TỐI ƯU] Toàn bộ handler dưới đây bọc useCallback để giữ nguyên tham
-  // chiếu hàm giữa các lần render — điều kiện bắt buộc để React.memo trên
-  // IngredientCard/ActionBtn/IconBtn/FieldInput thực sự có tác dụng (nếu
-  // props hàm luôn "mới" thì memo coi như props đã đổi, vẫn re-render).
   const setField = useCallback((key, val) => setForm((prev) => ({ ...prev, [key]: val })), []);
 
-  const exportData = useCallback(() => {
-    exportJSON(`${API_URL}/api/ingredients`, "ingredients").catch((err) => {
-      console.error("exportData:", err);
-    });
-  }, []);
-
+  // [LƯU Ý - đổi hành vi nhỏ] Bản gốc gọi lại getIngredients() (cache-
+  // first) sau khi import — vì ingredients thường đã có sẵn dữ liệu từ
+  // trước, hàm đó gần như không làm gì (bug có sẵn từ trước, không phải
+  // do bước tối ưu này gây ra: comment "tải lại danh sách mới nhất từ
+  // server" không khớp hành vi thực tế). invalidateQueries ở đây đảm bảo
+  // LUÔN tải lại đúng như ý đồ ban đầu của comment — báo trước để bạn xác
+  // nhận đây là thay đổi mong muốn.
   const handleImportPick = useCallback(async () => {
     setImportError(null);
     setIsImporting(true);
@@ -415,13 +453,13 @@ export default function IngredientsPage() {
       const data = await pickJSONFile();
       if (!data) return; // người dùng huỷ chọn file
       await importJSON(`${API_URL}/api/ingredients`, data, "ingredients");
-      await getIngredients(); // tải lại danh sách mới nhất từ server
+      await queryClient.invalidateQueries({ queryKey: INGREDIENTS_QUERY_KEY });
     } catch (err) {
       setImportError(err?.message || "Import thất bại");
     } finally {
       setIsImporting(false);
     }
-  }, [getIngredients]);
+  }, [queryClient]);
 
   const openAdd = useCallback(() => {
     setForm(EMPTY_ING);
@@ -444,50 +482,48 @@ export default function IngredientsPage() {
     const name = (form.ingredientName || "").trim();
     if (!name) return;
 
-    // Ép các field số (đang được giữ dạng chuỗi lúc gõ, xem ghi chú platform
-    // ở đầu file) sang number đúng kiểu store mong đợi.
     const payload = { ...form, ingredientName: name };
     NUMERIC_FIELDS.forEach((key) => {
       payload[key] = Number(payload[key]) || 0;
     });
 
     if (modal === "add") {
-      addIngredientLocal(payload);
+      addLocal(payload);
     } else {
-      editIngredientLocal({ ...payload, _id: editId });
+      editLocal({ ...payload, _id: editId });
     }
     closeModal();
-  }, [form, modal, editId, addIngredientLocal, editIngredientLocal, closeModal]);
+  }, [form, modal, editId, addLocal, editLocal, closeModal]);
 
   const handleDelete = useCallback(() => {
-    deleteIngredientLocal(deleteId);
+    deleteLocal(deleteId);
     setDeleteId(null);
-  }, [deleteIngredientLocal, deleteId]);
+  }, [deleteLocal, deleteId]);
 
-  // ─── Lưu tất cả lên server ──────────────────────────────────────────
-  const handleSaveAll = useCallback(async () => {
-    try {
-      await saveAllChanges();
-    } catch {
-      // Lỗi đã được lưu vào saveError trong zustand
-    }
-  }, [saveAllChanges]);
+  // ─── Lưu tất cả lên server: react-query mutation ──────────────────────
+  // [TỐI ƯU - react-query] mutate() tự nuốt lỗi nội bộ (lưu vào
+  // saveAllMutation.error) — không cần try/catch thủ công như trước.
+  const handleSaveAll = useCallback(() => {
+    saveAllMutation.mutate();
+  }, [saveAllMutation]);
 
   const openDiscard = useCallback(() => setDiscardOpen(true), []);
   const closeDiscard = useCallback(() => setDiscardOpen(false), []);
   const closeDeleteModal = useCallback(() => setDeleteId(null), []);
   const closeImportError = useCallback(() => setImportError(null), []);
+
+  // [TỐI ƯU - react-query] Huỷ thay đổi = ép tải lại dữ liệu server mới
+  // nhất (refetchQueries bỏ qua staleTime, luôn gọi API — đúng ý đồ gốc
+  // "tải lại từ server") + xoá bản nháp pending.
   const confirmDiscard = useCallback(async () => {
-    await discardChanges();
+    await queryClient.refetchQueries({ queryKey: INGREDIENTS_QUERY_KEY });
+    clearPending();
     setDiscardOpen(false);
-  }, [discardChanges]);
+  }, [queryClient, clearPending]);
 
   // [TỐI ƯU] renderItem bọc useCallback để giữ nguyên tham chiếu hàm giữa
-  // các lần render của IngredientsPage. FlatList/VirtualizedList dùng
-  // identity của renderItem khi quyết định có cần vẽ lại cell hay không;
-  // nếu để arrow function inline, mỗi lần cha render (vd: gõ ô ghi chú
-  // trong modal) sẽ tạo hàm mới, làm giảm hiệu quả của React.memo trên
-  // IngredientCard dù props ing/status/onEdit/onDelete không đổi.
+  // các lần render — FlatList dùng identity của renderItem khi quyết định
+  // có cần vẽ lại cell hay không.
   const renderItem = useCallback(
     ({ item }) => (
       <IngredientCard
@@ -501,135 +537,140 @@ export default function IngredientsPage() {
   );
 
   // [TỐI ƯU] Header (tiêu đề, toolbar, banner lỗi, legend, ô tìm kiếm) tách
-  // thành 1 phần tử riêng để làm ListHeaderComponent cho FlatList bên dưới,
-  // thay vì nằm chung ScrollView với danh sách nguyên liệu như bản cũ.
-  const listHeader = (
-    <View style={{ gap: 14, marginBottom: 14 }}>
-      {/* ── Header ────────────────────────────────────────────────── */}
-      <View>
-        <Text className="text-2xl font-black text-green-900">Nguyên liệu</Text>
-        <Text className="text-gray-500 text-sm mt-0.5">
-          {safeIngredients.length} nguyên liệu trong kho
+  // riêng làm ListHeaderComponent, bọc useMemo với dependency chính xác —
+  // loại trừ hoàn toàn state của modal Thêm/Sửa (form, modal, editId,
+  // deleteId, discardOpen) nên gõ trong modal KHÔNG còn làm toolbar/ô tìm
+  // kiếm/legend vẽ lại.
+  const listHeader = useMemo(
+    () => (
+      <View style={{ gap: 14, marginBottom: 14 }}>
+        {/* ── Header ────────────────────────────────────────────────── */}
+        <View>
+          <Text className="text-2xl font-black text-green-900">Nguyên liệu</Text>
+          <Text className="text-gray-500 text-sm mt-0.5">
+            {safeIngredients.length} nguyên liệu trong kho
+            {hasPending && (
+              <Text className="text-amber-600 font-semibold"> • {pendingCount} thay đổi chưa lưu</Text>
+            )}
+          </Text>
+        </View>
+
+        {/* ── Toolbar hành động ────────────────────────────────────── */}
+        <View className="flex-row flex-wrap items-center" style={{ gap: 8 }}>
           {hasPending && (
-            <Text className="text-amber-600 font-semibold"> • {pendingCount} thay đổi chưa lưu</Text>
+            <ActionBtn icon={X} label="Huỷ thay đổi" variant="outline" onPress={openDiscard} />
           )}
-        </Text>
-      </View>
+          <ActionBtn
+            icon={Save}
+            label={isSaving ? "Đang lưu..." : "Lưu tất cả thay đổi"}
+            variant={hasPending ? "primary" : "secondary"}
+            disabled={!hasPending || isSaving}
+            loading={isSaving}
+            badge={!isSaving ? pendingCount : 0}
+            onPress={handleSaveAll}
+          />
+          <ActionBtn icon={Plus} label="Thêm nguyên liệu" onPress={openAdd} />
+          <ActionBtn
+            icon={Upload}
+            label={isImporting ? "Đang tải lên..." : "Tải lên JSON"}
+            loading={isImporting}
+            onPress={handleImportPick}
+          />
+        </View>
 
-      {/* ── Toolbar hành động ────────────────────────────────────── */}
-      <View className="flex-row flex-wrap items-center" style={{ gap: 8 }}>
-        {hasPending && (
-          <ActionBtn icon={X} label="Huỷ thay đổi" variant="outline" onPress={openDiscard} />
+        {/* ── Banner lỗi lưu ───────────────────────────────────────── */}
+        {!!saveError && (
+          <View className="flex-row items-center justify-between gap-3 bg-red-50 border border-red-200 rounded-xl px-4 py-3">
+            <Text className="flex-1 text-red-700 text-sm">{saveError}</Text>
+            <Pressable onPress={resetSaveError}>
+              <X size={16} color={colors.red[600]} />
+            </Pressable>
+          </View>
         )}
-        <ActionBtn
-          icon={Save}
-          label={isSaving ? "Đang lưu..." : "Lưu tất cả thay đổi"}
-          variant={hasPending ? "primary" : "secondary"}
-          disabled={!hasPending || isSaving}
-          loading={isSaving}
-          badge={!isSaving ? pendingCount : 0}
-          onPress={handleSaveAll}
-        />
-        <ActionBtn icon={Plus} label="Thêm nguyên liệu" onPress={openAdd} />
-        <ActionBtn icon={FolderOpen} label="Xuất JSON" onPress={exportData} />
-        <ActionBtn
-          icon={Upload}
-          label={isImporting ? "Đang tải lên..." : "Tải lên JSON"}
-          loading={isImporting}
-          onPress={handleImportPick}
-        />
-      </View>
-
-      {/* ── Banner lỗi lưu ───────────────────────────────────────── */}
-      {!!saveError && (
-        <View className="flex-row items-center justify-between gap-3 bg-red-50 border border-red-200 rounded-xl px-4 py-3">
-          <Text className="flex-1 text-red-700 text-sm">{saveError}</Text>
-          <Pressable onPress={clearSaveError}>
-            <X size={16} color={colors.red[600]} />
-          </Pressable>
-        </View>
-      )}
-      {!!importError && (
-        <View className="flex-row items-center justify-between gap-3 bg-red-50 border border-red-200 rounded-xl px-4 py-3">
-          <Text className="flex-1 text-red-700 text-sm">{importError}</Text>
-          <Pressable onPress={closeImportError}>
-            <X size={16} color={colors.red[600]} />
-          </Pressable>
-        </View>
-      )}
-
-      {/* ── Legend pending ───────────────────────────────────────── */}
-      {hasPending && (
-        <View className="flex-row flex-wrap items-center bg-white border border-gray-100 rounded-xl px-4 py-2.5" style={{ gap: 12 }}>
-          <Text className="text-xs font-semibold text-gray-600">Trạng thái chưa lưu:</Text>
-          <View className="flex-row items-center" style={{ gap: 6 }}>
-            <View style={{ width: 10, height: 10, borderRadius: 3, backgroundColor: colors.green[400] }} />
-            <Text className="text-xs text-gray-500">Mới thêm ({safePending.added.length})</Text>
+        {!!importError && (
+          <View className="flex-row items-center justify-between gap-3 bg-red-50 border border-red-200 rounded-xl px-4 py-3">
+            <Text className="flex-1 text-red-700 text-sm">{importError}</Text>
+            <Pressable onPress={closeImportError}>
+              <X size={16} color={colors.red[600]} />
+            </Pressable>
           </View>
-          <View className="flex-row items-center" style={{ gap: 6 }}>
-            <View style={{ width: 10, height: 10, borderRadius: 3, backgroundColor: "#fbbf24" }} />
-            <Text className="text-xs text-gray-500">Đã sửa ({safePending.updated.length})</Text>
+        )}
+
+        {/* ── Legend pending ───────────────────────────────────────── */}
+        {hasPending && (
+          <View className="flex-row flex-wrap items-center bg-white border border-gray-100 rounded-xl px-4 py-2.5" style={{ gap: 12 }}>
+            <Text className="text-xs font-semibold text-gray-600">Trạng thái chưa lưu:</Text>
+            <View className="flex-row items-center" style={{ gap: 6 }}>
+              <View style={{ width: 10, height: 10, borderRadius: 3, backgroundColor: colors.green[400] }} />
+              <Text className="text-xs text-gray-500">Mới thêm ({safePending.added.length})</Text>
+            </View>
+            <View className="flex-row items-center" style={{ gap: 6 }}>
+              <View style={{ width: 10, height: 10, borderRadius: 3, backgroundColor: "#fbbf24" }} />
+              <Text className="text-xs text-gray-500">Đã sửa ({safePending.updated.length})</Text>
+            </View>
+            <Text className="text-xs text-red-500">Sẽ xóa ({safePending.deleted.length})</Text>
           </View>
-          <Text className="text-xs text-red-500">Sẽ xóa ({safePending.deleted.length})</Text>
-        </View>
-      )}
+        )}
 
-      {/* ── Search ───────────────────────────────────────────────── */}
-      <View style={{ position: "relative", justifyContent: "center" }}>
-        <View style={{ position: "absolute", left: 14, zIndex: 1 }}>
-          <Search size={15} color={colors.gray[400]} />
+        {/* ── Search ───────────────────────────────────────────────── */}
+        <View style={{ position: "relative", justifyContent: "center" }}>
+          <View style={{ position: "absolute", left: 14, zIndex: 1 }}>
+            <Search size={15} color={colors.gray[400]} />
+          </View>
+          <TextInput
+            value={search}
+            onChangeText={setSearch}
+            placeholder="Tìm nguyên liệu..."
+            placeholderTextColor={colors.gray[300]}
+            className="bg-white border border-gray-200 rounded-xl text-sm text-gray-800"
+            style={{ paddingLeft: 38, paddingRight: 16, paddingVertical: 11 }}
+          />
         </View>
-        <TextInput
-          value={search}
-          onChangeText={setSearch}
-          placeholder="Tìm nguyên liệu..."
-          placeholderTextColor={colors.gray[300]}
-          className="bg-white border border-gray-200 rounded-xl text-sm text-gray-800"
-          style={{ paddingLeft: 38, paddingRight: 16, paddingVertical: 11 }}
-        />
+
+        {isLoading && (
+          <View className="bg-white rounded-2xl border border-gray-100 flex-row items-center justify-center py-16" style={{ gap: 8 }}>
+            <ActivityIndicator size="small" color={colors.gray[400]} />
+            <Text className="text-sm text-gray-400">Đang tải nguyên liệu...</Text>
+          </View>
+        )}
       </View>
-
-      {isLoading && (
-        <View className="bg-white rounded-2xl border border-gray-100 flex-row items-center justify-center py-16" style={{ gap: 8 }}>
-          <ActivityIndicator size="small" color={colors.gray[400]} />
-          <Text className="text-sm text-gray-400">Đang tải nguyên liệu...</Text>
-        </View>
-      )}
-    </View>
+    ),
+    [
+      safeIngredients.length,
+      hasPending,
+      pendingCount,
+      openDiscard,
+      isSaving,
+      handleSaveAll,
+      openAdd,
+      isImporting,
+      handleImportPick,
+      saveError,
+      resetSaveError,
+      importError,
+      closeImportError,
+      safePending.added.length,
+      safePending.updated.length,
+      safePending.deleted.length,
+      search,
+      isLoading,
+    ]
   );
 
   // ──────────────────────────────────────────────────────────────────────
   return (
     <View style={{ flex: 1 }} className="bg-gray-50">
-      {/* ── Danh sách: lưới 2 cột, mỗi nguyên liệu 1 thẻ có viền riêng ──
-          [TỐI ƯU] Đổi từ ScrollView + .map() render TOÀN BỘ nguyên liệu
-          cùng lúc sang FlatList — chỉ dựng (mount) các thẻ đang thực sự
-          hiển thị trên màn hình + vài thẻ đệm gần đó (virtualization).
-          Đây là thay đổi có tác động lớn nhất tới độ mượt: với danh sách
-          dài, ScrollView cũ phải vẽ và giữ trong bộ nhớ mọi thẻ ngay từ
-          đầu dù người dùng chưa cuộn tới, còn FlatList chỉ vẽ phần cần
-          thiết rồi tái sử dụng khi cuộn. */}
+      {/* ── Danh sách: lưới 2 cột, mỗi nguyên liệu 1 thẻ có viền riêng ── */}
       <FlatList
-        data={isLoading ? [] : filtered}
+        data={isLoading ? EMPTY_LIST : filtered}
         keyExtractor={(ing, idx) => ing._id || String(idx)}
         numColumns={2}
-        columnWrapperStyle={{ justifyContent: "space-between" }}
-        contentContainerStyle={{ padding: 16, paddingBottom: 40, flexGrow: 1 }}
+        columnWrapperStyle={COLUMN_WRAPPER_STYLE}
+        contentContainerStyle={LIST_CONTENT_CONTAINER_STYLE}
         keyboardShouldPersistTaps="handled"
         ListHeaderComponent={listHeader}
-        ListEmptyComponent={
-          !isLoading ? (
-            <View className="bg-white rounded-2xl border border-gray-100 items-center py-14 px-6">
-              <Text style={{ fontSize: 34 }}>🥬</Text>
-              <Text className="text-sm text-gray-300 font-bold mt-2">Không tìm thấy nguyên liệu nào</Text>
-            </View>
-          ) : null
-        }
+        ListEmptyComponent={isLoading ? null : EMPTY_STATE}
         renderItem={renderItem}
-        /* Các tham số dưới đây điều chỉnh mức virtualization: số item vẽ
-           ngay từ đầu, số item vẽ thêm mỗi batch khi cuộn, và "cửa sổ" vùng
-           được giữ vẽ quanh vị trí đang xem — giảm số thẻ tồn tại cùng lúc
-           trong cây render mà không ảnh hưởng trải nghiệm cuộn. */
         initialNumToRender={8}
         maxToRenderPerBatch={8}
         windowSize={7}
@@ -649,54 +690,87 @@ export default function IngredientsPage() {
               </Pressable>
             </View>
 
-            <ScrollView contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 16 }} keyboardShouldPersistTaps="handled">
+            {/* [SỬA LỖI - lần 2] Chỉ tách backdrop (lần sửa trước) là chưa đủ.
+                Nguyên nhân thật: ScrollView không có kích thước RÕ RÀNG của
+                riêng nó — nó chỉ nằm trong 1 View cha có `maxHeight: "85%"`
+                + `overflow: hidden`. Không có `style={{flex:1}}`, ScrollView
+                có thể tự đo chiều cao theo ĐÚNG nội dung bên trong nó (không
+                bị giới hạn), trong khi phần HIỂN THỊ thật sự đã bị View cha
+                cắt bớt qua overflow-hidden — 2 vùng "chiều cao mà ScrollView
+                tự nghĩ nó có" và "chiều cao thật sự hiển thị" bị lệch nhau,
+                khiến việc bắt đầu kéo ở nhiều vùng (nhãn field, khoảng trống
+                giữa 2 cột) không kích hoạt đúng cơ chế cuộn nội bộ. Kéo từ
+                TextInput vẫn hoạt động vì nó đi qua cơ chế "tự cuộn tới ô
+                đang focus" riêng của RN, không qua path bị lệch này — che
+                giấu mất vấn đề. `style={{flex:1}}` buộc ScrollView tự biết
+                đúng kích thước khả dụng (phần còn lại sau khi trừ header +
+                footer, trong giới hạn maxHeight 85% của View cha), khớp
+                đúng với vùng hiển thị thật — đây là fix được xác nhận trong
+                chính issue #48822 của facebook/react-native cho lỗi
+                "ScrollView trong Modal không cuộn được". Thêm
+                `nestedScrollEnabled` để tăng độ ổn định nhận diện cử chỉ
+                cuộn trên Android trong layout lồng nhau kiểu này. */}
+            <ScrollView
+              style={{ flex: 1 }}
+              contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 16 }}
+              keyboardShouldPersistTaps="handled"
+              nestedScrollEnabled
+            >
               <View className="flex-row flex-wrap justify-between">
                 <FieldInput
                   label="Tên nguyên liệu"
                   required
                   full
+                  field="ingredientName"
                   value={form.ingredientName}
-                  onChangeText={(t) => setField("ingredientName", t)}
+                  onChange={setField}
                 />
                 <FieldInput
                   label="Số thứ tự"
                   keyboardType="number-pad"
+                  field="displayOrder"
                   value={String(form.displayOrder)}
-                  onChangeText={(t) => setField("displayOrder", t)}
+                  onChange={setField}
                 />
                 <FieldInput
                   label="Số lượng"
                   keyboardType="decimal-pad"
+                  field="quantity"
                   value={String(form.quantity)}
-                  onChangeText={(t) => setField("quantity", t)}
+                  onChange={setField}
                 />
                 <FieldInput
                   label="Đơn vị nhỏ"
+                  field="smallUnit"
                   value={form.smallUnit}
-                  onChangeText={(t) => setField("smallUnit", t)}
+                  onChange={setField}
                 />
                 <FieldInput
                   label="Đơn vị lớn"
+                  field="largeUnit"
                   value={form.largeUnit}
-                  onChangeText={(t) => setField("largeUnit", t)}
+                  onChange={setField}
                 />
                 <FieldInput
                   label="Giá / ĐVL (₫)"
                   keyboardType="decimal-pad"
+                  field="pricePerLargeUnit"
                   value={String(form.pricePerLargeUnit)}
-                  onChangeText={(t) => setField("pricePerLargeUnit", t)}
+                  onChange={setField}
                 />
                 <FieldInput
                   label="Hạn sử dụng (ngày)"
                   keyboardType="number-pad"
+                  field="expiryDays"
                   value={String(form.expiryDays)}
-                  onChangeText={(t) => setField("expiryDays", t)}
+                  onChange={setField}
                 />
                 <FieldInput
                   label="Ghi chú"
                   full
+                  field="note"
                   value={form.note}
-                  onChangeText={(t) => setField("note", t)}
+                  onChange={setField}
                 />
               </View>
 

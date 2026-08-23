@@ -20,33 +20,42 @@
 // dồn cục vào đúng lúc AppDrawer mount — góp phần vào cảm giác giật khi vừa
 // đăng nhập / mới mở app.
 //
-// Đổi sang React.lazy(() => import(...)): Metro vẫn đóng gói toàn bộ code
+// Đổi sang import động (qua lazyScreen()): Metro vẫn đóng gói toàn bộ code
 // vào 1 bundle như cũ (RN không tách bundle theo network như web), NHƯNG
 // phần THÂN module của từng trang chỉ được evaluate khi trang đó thật sự
 // được render lần đầu — dàn trải chi phí ra theo từng lần người dùng mở
-// trang đó, thay vì dồn hết vào 1 lần tại thời điểm AppDrawer mount. Bắt
-// buộc phải có <Suspense> bao quanh (dùng chung qua withSuspense.js).
+// trang đó, thay vì dồn hết vào 1 lần tại thời điểm AppDrawer mount.
+//
+// [BUGFIX] Trước đây dùng React.lazy() + <Suspense> (withSuspense.js).
+// Với React 19 + react-native-screens bản mới, đặt <Suspense> trực tiếp ở
+// vị trí `component` của Drawer.Screen gây cảnh báo "Can't perform a React
+// state update on a component that hasn't mounted yet" mỗi khi Promise của
+// React.lazy() resolve đúng lúc SceneView đang chuyển màn hình (lỗi tương
+// thích đã biết giữa Suspense và SceneView, không phải do trang tự setState
+// sai chỗ). lazyScreen() tự làm việc tương đương bằng useState/useEffect +
+// import() động, không đụng tới Suspense nên tránh được đúng pattern đó —
+// xem chi tiết trong lazyScreen.js.
 import React from "react";
 import { createDrawerNavigator } from "@react-navigation/drawer";
 import CustomDrawerContent from "./CustomDrawerContent";
 import AppHeader from "./AppHeader";
 import { withProtection } from "./ProtectedScreen";
-import withSuspense from "./withSuspense";
+import lazyScreen from "./lazyScreen";
 import { NAV } from "./navConfig";
 import { makePlaceholder } from "../pages/PlaceholderPage";
 
-const HomePage = React.lazy(() => import("../pages/HomePage"));
-const CashFlowPage = React.lazy(() => import("../pages/CashFlow"));
-const CustomersPage = React.lazy(() => import("../pages/Customers"));
-const IngredientsPage = React.lazy(() => import("../pages/IngredientsPage"));
-const MenuPage = React.lazy(() => import("../pages/MenuPage"));
-const FruitPage = React.lazy(() => import("../pages/FruitPage"));
-const OnlineOrdersPage = React.lazy(() => import("../pages/OnlineOrdersPage"));
-const StoragePage = React.lazy(() => import("../pages/StoragePage"));
-const VoucherPage = React.lazy(() => import("../pages/VoucherPage"));
-const OrdersPage = React.lazy(() => import("../pages/OrdersPage"));
-const KitchenPage = React.lazy(() => import("../pages/KitchenPage"));
-const AnalystPage = React.lazy(() => import("../pages/AnalystPage"));
+const HomePage = lazyScreen(() => import("../pages/HomePage"));
+const CashFlowPage = lazyScreen(() => import("../pages/CashFlow"));
+const CustomersPage = lazyScreen(() => import("../pages/Customers"));
+const IngredientsPage = lazyScreen(() => import("../pages/IngredientsPage"));
+const MenuPage = lazyScreen(() => import("../pages/MenuPage"));
+const FruitPage = lazyScreen(() => import("../pages/FruitPage"));
+const OnlineOrdersPage = lazyScreen(() => import("../pages/OnlineOrdersPage"));
+const StoragePage = lazyScreen(() => import("../pages/StoragePage"));
+const VoucherPage = lazyScreen(() => import("../pages/VoucherPage"));
+const OrdersPage = lazyScreen(() => import("../pages/OrdersPage"));
+const KitchenPage = lazyScreen(() => import("../pages/KitchenPage"));
+const AnalystPage = lazyScreen(() => import("../pages/AnalystPage"));
 
 const Drawer = createDrawerNavigator();
 const SCREEN_COMPONENTS = {
@@ -65,7 +74,7 @@ const SCREEN_COMPONENTS = {
 };
 const PROTECTED_SCREENS = NAV.map(({ screen, label, roles }) => {
   const RawComponent = SCREEN_COMPONENTS[screen] ?? makePlaceholder(label);
-  return { screen, label, Component: withSuspense(withProtection(RawComponent, { allowedRoles: roles })) };
+  return { screen, label, Component: withProtection(RawComponent, { allowedRoles: roles }) };
 });
 
 export default function AppDrawer() {

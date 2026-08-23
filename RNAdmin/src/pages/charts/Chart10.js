@@ -4,7 +4,19 @@
 // type="range"> → RangeSlider tự dựng (xem sub_components/RangeSlider.js).
 // Bar chart tổng quan → BarLineChart. <sub> (Q_dự đoán) không có trên RN —
 // viết phẳng thành text, không ảnh hưởng nội dung công thức.
-import React, { useState, useMemo } from "react";
+//
+// [SUA — tối ưu hiệu suất, đợt 2] Đây là chart tương tác nhiều nhất trang
+// (mỗi nguyên liệu có 3 slider Kp/Ki/Kd + nút mở rộng) nên tách hẳn phần thẻ
+// nguyên liệu ra IngredientCard (React.memo riêng) thay vì render trực tiếp
+// trong .map() của Chart10:
+//   - updateK đổi từ đóng gói trực tiếp `pidRows` sang đọc qua pidRowsRef —
+//     nhờ vậy updateK có tham chiếu ỔN ĐỊNH giữa các lần render (chỉ đổi khi
+//     đổi tf ngày/tuần), không đổi mỗi khi có 1 dòng được cập nhật.
+//   - onRowsChange (từ AnalystPage) tạo mảng mới nhưng GIỮ NGUYÊN object
+//     tham chiếu của các dòng KHÔNG đổi (`rows.map((d,i)=> i===idx? updated
+//     : d)`) — kết hợp với IngredientCard đã memo, kéo 1 slider ở dòng nào
+//     chỉ dòng đó re-render, N-1 dòng còn lại được React bỏ qua hoàn toàn.
+import React, { useState, useMemo, useCallback, useRef } from "react";
 import { View, Text, Pressable } from "react-native";
 import { Package, ChevronUp, ChevronDown } from "lucide-react-native";
 import ChartCard from "./sub_components/ChartCard";
@@ -21,7 +33,15 @@ const K_PARAMS = [
   ["Kd", "Derivative", 0.01, 0.3, "#f59e0b"],
 ];
 
-export default function Chart10({ pidRows = [], tf = "day", onTf, onRowsChange }) {
+const TF_OPTIONS = [
+  ["day", "Hôm nay"],
+  ["week", "Tuần này"],
+];
+
+const SUMMARY_BAR_FMT = (v) => `${v}%`;
+const SUMMARY_AXIS_FMT = (v) => `${Math.round(v)}%`;
+
+function Chart10({ pidRows = [], tf = "day", onTf, onRowsChange }) {
   const [expandedRow, setExpandedRow] = useState(null);
 
   const pidChartData = useMemo(
@@ -46,19 +66,51 @@ export default function Chart10({ pidRows = [], tf = "day", onTf, onRowsChange }
   const summaryMax = pidChartData.length
     ? Math.max(120, ...pidChartData.map((d) => Math.max(d.actual, d.predicted))) * 1.1
     : 120;
-  const summaryTicks = [0, summaryMax * 0.25, summaryMax * 0.5, summaryMax * 0.75, summaryMax];
+  const summaryTicks = useMemo(
+    () => [0, summaryMax * 0.25, summaryMax * 0.5, summaryMax * 0.75, summaryMax],
+    [summaryMax]
+  );
+  const summaryBars = useMemo(
+    () => [
+      { key: "actual", name: "Kỳ này", color: "#93c5fd", format: SUMMARY_BAR_FMT },
+      { key: "predicted", name: "PID dự đoán", color: "#f97316", format: SUMMARY_BAR_FMT },
+    ],
+    []
+  );
+  const summaryBarAxis = useMemo(
+    () => ({ max: summaryTicks[4], ticks: summaryTicks, formatter: SUMMARY_AXIS_FMT }),
+    [summaryTicks]
+  );
+  const summaryReferenceLine = useMemo(
+    () => ({ value: 100, color: "#22c55e", label: "Kỳ vọng", axis: "bar" }),
+    []
+  );
 
-  const updateK = async (idx, key, val) => {
-    const ing = pidRows[idx];
-    const updated = { ...ing, [key]: val };
-    const newRows = pidRows.map((d, i) => (i === idx ? updated : d));
-    onRowsChange?.(newRows); // optimistic bubble-up, giữ nguyên như bản gốc
-    try {
-      await apiPatch(`/pid/${ing.ingredientId}`, { Kp: updated.Kp, Ki: updated.Ki, Kd: updated.Kd });
-    } catch (err) {
-      console.error("updateK failed:", err);
-    }
-  };
+  // pidRowsRef: đọc dòng mới nhất bên trong updateK mà KHÔNG cần pidRows làm
+  // dependency — nhờ vậy updateK giữ nguyên tham chiếu giữa các lần cập nhật
+  // (xem ghi chú đầu file).
+  const pidRowsRef = useRef(pidRows);
+  pidRowsRef.current = pidRows;
+
+  const updateK = useCallback(
+    async (idx, key, val) => {
+      const rows = pidRowsRef.current;
+      const ing = rows[idx];
+      const updated = { ...ing, [key]: val };
+      const newRows = rows.map((d, i) => (i === idx ? updated : d));
+      onRowsChange?.(newRows); // optimistic bubble-up, giữ nguyên như bản gốc
+      try {
+        await apiPatch(`/pid/${ing.ingredientId}`, { Kp: updated.Kp, Ki: updated.Ki, Kd: updated.Kd });
+      } catch (err) {
+        console.error("updateK failed:", err);
+      }
+    },
+    [onRowsChange]
+  );
+
+  const onToggleExpand = useCallback((idx) => {
+    setExpandedRow((prev) => (prev === idx ? null : idx));
+  }, []);
 
   return (
     <ChartCard>
@@ -68,7 +120,7 @@ export default function Chart10({ pidRows = [], tf = "day", onTf, onRowsChange }
           <Package size={16} color="#16a34a" />
           <Text className="font-bold text-gray-700">Nguyên liệu cần chuẩn bị — PID Controller</Text>
         </View>
-        <TabToggle value={tf} onChange={onTf} options={[["day", "Hôm nay"], ["week", "Tuần này"]]} />
+        <TabToggle value={tf} onChange={onTf} options={TF_OPTIONS} />
       </View>
 
       {/* ── Formula banner ── */}
@@ -90,12 +142,9 @@ export default function Chart10({ pidRows = [], tf = "day", onTf, onRowsChange }
         <BarLineChart
           data={pidChartData}
           height={200}
-          bars={[
-            { key: "actual", name: "Kỳ này", color: "#93c5fd", format: (v) => `${v}%` },
-            { key: "predicted", name: "PID dự đoán", color: "#f97316", format: (v) => `${v}%` },
-          ]}
-          barAxis={{ max: summaryTicks[4], ticks: summaryTicks, formatter: (v) => `${Math.round(v)}%` }}
-          referenceLine={{ value: 100, color: "#22c55e", label: "Kỳ vọng", axis: "bar" }}
+          bars={summaryBars}
+          barAxis={summaryBarAxis}
+          referenceLine={summaryReferenceLine}
           gridColor="#f0fdf4"
           emptyLabel="Chưa có nguyên liệu"
         />
@@ -103,99 +152,17 @@ export default function Chart10({ pidRows = [], tf = "day", onTf, onRowsChange }
 
       {/* ── Ingredient cards ── */}
       <View className="flex-row flex-wrap gap-4">
-        {pidRows.map((ing, idx) => {
-          const rawHist = tf === "day" ? ing.dayHistory : ing.weekHistory;
-          const hist = Array.isArray(rawHist) ? rawHist : [];
-          const exp = (tf === "day" ? ing.dayExpected : ing.weekExpected) || 0;
-          const { pred, pTerm, iTerm, dTerm, e } = pidCalc(hist, exp, ing.Kp, ing.Ki, ing.Kd);
-          const predR = r1(pred);
-          const lastAct = hist.length > 0 ? hist[hist.length - 1] : 0;
-          const delta = r1(pred - lastAct);
-          const isExpand = expandedRow === idx;
-
-          const changeRatio = lastAct !== 0 ? Math.abs(delta / lastAct) : delta === 0 ? 0 : Infinity;
-          const stable = changeRatio < 0.03;
-          const statusBg = stable ? "#f3f4f6" : delta > 0 ? "#ffedd5" : "#dcfce7";
-          const statusColor = stable ? "#6b7280" : delta > 0 ? "#ea580c" : "#16a34a";
-          const statusLabel = stable ? "Ổn định" : delta > 0 ? `+${r1(delta)} ${ing.unit}` : `${r1(delta)} ${ing.unit}`;
-
-          return (
-            <View key={idx} className="rounded-xl overflow-hidden" style={{ borderWidth: 1, borderColor: "#f3f4f6", width: "100%" }}>
-              {/* Card header */}
-              <View className="flex-row items-center justify-between px-4 pt-3 pb-2">
-                <View className="flex-row items-center">
-                  <Text className="font-bold text-gray-800 text-sm">{ing.name}</Text>
-                  <Text className="ml-1.5 text-xs text-gray-400 bg-gray-100 px-1.5 rounded-full" style={{ paddingVertical: 1 }}>
-                    {ing.unit}
-                  </Text>
-                </View>
-                <Text className="text-xs font-bold px-2 rounded-full" style={{ backgroundColor: statusBg, color: statusColor, paddingVertical: 2 }}>
-                  {statusLabel}
-                </Text>
-              </View>
-
-              {/* Sparkline + summary */}
-              <View className="flex-row items-center gap-3 px-4 pb-3">
-                <MiniSparkline data={hist} predicted={predR} color="#22c55e" w={110} h={40} />
-                <View style={{ flex: 1, minWidth: 0 }}>
-                  <View className="flex-row justify-between mb-0.5">
-                    <Text className="text-xs text-gray-400">Kỳ trước</Text>
-                    <Text className="text-xs text-gray-700" style={{ fontFamily: "monospace" }}>{lastAct} {ing.unit}</Text>
-                  </View>
-                  <View className="flex-row justify-between mb-0.5">
-                    <Text className="text-xs text-gray-400">Kỳ vọng</Text>
-                    <Text className="text-xs text-gray-500" style={{ fontFamily: "monospace" }}>{exp} {ing.unit}</Text>
-                  </View>
-                  <View className="flex-row justify-between">
-                    <Text className="text-xs font-semibold" style={{ color: "#f97316" }}>PID dự đoán</Text>
-                    <Text className="text-xs font-black" style={{ color: "#ea580c", fontFamily: "monospace" }}>{predR} {ing.unit}</Text>
-                  </View>
-                </View>
-              </View>
-
-              {/* Expand toggle */}
-              <Pressable
-                onPress={() => setExpandedRow(isExpand ? null : idx)}
-                className="flex-row items-center justify-between px-4 py-2 bg-gray-50"
-                style={{ borderTopWidth: 1, borderColor: "#f3f4f6" }}
-              >
-                <Text className="text-xs text-gray-500">Chỉnh thông số K — Kp={ing.Kp} · Ki={ing.Ki} · Kd={ing.Kd}</Text>
-                {isExpand ? <ChevronUp size={14} color="#9ca3af" /> : <ChevronDown size={14} color="#9ca3af" />}
-              </Pressable>
-
-              {/* Expanded K params */}
-              {isExpand && (
-                <View className="px-4 pb-4 pt-3 bg-gray-50" style={{ borderTopWidth: 1, borderColor: "#f3f4f6", gap: 12 }}>
-                  {K_PARAMS.map(([k, label, step, max, color]) => (
-                    <View key={k}>
-                      <View className="flex-row justify-between mb-1">
-                        <Text className="font-semibold" style={{ color, fontFamily: "monospace", fontSize: 12 }}>{k}</Text>
-                        <Text className="text-xs text-gray-500">{label}</Text>
-                        <Text className="text-xs text-gray-700" style={{ fontFamily: "monospace" }}>{ing[k]}</Text>
-                      </View>
-                      <RangeSlider min={0} max={max} step={step} value={ing[k]} onChange={(v) => updateK(idx, k, v)} color={color} />
-                    </View>
-                  ))}
-
-                  {/* PID breakdown */}
-                  <View className="pt-2" style={{ borderTopWidth: 1, borderColor: "#e5e7eb" }}>
-                    <Text className="text-xs text-gray-400 font-semibold mb-2" style={{ textTransform: "uppercase", letterSpacing: 0.5 }}>
-                      Phân tích PID
-                    </Text>
-                    <PidRow label="e (lỗi kỳ này)" value={`${r1(e)} ${ing.unit}`} color={e >= 0 ? "#f97316" : "#16a34a"} />
-                    <PidRow label="P = Kp·e" value={r1(pTerm)} color="#2563eb" />
-                    <PidRow label="I = Ki·Σe" value={r1(iTerm)} color="#2563eb" />
-                    <PidRow label="D = Kd·Δe" value={r1(dTerm)} color="#2563eb" />
-                    <View className="flex-row justify-between pt-1 mt-1" style={{ borderTopWidth: 1, borderColor: "#e5e7eb" }}>
-                      <Text className="text-xs font-bold text-gray-600">Dự đoán kỳ sau</Text>
-                      <Text className="text-xs font-black" style={{ color: "#ea580c", fontFamily: "monospace" }}>{predR} {ing.unit}</Text>
-                    </View>
-                  </View>
-                </View>
-              )}
-            </View>
-          );
-        })}
+        {pidRows.map((ing, idx) => (
+          <MemoIngredientCard
+            key={ing.ingredientId ?? idx}
+            ing={ing}
+            idx={idx}
+            tf={tf}
+            isExpanded={expandedRow === idx}
+            onToggleExpand={onToggleExpand}
+            onUpdateK={updateK}
+          />
+        ))}
       </View>
 
       {/* ── Bottom legend ── */}
@@ -217,6 +184,101 @@ export default function Chart10({ pidRows = [], tf = "day", onTf, onRowsChange }
   );
 }
 
+function IngredientCard({ ing, idx, tf, isExpanded, onToggleExpand, onUpdateK }) {
+  const rawHist = tf === "day" ? ing.dayHistory : ing.weekHistory;
+  const hist = Array.isArray(rawHist) ? rawHist : [];
+  const exp = (tf === "day" ? ing.dayExpected : ing.weekExpected) || 0;
+  const { pred, pTerm, iTerm, dTerm, e } = pidCalc(hist, exp, ing.Kp, ing.Ki, ing.Kd);
+  const predR = r1(pred);
+  const lastAct = hist.length > 0 ? hist[hist.length - 1] : 0;
+  const delta = r1(pred - lastAct);
+
+  const changeRatio = lastAct !== 0 ? Math.abs(delta / lastAct) : delta === 0 ? 0 : Infinity;
+  const stable = changeRatio < 0.03;
+  const statusBg = stable ? "#f3f4f6" : delta > 0 ? "#ffedd5" : "#dcfce7";
+  const statusColor = stable ? "#6b7280" : delta > 0 ? "#ea580c" : "#16a34a";
+  const statusLabel = stable ? "Ổn định" : delta > 0 ? `+${r1(delta)} ${ing.unit}` : `${r1(delta)} ${ing.unit}`;
+
+  return (
+    <View className="rounded-xl overflow-hidden" style={{ borderWidth: 1, borderColor: "#f3f4f6", width: "100%" }}>
+      {/* Card header */}
+      <View className="flex-row items-center justify-between px-4 pt-3 pb-2">
+        <View className="flex-row items-center">
+          <Text className="font-bold text-gray-800 text-sm">{ing.name}</Text>
+          <Text className="ml-1.5 text-xs text-gray-400 bg-gray-100 px-1.5 rounded-full" style={{ paddingVertical: 1 }}>
+            {ing.unit}
+          </Text>
+        </View>
+        <Text className="text-xs font-bold px-2 rounded-full" style={{ backgroundColor: statusBg, color: statusColor, paddingVertical: 2 }}>
+          {statusLabel}
+        </Text>
+      </View>
+
+      {/* Sparkline + summary */}
+      <View className="flex-row items-center gap-3 px-4 pb-3">
+        <MiniSparkline data={hist} predicted={predR} color="#22c55e" w={110} h={40} />
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <View className="flex-row justify-between mb-0.5">
+            <Text className="text-xs text-gray-400">Kỳ trước</Text>
+            <Text className="text-xs text-gray-700" style={{ fontFamily: "monospace" }}>{lastAct} {ing.unit}</Text>
+          </View>
+          <View className="flex-row justify-between mb-0.5">
+            <Text className="text-xs text-gray-400">Kỳ vọng</Text>
+            <Text className="text-xs text-gray-500" style={{ fontFamily: "monospace" }}>{exp} {ing.unit}</Text>
+          </View>
+          <View className="flex-row justify-between">
+            <Text className="text-xs font-semibold" style={{ color: "#f97316" }}>PID dự đoán</Text>
+            <Text className="text-xs font-black" style={{ color: "#ea580c", fontFamily: "monospace" }}>{predR} {ing.unit}</Text>
+          </View>
+        </View>
+      </View>
+
+      {/* Expand toggle */}
+      <Pressable
+        onPress={() => onToggleExpand(idx)}
+        className="flex-row items-center justify-between px-4 py-2 bg-gray-50"
+        style={{ borderTopWidth: 1, borderColor: "#f3f4f6" }}
+      >
+        <Text className="text-xs text-gray-500">Chỉnh thông số K — Kp={ing.Kp} · Ki={ing.Ki} · Kd={ing.Kd}</Text>
+        {isExpanded ? <ChevronUp size={14} color="#9ca3af" /> : <ChevronDown size={14} color="#9ca3af" />}
+      </Pressable>
+
+      {/* Expanded K params */}
+      {isExpanded && (
+        <View className="px-4 pb-4 pt-3 bg-gray-50" style={{ borderTopWidth: 1, borderColor: "#f3f4f6", gap: 12 }}>
+          {K_PARAMS.map(([k, label, step, max, color]) => (
+            <View key={k}>
+              <View className="flex-row justify-between mb-1">
+                <Text className="font-semibold" style={{ color, fontFamily: "monospace", fontSize: 12 }}>{k}</Text>
+                <Text className="text-xs text-gray-500">{label}</Text>
+                <Text className="text-xs text-gray-700" style={{ fontFamily: "monospace" }}>{ing[k]}</Text>
+              </View>
+              <RangeSlider min={0} max={max} step={step} value={ing[k]} onChange={(v) => onUpdateK(idx, k, v)} color={color} />
+            </View>
+          ))}
+
+          {/* PID breakdown */}
+          <View className="pt-2" style={{ borderTopWidth: 1, borderColor: "#e5e7eb" }}>
+            <Text className="text-xs text-gray-400 font-semibold mb-2" style={{ textTransform: "uppercase", letterSpacing: 0.5 }}>
+              Phân tích PID
+            </Text>
+            <PidRow label="e (lỗi kỳ này)" value={`${r1(e)} ${ing.unit}`} color={e >= 0 ? "#f97316" : "#16a34a"} />
+            <PidRow label="P = Kp·e" value={r1(pTerm)} color="#2563eb" />
+            <PidRow label="I = Ki·Σe" value={r1(iTerm)} color="#2563eb" />
+            <PidRow label="D = Kd·Δe" value={r1(dTerm)} color="#2563eb" />
+            <View className="flex-row justify-between pt-1 mt-1" style={{ borderTopWidth: 1, borderColor: "#e5e7eb" }}>
+              <Text className="text-xs font-bold text-gray-600">Dự đoán kỳ sau</Text>
+              <Text className="text-xs font-black" style={{ color: "#ea580c", fontFamily: "monospace" }}>{predR} {ing.unit}</Text>
+            </View>
+          </View>
+        </View>
+      )}
+    </View>
+  );
+}
+
+const MemoIngredientCard = React.memo(IngredientCard);
+
 function PidRow({ label, value, color }) {
   return (
     <View className="flex-row justify-between mb-1">
@@ -225,3 +287,5 @@ function PidRow({ label, value, color }) {
     </View>
   );
 }
+
+export default React.memo(Chart10);

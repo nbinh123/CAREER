@@ -14,7 +14,7 @@ const shortDate = (iso) => {
   return `${d}/${m}/${y}`;
 };
 
-export default function DateField({ label, value, onChange, accentClassName = "text-purple-500" }) {
+function DateField({ label, value, onChange, accentClassName = "text-purple-500" }) {
   const [show, setShow] = useState(false);
   const dateObj = value ? new Date(`${value}T00:00:00`) : new Date();
 
@@ -53,3 +53,5 @@ export default function DateField({ label, value, onChange, accentClassName = "t
     </View>
   );
 }
+
+export default React.memo(DateField);

@@ -2,6 +2,11 @@
 // [UI] Chuyển từ Chart03.js gốc. Giữ nguyên 100% addMA + logic tính
 // topTick/customTicks/c3Interval. <input type="date"> → DateField
 // (DateTimePicker), <input type="number"> (MA kỳ) → PeriodInput.
+//
+// [SUA — tối ưu hiệu suất, đợt 2] React.memo + useMemo cho bars/lines/barAxis
+// (xem ghi chú ở Chart01.js). `lines` phụ thuộc maPeriod (đổi label "MA (n
+// kỳ trước)") nên có mặt trong dependency array — khác Chart01/02 là hằng số
+// tuyệt đối.
 import React, { useMemo } from "react";
 import { View } from "react-native";
 import { Calendar } from "lucide-react-native";
@@ -14,7 +19,7 @@ import PeriodInput from "./sub_components/PeriodInput";
 import { addMA, fmtAxisMoney } from "./helpers/mathHelpers";
 import fmtVND from "../../utils/fmtVND";
 
-export default function Chart03({ data = [], dateFrom, dateTo, maPeriod = 7, onDateFrom, onDateTo, onMaPeriod }) {
+function Chart03({ data = [], dateFrom, dateTo, maPeriod = 7, onDateFrom, onDateTo, onMaPeriod }) {
   const chartData = useMemo(() => {
     const safeData = Array.isArray(data) ? data : [];
     if (!safeData.length) return [];
@@ -24,7 +29,17 @@ export default function Chart03({ data = [], dateFrom, dateTo, maPeriod = 7, onD
   const c3Interval = Math.max(0, Math.floor(chartData.length / 9) - 1);
   const maxVal = chartData.length > 0 ? Math.max(...chartData.map((item) => Math.max(item.revenue || 0, item.ma || 0))) : 0;
   const topTick = maxVal > 0 ? maxVal * 2 : 1000;
-  const customTicks = [0, topTick * 0.25, topTick * 0.5, topTick * 0.75, topTick];
+  const customTicks = useMemo(() => [0, topTick * 0.25, topTick * 0.5, topTick * 0.75, topTick], [topTick]);
+
+  const bars = useMemo(() => [{ key: "revenue", name: "Doanh thu", color: chart.violetBar, format: fmtVND }], []);
+  const lines = useMemo(
+    () => [{ key: "ma", name: `MA (${maPeriod} kỳ trước)`, color: chart.violetLine, format: fmtVND }],
+    [maPeriod]
+  );
+  const barAxis = useMemo(
+    () => ({ max: customTicks[4], ticks: customTicks, formatter: fmtAxisMoney, tooltipFormatter: fmtVND }),
+    [customTicks]
+  );
 
   return (
     <ChartCard>
@@ -48,9 +63,9 @@ export default function Chart03({ data = [], dateFrom, dateTo, maPeriod = 7, onD
       <BarLineChart
         data={chartData}
         height={260}
-        bars={[{ key: "revenue", name: "Doanh thu", color: chart.violetBar, format: fmtVND }]}
-        lines={[{ key: "ma", name: `MA (${maPeriod} kỳ trước)`, color: chart.violetLine, format: fmtVND }]}
-        barAxis={{ max: customTicks[4], ticks: customTicks, formatter: fmtAxisMoney, tooltipFormatter: fmtVND }}
+        bars={bars}
+        lines={lines}
+        barAxis={barAxis}
         gridColor={chart.violetGrid}
         xTickEvery={c3Interval + 1}
         emptyLabel="Chọn khoảng thời gian hợp lệ"
@@ -58,3 +73,5 @@ export default function Chart03({ data = [], dateFrom, dateTo, maPeriod = 7, onD
     </ChartCard>
   );
 }
+
+export default React.memo(Chart03);

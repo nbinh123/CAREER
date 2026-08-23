@@ -1,6 +1,10 @@
 // src/pages/charts/Chart09.js
 // [UI] Chuyển từ Chart09.js gốc. Pie (recharts) → DonutChart (SVG tự vẽ),
 // heatmap div-grid → Heatmap (đã gần như giữ nguyên, xem ghi chú ở đó).
+//
+// [SUA — tối ưu hiệu suất, đợt 2] React.memo + TF_OPTIONS hoist module scope.
+// Không cần useMemo cho `colors={chart.pieColors}` vì đó đã là tham chiếu ổn
+// định từ theme/tokens.js (không phải literal tạo mới mỗi render).
 import React from "react";
 import { View, Text } from "react-native";
 import { PieChart as PieIcon, Grid3x3 } from "lucide-react-native";
@@ -11,12 +15,18 @@ import TabToggle from "./sub_components/TabToggle";
 import DonutChart from "./sub_components/DonutChart";
 import Heatmap from "./sub_components/Heatmap";
 
-export default function Chart09({ pieData = [], heatmapData = [], tfPie = "day", onTfPie }) {
+const TF_OPTIONS = [
+  ["day", "Ngày"],
+  ["week", "Tuần"],
+  ["month", "Tháng"],
+];
+
+function Chart09({ pieData = [], heatmapData = [], tfPie = "day", onTfPie }) {
   return (
     <View style={{ gap: 20 }}>
       <ChartCard>
         <ChartHeader icon={PieIcon} iconColor="#a855f7" title="Top món ăn">
-          <TabToggle value={tfPie} onChange={onTfPie} options={[["day", "Ngày"], ["week", "Tuần"], ["month", "Tháng"]]} />
+          <TabToggle value={tfPie} onChange={onTfPie} options={TF_OPTIONS} />
         </ChartHeader>
         {pieData.length > 0 ? (
           <DonutChart data={pieData} colors={chart.pieColors} size={220} />
@@ -40,3 +50,5 @@ export default function Chart09({ pieData = [], heatmapData = [], tfPie = "day",
     </View>
   );
 }
+
+export default React.memo(Chart09);

@@ -10,6 +10,7 @@ import {
     ActivityIndicator,
     Switch,
     Image,
+    Dimensions,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import Animated, {
@@ -64,6 +65,16 @@ const EMPTY_FOOD = {
     note: "",
     ingredients: [],
 };
+
+// ─── Lưới 3 cột [UI] ─────────────────────────────────────────────────────
+// Tính width cố định theo pixel (không dùng flex:1/%) để hàng cuối cùng
+// (khi filter ra số món không chia hết cho 3) không bị các item còn lại
+// giãn to bất thường để lấp đầy hàng — lỗi kinh điển khi làm grid bằng
+// FlatList numColumns kết hợp flex:1.
+const GRID_GAP = 10;
+const GRID_PADDING = 16;
+const { width: SCREEN_WIDTH } = Dimensions.get("window");
+const CARD_WIDTH = (SCREEN_WIDTH - GRID_PADDING * 2 - GRID_GAP * 2) / 3;
 
 // fmtVND là util bên ngoài — bọc lại kiểu safeCall (giống FoodService) để 1
 // giá trị NaN/undefined lọt qua (do API trả thiếu field) không làm crash
@@ -180,6 +191,12 @@ function FieldInput({ label, required, value, onChangeText, keyboardType = "defa
 }
 
 /* Overlay dùng chung cho cả 3 modal — tương đương e.stopPropagation() bên web */
+// [FIX] Pressable lồng Pressable trước đây khiến Pressable trong giành
+// responder ngay từ lúc chạm, không nhường lại cho ScrollView con khi vuốt
+// ở vùng trống/label → vuốt không di chuyển. Thay bằng View với responder
+// tối giản: vẫn chặn tap đơn lan ra ngoài (onStartShouldSetResponder), nhưng
+// LUÔN nhường lại (onResponderTerminationRequest => true) ngay khi ScrollView
+// bên trong muốn nhận cử chỉ do phát hiện đang kéo/vuốt.
 function ModalOverlay({ onClose, children }) {
     return (
         <Modal transparent animationType="fade" onRequestClose={onClose}>
@@ -193,15 +210,19 @@ function ModalOverlay({ onClose, children }) {
                     padding: 20,
                 }}
             >
-                <Pressable onPress={() => { }} style={{ width: "100%", maxWidth: 460 }}>
+                <View
+                    onStartShouldSetResponder={() => true}
+                    onResponderTerminationRequest={() => true}
+                    style={{ width: "100%", maxWidth: 460 }}
+                >
                     {children}
-                </Pressable>
+                </View>
             </Pressable>
         </Modal>
     );
 }
 
-/* ── Skeleton card lúc loading lần đầu (thay lưới 8 ô .animate-pulse) ──── */
+/* ── Skeleton card lúc loading lần đầu (lưới 3 cột, khớp layout thật) ──── */
 function FoodCardSkeleton() {
     const opacity = useSharedValue(1);
     useEffect(() => {
@@ -214,27 +235,20 @@ function FoodCardSkeleton() {
     const animStyle = useAnimatedStyle(() => ({ opacity: opacity.value }));
 
     return (
-        <Animated.View style={animStyle} className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
-            <View className="bg-gray-100" style={{ height: 120 }} />
-            <View className="p-4" style={{ gap: 8 }}>
-                <View className="bg-gray-100 rounded" style={{ width: "70%", height: 14 }} />
-                <View className="bg-gray-100 rounded" style={{ width: "40%", height: 10 }} />
+        <Animated.View
+            style={[animStyle, { width: CARD_WIDTH }]}
+            className="bg-white rounded-2xl border border-gray-100 overflow-hidden"
+        >
+            <View className="bg-gray-100" style={{ aspectRatio: 1 }} />
+            <View className="p-2" style={{ gap: 4 }}>
+                <View className="bg-gray-100 rounded" style={{ width: "80%", height: 9 }} />
+                <View className="bg-gray-100 rounded" style={{ width: "40%", height: 9 }} />
             </View>
         </Animated.View>
     );
 }
 
 // ─── Sub-components ───────────────────────────────────────────────────────
-
-function StatusBadge({ isAvailable }) {
-    return (
-        <View className={`px-2 py-0.5 rounded-full ${isAvailable ? "bg-green-100" : "bg-gray-100"}`}>
-            <Text className={`text-[10px] font-bold ${isAvailable ? "text-green-700" : "text-gray-500"}`}>
-                {isAvailable ? "Đang bán" : "Nghỉ"}
-            </Text>
-        </View>
-    );
-}
 
 function AvailabilityToggle({ isAvailable, onToggle }) {
     return (
@@ -287,114 +301,63 @@ function FoodImage({ src, name, style }) {
     );
 }
 
-// [PERF] FoodCard là item của FlatList và có cây con khá nặng (ảnh, badge,
-// switch, 4 nút hành động). Bọc React.memo để mỗi item chỉ re-render khi
-// chính props của NÓ đổi — không phải mỗi khi MenuPage re-render (gõ tìm
-// kiếm, đổi filter, mở modal...). Điều kiện để memo có tác dụng: mọi hàm
-// truyền xuống (onEdit/onInfo/onRemove/onEditNote/onToggleAvailable) phải
-// giữ nguyên reference giữa các lần render — xem useCallback ở MenuPage.
-const FoodCard = React.memo(function FoodCard({ food, onEdit, onInfo, onRemove, onEditNote, isPending, onToggleAvailable }) {
+// [UI] Thẻ món rút gọn cho lưới 3 cột — chỉ giữ ảnh, tên, biên lợi nhuận và
+// 1 điểm chạm để mở Chi tiết (toàn bộ thẻ bấm được, icon Info chỉ là gợi ý
+// trực quan). Sửa/Ghi chú/Xoá/Bật-tắt bán chuyển hết vào modal Chi tiết —
+// xem InfoModal — để không mất chức năng khi rút gọn giao diện thẻ.
+// [PERF] Vẫn giữ React.memo — mỗi thẻ chỉ render lại khi props của chính nó
+// đổi, không phải mỗi khi MenuPage re-render. Chỉ còn 1 callback (onInfo,
+// đã ổn định qua useCallback ở MenuPage) nên điều kiện memo dễ giữ đúng hơn
+// bản trước (từng có 4 callback).
+const FoodCard = React.memo(function FoodCard({ food, onInfo, isPending }) {
     const margin =
         food.originalPrice > 0
             ? Math.round(((food.originalPrice - food.costPrice) / food.originalPrice) * 100)
             : 0;
-    const catName = extractCatName(food.categoryId);
+    const marginColor = margin > 50 ? colors.green[600] : margin > 30 ? "#d97706" : colors.red[500];
 
     return (
-        <View
-            className="bg-white rounded-2xl border overflow-hidden"
+        <Pressable
+            onPress={() => onInfo(food)}
             style={[
-                { borderColor: food.isAvailable ? colors.gray[100] : colors.gray[200] },
-                !food.isAvailable && { opacity: 0.75 },
+                { width: CARD_WIDTH, borderColor: food.isAvailable ? colors.gray[100] : colors.gray[200] },
+                !food.isAvailable && { opacity: 0.6 },
                 isPending && { borderWidth: 2, borderColor: "#fcd34d" },
             ]}
+            className="bg-white rounded-2xl border overflow-hidden"
         >
-            <View style={{ height: 120, position: "relative" }}>
-                <FoodImage src={food.imageUrl} name={food.foodName} style={{ width: "100%", height: 120 }} />
+            <View style={{ aspectRatio: 1, position: "relative" }}>
+                <FoodImage src={food.imageUrl} name={food.foodName} style={{ width: "100%", height: "100%" }} />
+
+                <View
+                    style={{ position: "absolute", top: 4, right: 4 }}
+                    className="w-5 h-5 rounded-full bg-white/90 items-center justify-center"
+                >
+                    <Info size={11} color={colors.gray[600]} />
+                </View>
 
                 {!food.isAvailable && (
                     <View
                         style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0 }}
                         className="bg-gray-200/60 items-center justify-center"
                     >
-                        <View className="bg-white rounded-lg px-2 py-1">
-                            <Text className="text-xs font-bold text-gray-500">Tạm nghỉ</Text>
-                        </View>
-                    </View>
-                )}
-
-                {isPending && (
-                    <View style={{ position: "absolute", top: 8, right: 8 }} className="bg-amber-400 rounded-full px-1.5 py-0.5">
-                        <Text className="text-white text-[10px] font-bold">Chưa lưu</Text>
+                        <Text className="text-[9px] font-bold text-gray-600 bg-white rounded px-1 py-0.5">Tạm nghỉ</Text>
                     </View>
                 )}
             </View>
 
-            <View className="p-4">
-                <View className="flex-row items-start justify-between mb-1" style={{ gap: 8 }}>
-                    <Text className="flex-1 font-bold text-gray-800 text-sm" numberOfLines={2}>
-                        {food.foodName}
-                    </Text>
-                    <View className="items-end" style={{ gap: 4 }}>
-                        <StatusBadge isAvailable={food.isAvailable} />
-                        <AvailabilityToggle isAvailable={food.isAvailable} onToggle={() => onToggleAvailable(food)} />
-                    </View>
-                </View>
-                <Text className="text-xs text-gray-400 font-semibold mb-3">{catName || "—"}</Text>
-
-                <View style={{ gap: 6 }}>
-                    <View className="flex-row justify-between">
-                        <Text className="text-xs text-gray-500">Giá bán</Text>
-                        <Text className="text-xs font-bold text-green-600">{safeFmtVND(food.originalPrice)}</Text>
-                    </View>
-                    <View className="flex-row justify-between">
-                        <Text className="text-xs text-gray-500">Giá vốn</Text>
-                        <Text className="text-xs text-gray-600">{safeFmtVND(food.costPrice)}</Text>
-                    </View>
-                    <View className="flex-row justify-between items-center">
-                        <Text className="text-xs text-gray-500">Biên LN</Text>
-                        <MarginBar margin={margin} />
-                    </View>
-                </View>
-
-                <View className="flex-row items-center mt-3 pt-3 border-t border-gray-50" style={{ gap: 8 }}>
-                    <Pressable
-                        onPress={() => onEdit(food)}
-                        className="flex-1 flex-row items-center justify-center bg-white border border-gray-200 rounded-xl"
-                        style={{ paddingVertical: 8, gap: 5 }}
-                    >
-                        <Edit2 size={12} color={colors.gray[600]} />
-                        <Text className="text-xs font-bold text-gray-700">Sửa</Text>
-                    </Pressable>
-                    <Pressable
-                        onPress={() => onInfo(food)}
-                        className="flex-1 flex-row items-center justify-center bg-white border border-gray-200 rounded-xl"
-                        style={{ paddingVertical: 8, gap: 5 }}
-                    >
-                        <Info size={12} color={colors.gray[600]} />
-                        <Text className="text-xs font-bold text-gray-700">Chi tiết</Text>
-                    </Pressable>
-                    <IconBtn icon={StickyNote} tone={food.note ? "active" : "default"} onPress={() => onEditNote(food)} />
-                    <IconBtn icon={Trash2} tone="danger" onPress={() => onRemove(food._id)} />
-                </View>
+            <View style={{ padding: 8, gap: 2 }}>
+                <Text className="font-bold text-gray-800" style={{ fontSize: 11 }} numberOfLines={1}>
+                    {food.foodName}
+                </Text>
+                <Text style={{ fontSize: 11, fontWeight: "800", color: marginColor }}>{margin}%</Text>
             </View>
-        </View>
+        </Pressable>
     );
 });
 
-// [PERF] Separator cấp module (không đọc props/state) để thay cho gap:12
-// từng có trên View bọc list — giữ đúng khoảng cách 12px giữa các thẻ khi
-// chuyển sang FlatList (FlatList không có prop `gap` cho khoảng cách giữa
-// item, phải dùng ItemSeparatorComponent).
-function ItemSeparator() {
-    return <View style={{ height: 12 }} />;
-}
-
 // [PERF] Nội dung tĩnh, không phụ thuộc state → khai báo ở cấp module để
-// reference KHÔNG BAO GIỜ đổi giữa các lần render. Nếu khai báo bên trong
-// MenuPage (kể cả bằng useMemo([])), vẫn ổn, nhưng đưa hẳn ra ngoài là cách
-// đơn giản và chắc chắn nhất, và áp dụng được cho object style — nơi rất dễ
-// vô tình tạo reference mới mỗi lần render (`style={{...}}` inline).
+// reference KHÔNG BAO GIỜ đổi giữa các lần render.
 const LIST_EMPTY_ELEMENT = (
     <View className="items-center py-16">
         <Text className="text-base font-bold text-gray-400">Không tìm thấy món ăn</Text>
@@ -402,11 +365,19 @@ const LIST_EMPTY_ELEMENT = (
     </View>
 );
 
-const LIST_CONTENT_STYLE = { padding: 16, paddingBottom: 40 };
+// [UI] gap dùng chung cho khoảng cách giữa các hàng (contentContainerStyle)
+// và giữa các cột trong 1 hàng (columnWrapperStyle) — cùng 1 giá trị GRID_GAP
+// để lưới đều nhau theo cả 2 chiều.
+const LIST_CONTENT_STYLE = { padding: GRID_PADDING, paddingBottom: 40, gap: 12 };
+const COLUMN_WRAPPER_STYLE = { gap: GRID_GAP };
 
 // ─── Info Modal ─────────────────────────────────────────────────────────
-
-function InfoModal({ food, open, onClose }) {
+// [UI] Giờ là nơi duy nhất chứa các hành động Sửa/Ghi chú/Xoá/Bật-tắt bán
+// (trước đây nằm trên từng FoodCard). Bật/tắt "Đang bán" cần phản ánh SỐNG
+// trong lúc modal đang mở — xem ghi chú tại chỗ khai báo `infoFood` trong
+// MenuPage (dùng useMemo tra cứu theo id thay vì lưu snapshot tĩnh), nếu
+// không Switch sẽ hiện sai trạng thái ngay sau khi bấm.
+function InfoModal({ food, open, onClose, onEdit, onEditNote, onRemove, onToggleAvailable }) {
     if (!open || !food) return null;
     const catName = extractCatName(food.categoryId);
     const pct = food.percentageDiscount ?? food.categoryId?.percentageDiscount ?? 0;
@@ -418,7 +389,6 @@ function InfoModal({ food, open, onClose }) {
     const rows = [
         ["Tên món", food.foodName],
         ["Danh mục", catName || "—"],
-        ["Trạng thái", food.isAvailable ? "Đang bán" : "Tạm nghỉ"],
         ["Giá bán gốc", safeFmtVND(food.originalPrice)],
         ["Giá vốn", safeFmtVND(food.costPrice)],
         ["Giảm %", `${pct}%`],
@@ -431,57 +401,81 @@ function InfoModal({ food, open, onClose }) {
 
     return (
         <ModalOverlay onClose={onClose}>
-            <View className="bg-white rounded-3xl overflow-hidden" style={{ maxHeight: "88%" }}>
-                <View className="px-6 pt-6 pb-4 flex-row items-center justify-between border-b border-gray-100">
-                    <Text className="text-base font-black text-green-900 flex-1" numberOfLines={1}>
-                        Chi tiết — {food.foodName}
-                    </Text>
-                    <Pressable onPress={onClose} className="w-8 h-8 rounded-xl bg-gray-50 items-center justify-center">
-                        <X size={16} color={colors.gray[400]} />
-                    </Pressable>
-                </View>
-
-                <ScrollView contentContainerStyle={{ padding: 20 }}>
-                    <FoodImage
-                        src={food.imageUrl}
-                        name={food.foodName}
-                        style={{ width: "100%", height: 160, borderRadius: 14, marginBottom: 16, overflow: "hidden" }}
-                    />
-
-                    <View className="border border-gray-50 rounded-xl overflow-hidden">
-                        {rows.map(([label, value], idx) => (
-                            <View
-                                key={label}
-                                className={`flex-row justify-between px-3.5 py-2.5 ${idx > 0 ? "border-t border-gray-50" : ""}`}
-                            >
-                                <Text className="text-gray-500 font-medium text-xs">{label}</Text>
-                                <Text className="text-gray-800 font-bold text-xs">{value}</Text>
-                            </View>
-                        ))}
+            <View className="bg-white rounded-3xl overflow-hidden" style={{ maxHeight: "90%" }}>
+                {/* [FIX] Tiêu đề + nội dung + hàng nút hành động giờ nằm CHUNG
+                    1 ScrollView — không còn phần nào cố định ngoài vùng cuộn,
+                    nên vuốt bắt đầu từ bất kỳ đâu trên modal (kể cả dòng tiêu
+                    đề, hàng nút dưới cùng) đều cuộn được. Đánh đổi: hàng nút
+                    không còn dính cố định ở đáy mà cuộn theo nội dung. */}
+                <ScrollView contentContainerStyle={{ paddingBottom: 8 }}>
+                    <View className="px-6 pt-6 pb-4 flex-row items-center justify-between border-b border-gray-100">
+                        <Text className="text-base font-black text-green-900 flex-1" numberOfLines={1}>
+                            Chi tiết — {food.foodName}
+                        </Text>
+                        <Pressable onPress={onClose} className="w-8 h-8 rounded-xl bg-gray-50 items-center justify-center">
+                            <X size={16} color={colors.gray[400]} />
+                        </Pressable>
                     </View>
 
-                    {food.ingredients?.length > 0 && (
-                        <View className="mt-4">
-                            <Text className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">Nguyên liệu</Text>
-                            <View style={{ gap: 6 }}>
-                                {food.ingredients.map((ing, i) => (
-                                    <View key={i} className="flex-row justify-between bg-gray-50 rounded-lg px-3 py-2">
-                                        <Text className="text-gray-700 font-semibold text-xs">{ing.ingredientName}</Text>
-                                        <Text className="text-gray-500 text-xs">
-                                            {ing.quantity} {ing.smallUnit} — {safeFmtVND(ing.price)}
-                                        </Text>
-                                    </View>
-                                ))}
-                            </View>
-                        </View>
-                    )}
-                </ScrollView>
+                    <View style={{ padding: 20 }}>
+                        <FoodImage
+                            src={food.imageUrl}
+                            name={food.foodName}
+                            style={{ width: "100%", height: 160, borderRadius: 14, marginBottom: 16, overflow: "hidden" }}
+                        />
 
-                <View className="flex-row justify-end px-5 py-4 border-t border-gray-100">
-                    <Pressable onPress={onClose} className="px-4 py-2.5 rounded-xl bg-gray-50 border border-gray-200">
-                        <Text className="text-sm font-bold text-gray-600">Đóng</Text>
-                    </Pressable>
-                </View>
+                        <View className="flex-row items-center justify-between bg-gray-50 rounded-xl px-3.5 py-2.5 mb-4">
+                            <Text className="text-sm font-medium text-gray-600">Đang bán</Text>
+                            <AvailabilityToggle isAvailable={food.isAvailable} onToggle={() => onToggleAvailable(food)} />
+                        </View>
+
+                        <View className="border border-gray-50 rounded-xl overflow-hidden">
+                            {rows.map(([label, value], idx) => (
+                                <View
+                                    key={label}
+                                    className={`flex-row justify-between px-3.5 py-2.5 ${idx > 0 ? "border-t border-gray-50" : ""}`}
+                                >
+                                    <Text className="text-gray-500 font-medium text-xs">{label}</Text>
+                                    <Text className="text-gray-800 font-bold text-xs">{value}</Text>
+                                </View>
+                            ))}
+                        </View>
+
+                        {food.ingredients?.length > 0 && (
+                            <View className="mt-4">
+                                <Text className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">Nguyên liệu</Text>
+                                <View style={{ gap: 6 }}>
+                                    {food.ingredients.map((ing, i) => (
+                                        <View key={i} className="flex-row justify-between bg-gray-50 rounded-lg px-3 py-2">
+                                            <Text className="text-gray-700 font-semibold text-xs">{ing.ingredientName}</Text>
+                                            <Text className="text-gray-500 text-xs">
+                                                {ing.quantity} {ing.smallUnit} — {safeFmtVND(ing.price)}
+                                            </Text>
+                                        </View>
+                                    ))}
+                                </View>
+                            </View>
+                        )}
+                    </View>
+
+                    <View className="flex-row items-center justify-between px-5 py-4 border-t border-gray-100" style={{ gap: 8 }}>
+                        <View className="flex-row items-center" style={{ gap: 6 }}>
+                            <IconBtn icon={Edit2} onPress={() => onEdit(food)} />
+                            <IconBtn icon={StickyNote} tone={food.note ? "active" : "default"} onPress={() => onEditNote(food)} />
+                            <IconBtn
+                                icon={Trash2}
+                                tone="danger"
+                                onPress={() => {
+                                    onRemove(food._id);
+                                    onClose();
+                                }}
+                            />
+                        </View>
+                        <Pressable onPress={onClose} className="px-4 py-2.5 rounded-xl bg-gray-50 border border-gray-200">
+                            <Text className="text-sm font-bold text-gray-600">Đóng</Text>
+                        </Pressable>
+                    </View>
+                </ScrollView>
             </View>
         </ModalOverlay>
     );
@@ -514,7 +508,7 @@ export default function MenuPage() {
     const [imageFile, setImageFile] = useState(null);
     const [imageRemoved, setImageRemoved] = useState(false);
     const [imageFieldKey, setImageFieldKey] = useState(0);
-    const [infoFood, setInfoFood] = useState(null);
+    const [infoFoodId, setInfoFoodId] = useState(null);
     const [saveStatus, setSaveStatus] = useState(null);
     const [noteFood, setNoteFood] = useState(null);
     const [noteDraft, setNoteDraft] = useState("");
@@ -522,10 +516,9 @@ export default function MenuPage() {
     const [isImporting, setIsImporting] = useState(false);
     const [importError, setImportError] = useState(null);
 
-    // [PERF] openEdit/openInfo/openNoteEdit được truyền thẳng xuống FoodCard
-    // (đã bọc React.memo). Nếu để là function thường, MenuPage re-render lần
-    // nào (gõ ô tìm kiếm, đổi filter, mở modal khác...) cũng tạo ra reference
-    // mới → React.memo trên FoodCard mất tác dụng, mọi item vẫn render lại.
+    // [PERF] openEdit/openInfo/openNoteEdit được truyền thẳng xuống FoodCard/
+    // InfoModal. Nếu để là function thường, MenuPage re-render lần nào cũng
+    // tạo reference mới → React.memo trên FoodCard mất tác dụng.
     // useCallback([]) giữ nguyên reference vì các hàm này chỉ dùng setter
     // (setForm/setModal/...) vốn đã ổn định giữa các lần render.
     const openNoteEdit = useCallback((fd) => {
@@ -534,9 +527,8 @@ export default function MenuPage() {
         setModal("note");
     }, []);
 
-    // handleSaveNote KHÔNG truyền xuống FoodCard (chỉ dùng trong modal ghi
-    // chú) nên không cần useCallback — giữ nguyên dạng function thường như
-    // bản gốc để code dễ đọc, tránh tối ưu không mang lại lợi ích thực tế.
+    // handleSaveNote KHÔNG truyền xuống FoodCard nên không cần useCallback —
+    // giữ nguyên dạng function thường như bản gốc để code dễ đọc.
     const handleSaveNote = () => {
         if (!noteFood) return;
         stageUpdateFood({ ...noteFood, note: noteDraft }, null); // không đổi ảnh
@@ -562,6 +554,17 @@ export default function MenuPage() {
     const visibleFoods = useMemo(
         () => normalizedFoods.filter((fd) => extractCatName(fd.categoryId) !== MIX_CATEGORY),
         [normalizedFoods]
+    );
+
+    // [UI/BUGFIX] Tra cứu món đang xem Chi tiết theo id, từ danh sách SỐNG
+    // (normalizedFoods) thay vì lưu nguyên object snapshot lúc bấm mở modal.
+    // Lý do: InfoModal giờ có Switch "Đang bán" thao tác được ngay trong lúc
+    // modal mở — nếu dùng snapshot tĩnh, bấm Switch sẽ cập nhật store nhưng
+    // object hiển thị trong modal không đổi theo, Switch sẽ "nảy" về trạng
+    // thái cũ. Tra theo id đảm bảo modal luôn phản ánh dữ liệu mới nhất.
+    const infoFood = useMemo(
+        () => normalizedFoods.find((f) => f._id === infoFoodId) ?? null,
+        [normalizedFoods, infoFoodId]
     );
 
     // Giá vốn tự tính từ nguyên liệu (luôn là Number, IngredientPicker tự tính ngay lúc thay đổi)
@@ -597,12 +600,10 @@ export default function MenuPage() {
         []
     );
 
-    // [PERF] Modal controls — openAdd/exportData/handleImportPick giờ được
-    // truyền vào phần header đã useMemo (xem bên dưới). Nếu để function
-    // thường, mỗi lần MenuPage render (kể cả gõ trong modal, không liên quan
-    // đến header) sẽ tạo reference mới → làm "hỏng" điều kiện memo của
-    // header, kéo theo FlatList render lại oan uổng. useCallback([]) giữ
-    // reference ổn định vì bên trong chỉ dùng setter/module import ổn định.
+    // [PERF] Modal controls — truyền vào phần header đã useMemo. Nếu để
+    // function thường, mỗi lần MenuPage render sẽ tạo reference mới → làm
+    // "hỏng" điều kiện memo của header, kéo theo FlatList render lại oan
+    // uổng. useCallback([]) giữ reference ổn định.
     const openAdd = useCallback(() => {
         setForm({ ...EMPTY_FOOD });
         setImageFile(null);
@@ -651,7 +652,7 @@ export default function MenuPage() {
     }, []);
 
     const openInfo = useCallback((fd) => {
-        setInfoFood(fd);
+        setInfoFoodId(fd._id);
         setModal("info");
     }, []);
 
@@ -662,6 +663,7 @@ export default function MenuPage() {
         setImageRemoved(false);
         setNoteFood(null);
         setNoteDraft("");
+        setInfoFoodId(null);
     };
 
     // Staged actions
@@ -715,148 +717,136 @@ export default function MenuPage() {
     const liveMargin = liveOriginal > 0 ? Math.round(((liveOriginal - liveCost) / liveOriginal) * 100) : 0;
 
     // [PERF] renderItem/keyExtractor cho FlatList — bọc useCallback để giữ
-    // reference ổn định giữa các lần render (tránh FlatList nghĩ cấu hình
-    // đổi và làm mất tối ưu nội bộ của nó). Phụ thuộc đúng những gì thực sự
-    // dùng bên trong: các callback đã ổn định (useCallback ở trên) +
-    // pendingChanges (đổi khi có thay đổi staged).
+    // reference ổn định giữa các lần render. FoodCard giờ chỉ cần onInfo +
+    // isPending (các hành động khác đã chuyển vào InfoModal), nên dependency
+    // array cũng gọn hơn bản trước.
     const keyExtractor = useCallback((item) => item._id, []);
 
     const renderFoodItem = useCallback(
         ({ item: food }) => (
             <FoodCard
                 food={food}
-                onEdit={openEdit}
                 onInfo={openInfo}
-                onRemove={handleRemove}
-                onEditNote={openNoteEdit}
-                onToggleAvailable={handleToggleAvailable}
                 isPending={pendingChanges.has(`add:${food._id}`) || pendingChanges.has(`update:${food._id}`)}
             />
         ),
-        [openEdit, openInfo, handleRemove, openNoteEdit, handleToggleAvailable, pendingChanges]
+        [openInfo, pendingChanges]
     );
 
     // [PERF-FIX] Nội dung header (tiêu đề, toolbar, banner lỗi, search + filter).
-    // TRƯỚC: đây là 1 biến JSX dựng lại mỗi lần MenuPage render, và được bọc
-    // trong 1 *function* (`renderListHeader`) khi truyền cho FlatList — RN
-    // coi function mới mỗi lần là "component khác", nên unmount/mount lại
-    // toàn bộ header (title, 6 nút toolbar, banner, search, filter pill) ở
-    // MỌI lần render, kể cả khi chỉ đang gõ trong modal thêm nguyên liệu hay
-    // bấm chọn danh mục. Đó chính là nguyên nhân cảm giác "delay".
-    // SAU: bọc useMemo, chỉ tính lại khi 1 trong các dependency dưới đây đổi.
-    // Nhờ vậy khi bạn sửa `form` (thêm nguyên liệu, gõ giá...) — thứ header
-    // không hề phụ thuộc — header giữ nguyên reference, và vì FlatList là
-    // PureComponent, nó thấy props không đổi nên BỎ QUA re-render hoàn toàn
-    // (không chỉ tránh remount, mà tránh luôn cả việc render lại).
+    // Bọc useMemo, chỉ tính lại khi 1 trong các dependency dưới đây đổi. Nhờ
+    // vậy khi bạn sửa `form` (thêm nguyên liệu, gõ giá...) — thứ header không
+    // hề phụ thuộc — header giữ nguyên reference, và vì FlatList là
+    // PureComponent, nó thấy props không đổi nên BỎ QUA re-render hoàn toàn.
     const headerSection = useMemo(
         () => (
-        <View style={{ gap: 14 }}>
-            {/* ── Header ────────────────────────────────────────────────── */}
-            <View>
-                <Text className="text-2xl font-black text-green-900">Thực đơn</Text>
-                <Text className="text-gray-500 text-sm mt-0.5">
-                    {visibleFoods.length} món • {visibleFoods.filter((f) => f.isAvailable).length} đang bán
-                </Text>
-            </View>
-
-            {/* ── Toolbar hành động ────────────────────────────────────── */}
-            <View className="flex-row flex-wrap items-center" style={{ gap: 8 }}>
-                {pendingCount > 0 && (
-                    <>
-                        <ActionBtn icon={RotateCcw} label="Huỷ thay đổi" variant="outline" disabled={loading} onPress={discardChanges} />
-                        <Pressable
-                            onPress={handleSaveAll}
-                            disabled={loading || saveStatus === "saving"}
-                            style={{ opacity: loading || saveStatus === "saving" ? 0.6 : 1 }}
-                            className={`flex-row items-center gap-1.5 px-4 py-2.5 rounded-xl ${saveStatus === "saving" ? "bg-amber-400" : saveStatus === "error" ? "bg-red-500" : "bg-amber-500"
-                                }`}
-                        >
-                            <Save size={14} color={colors.white} />
-                            <Text className="text-sm font-bold text-white">
-                                {saveStatus === "saving" ? "Đang lưu…" : saveStatus === "error" ? "Lỗi, thử lại" : `Lưu ${pendingCount} thay đổi`}
-                            </Text>
-                        </Pressable>
-                    </>
-                )}
-                {saveStatus === "saved" && pendingCount === 0 && (
-                    <View className="flex-row items-center" style={{ gap: 4 }}>
-                        <Check size={14} color={colors.green[600]} />
-                        <Text className="text-sm text-green-600 font-bold">Đã lưu thành công</Text>
-                    </View>
-                )}
-
-                <ActionBtn icon={Plus} label="Thêm món mới" variant="primary" disabled={loading} onPress={openAdd} />
-
-                {refreshMsg && (
-                    <View className="flex-row items-center" style={{ gap: 4 }}>
-                        <Check size={14} color={colors.blue[500]} />
-                        <Text className="text-sm text-blue-600 font-bold">{refreshMsg}</Text>
-                    </View>
-                )}
-                <ActionBtn
-                    icon={RefreshCcw}
-                    label="Làm mới"
-                    loading={loading}
-                    disabled={loading || pendingCount > 0}
-                    onPress={handleRefreshCosts}
-                />
-                <ActionBtn icon={FolderOpen} label="Xuất JSON" disabled={loading} onPress={exportData} />
-                <ActionBtn
-                    icon={Upload}
-                    label={isImporting ? "Đang tải lên..." : "Tải lên JSON"}
-                    loading={isImporting}
-                    disabled={loading || isImporting}
-                    onPress={handleImportPick}
-                />
-            </View>
-
-            {/* ── Banner lỗi ───────────────────────────────────────────── */}
-            {!!error && (
-                <View className="flex-row items-center justify-between gap-3 bg-red-50 border border-red-200 rounded-xl px-4 py-3">
-                    <Text className="flex-1 text-red-700 text-sm">{error}</Text>
-                    <Pressable onPress={clearError}>
-                        <X size={14} color={colors.red[600]} />
-                    </Pressable>
+            <View style={{ gap: 14 }}>
+                {/* ── Header ────────────────────────────────────────────────── */}
+                <View>
+                    <Text className="text-2xl font-black text-green-900">Thực đơn</Text>
+                    <Text className="text-gray-500 text-sm mt-0.5">
+                        {visibleFoods.length} món • {visibleFoods.filter((f) => f.isAvailable).length} đang bán
+                    </Text>
                 </View>
-            )}
-            {!!importError && (
-                <View className="flex-row items-center justify-between gap-3 bg-red-50 border border-red-200 rounded-xl px-4 py-3">
-                    <Text className="flex-1 text-red-700 text-sm">{importError}</Text>
-                    <Pressable onPress={() => setImportError(null)}>
-                        <X size={14} color={colors.red[600]} />
-                    </Pressable>
-                </View>
-            )}
 
-            {/* ── Search + Filter ──────────────────────────────────────── */}
-            <View style={{ gap: 10 }}>
-                <View style={{ position: "relative", justifyContent: "center" }}>
-                    <View style={{ position: "absolute", left: 14, zIndex: 1 }}>
-                        <Search size={14} color={colors.gray[400]} />
-                    </View>
-                    <TextInput
-                        value={search}
-                        onChangeText={setSearch}
-                        placeholder="Tìm món ăn..."
-                        placeholderTextColor={colors.gray[300]}
-                        className="bg-white border border-gray-200 rounded-xl text-sm text-gray-800"
-                        style={{ paddingLeft: 38, paddingRight: 14, paddingVertical: 11 }}
+                {/* ── Toolbar hành động ────────────────────────────────────── */}
+                <View className="flex-row flex-wrap items-center" style={{ gap: 8 }}>
+                    {pendingCount > 0 && (
+                        <>
+                            <ActionBtn icon={RotateCcw} label="Huỷ thay đổi" variant="outline" disabled={loading} onPress={discardChanges} />
+                            <Pressable
+                                onPress={handleSaveAll}
+                                disabled={loading || saveStatus === "saving"}
+                                style={{ opacity: loading || saveStatus === "saving" ? 0.6 : 1 }}
+                                className={`flex-row items-center gap-1.5 px-4 py-2.5 rounded-xl ${saveStatus === "saving" ? "bg-amber-400" : saveStatus === "error" ? "bg-red-500" : "bg-amber-500"
+                                    }`}
+                            >
+                                <Save size={14} color={colors.white} />
+                                <Text className="text-sm font-bold text-white">
+                                    {saveStatus === "saving" ? "Đang lưu…" : saveStatus === "error" ? "Lỗi, thử lại" : `Lưu ${pendingCount} thay đổi`}
+                                </Text>
+                            </Pressable>
+                        </>
+                    )}
+                    {saveStatus === "saved" && pendingCount === 0 && (
+                        <View className="flex-row items-center" style={{ gap: 4 }}>
+                            <Check size={14} color={colors.green[600]} />
+                            <Text className="text-sm text-green-600 font-bold">Đã lưu thành công</Text>
+                        </View>
+                    )}
+
+                    <ActionBtn icon={Plus} label="Thêm món mới" variant="primary" disabled={loading} onPress={openAdd} />
+
+                    {refreshMsg && (
+                        <View className="flex-row items-center" style={{ gap: 4 }}>
+                            <Check size={14} color={colors.blue[500]} />
+                            <Text className="text-sm text-blue-600 font-bold">{refreshMsg}</Text>
+                        </View>
+                    )}
+                    <ActionBtn
+                        icon={RefreshCcw}
+                        label="Làm mới"
+                        loading={loading}
+                        disabled={loading || pendingCount > 0}
+                        onPress={handleRefreshCosts}
+                    />
+                    <ActionBtn icon={FolderOpen} label="Xuất JSON" disabled={loading} onPress={exportData} />
+                    <ActionBtn
+                        icon={Upload}
+                        label={isImporting ? "Đang tải lên..." : "Tải lên JSON"}
+                        loading={isImporting}
+                        disabled={loading || isImporting}
+                        onPress={handleImportPick}
                     />
                 </View>
-                <View className="flex-row flex-wrap" style={{ gap: 8 }}>
-                    {CAT_FILTER.map((c) => (
-                        <Pressable
-                            key={c}
-                            onPress={() => setCatFilter(c)}
-                            style={{ paddingHorizontal: 12, paddingVertical: 7 }}
-                            className={`rounded-xl ${catFilter === c ? "bg-green-500" : "bg-white border border-gray-200"}`}
-                        >
-                            <Text className={`text-xs font-bold ${catFilter === c ? "text-white" : "text-gray-600"}`}>{c}</Text>
+
+                {/* ── Banner lỗi ───────────────────────────────────────────── */}
+                {!!error && (
+                    <View className="flex-row items-center justify-between gap-3 bg-red-50 border border-red-200 rounded-xl px-4 py-3">
+                        <Text className="flex-1 text-red-700 text-sm">{error}</Text>
+                        <Pressable onPress={clearError}>
+                            <X size={14} color={colors.red[600]} />
                         </Pressable>
-                    ))}
+                    </View>
+                )}
+                {!!importError && (
+                    <View className="flex-row items-center justify-between gap-3 bg-red-50 border border-red-200 rounded-xl px-4 py-3">
+                        <Text className="flex-1 text-red-700 text-sm">{importError}</Text>
+                        <Pressable onPress={() => setImportError(null)}>
+                            <X size={14} color={colors.red[600]} />
+                        </Pressable>
+                    </View>
+                )}
+
+                {/* ── Search + Filter ──────────────────────────────────────── */}
+                <View style={{ gap: 10 }}>
+                    <View style={{ position: "relative", justifyContent: "center" }}>
+                        <View style={{ position: "absolute", left: 14, zIndex: 1 }}>
+                            <Search size={14} color={colors.gray[400]} />
+                        </View>
+                        <TextInput
+                            value={search}
+                            onChangeText={setSearch}
+                            placeholder="Tìm món ăn..."
+                            placeholderTextColor={colors.gray[300]}
+                            className="bg-white border border-gray-200 rounded-xl text-sm text-gray-800"
+                            style={{ paddingLeft: 38, paddingRight: 14, paddingVertical: 11 }}
+                        />
+                    </View>
+                    <View className="flex-row flex-wrap" style={{ gap: 8 }}>
+                        {CAT_FILTER.map((c) => (
+                            <Pressable
+                                key={c}
+                                onPress={() => setCatFilter(c)}
+                                style={{ paddingHorizontal: 12, paddingVertical: 7 }}
+                                className={`rounded-xl ${catFilter === c ? "bg-green-500" : "bg-white border border-gray-200"}`}
+                            >
+                                <Text className={`text-xs font-bold ${catFilter === c ? "text-white" : "text-gray-600"}`}>{c}</Text>
+                            </Pressable>
+                        ))}
+                    </View>
                 </View>
             </View>
-        </View>
         ),
         [
             visibleFoods,
@@ -879,217 +869,224 @@ export default function MenuPage() {
         ]
     );
 
-    // Bọc thêm marginBottom cho riêng bản dùng làm ListHeaderComponent — tách
-    // useMemo cấp 2 này ra để không phải lặp lại toàn bộ danh sách dependency
-    // ở trên; nó chỉ tính lại khi headerSection (ở trên) thực sự đổi.
-    const listHeaderElement = useMemo(
-        () => <View style={{ marginBottom: 14 }}>{headerSection}</View>,
-        [headerSection]
-    );
-
     const showInitialSkeleton = loading && visibleFoods.length === 0;
 
     return (
         <View style={{ flex: 1 }} className="bg-gray-50">
             {showInitialSkeleton ? (
                 // Lần tải đầu tiên, chưa có dữ liệu để virtualize — render trực
-                // tiếp 6 skeleton card trong ScrollView như cũ, không cần FlatList.
-                <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40, gap: 14 }} keyboardShouldPersistTaps="handled">
+                // tiếp skeleton lưới 3 cột trong ScrollView như cũ, không cần FlatList.
+                <ScrollView contentContainerStyle={{ padding: GRID_PADDING, paddingBottom: 40, gap: 12 }} keyboardShouldPersistTaps="handled">
                     {headerSection}
-                    <View style={{ gap: 12 }}>
-                        {Array.from({ length: 6 }).map((_, i) => (
+                    <View style={{ flexDirection: "row", flexWrap: "wrap", gap: GRID_GAP }}>
+                        {Array.from({ length: 9 }).map((_, i) => (
                             <FoodCardSkeleton key={i} />
                         ))}
                     </View>
                 </ScrollView>
             ) : (
-                // [PERF] Danh sách món — trước đây là ScrollView + filtered.map(),
-                // nghĩa là TOÀN BỘ card (ảnh + nội dung) được mount cùng lúc dù có
-                // hiện trên màn hình hay không. Menu càng nhiều món thì càng tốn
-                // RAM và JS thread càng nặng khi mount/scroll. Chuyển sang FlatList
-                // để chỉ render các item gần viewport (virtualization), giữ nguyên
-                // toàn bộ UI/UX, hành vi, và business logic.
+                // [UI] Lưới 3 cột: numColumns={3} + columnWrapperStyle cho gap
+                // giữa cột, contentContainerStyle.gap cho gap giữa hàng. Card có
+                // width cố định (CARD_WIDTH) — xem ghi chú ở khai báo hằng số.
+                // [PERF] Vẫn giữ virtualization: chỉ render các hàng gần viewport.
                 <FlatList
                     data={filtered}
                     renderItem={renderFoodItem}
                     keyExtractor={keyExtractor}
-                    ItemSeparatorComponent={ItemSeparator}
-                    ListHeaderComponent={listHeaderElement}
+                    numColumns={3}
+                    columnWrapperStyle={COLUMN_WRAPPER_STYLE}
+                    ListHeaderComponent={headerSection}
                     ListEmptyComponent={LIST_EMPTY_ELEMENT}
                     contentContainerStyle={LIST_CONTENT_STYLE}
                     keyboardShouldPersistTaps="handled"
-                    initialNumToRender={6}
-                    maxToRenderPerBatch={6}
+                    initialNumToRender={12}
+                    maxToRenderPerBatch={12}
                     windowSize={7}
                     removeClippedSubviews={true}
                 />
             )}
 
             {/* ─── Modal thêm / sửa ──────────────────────────────────────────── */}
+            {/* [FIX] Tiêu đề + form + hàng nút giờ nằm chung 1 ScrollView — vuốt
+                bắt đầu từ bất kỳ đâu trên modal đều cuộn được. */}
             {(modal === "add" || modal === "edit") && (
                 <ModalOverlay onClose={closeModal}>
                     <View className="bg-white rounded-3xl overflow-hidden" style={{ maxHeight: "90%" }}>
-                        <View className="px-6 pt-6 pb-4 flex-row items-center justify-between border-b border-gray-100">
-                            <Text className="text-base font-black text-green-900">
-                                {modal === "add" ? "Thêm món mới" : "Chỉnh sửa món ăn"}
-                            </Text>
-                            <Pressable onPress={closeModal} className="w-8 h-8 rounded-xl bg-gray-50 items-center justify-center">
-                                <X size={16} color={colors.gray[400]} />
-                            </Pressable>
-                        </View>
-
-                        <ScrollView contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 16 }} keyboardShouldPersistTaps="handled">
-                            {/* Ảnh */}
-                            <View style={{ marginBottom: 14 }}>
-                                <Text className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">Ảnh món ăn</Text>
-                                <ImageUploadField
-                                    key={imageFieldKey}
-                                    currentUrl={imageRemoved ? null : form.imageUrl ?? null}
-                                    onSelect={(file) => {
-                                        setImageFile(file);
-                                        setImageRemoved(false);
-                                    }}
-                                />
-                                {(imageFile || (!imageRemoved && form.imageUrl)) && (
-                                    <Pressable onPress={handleRemoveImage} style={{ marginTop: 6 }}>
-                                        <Text className="text-xs text-red-400 font-semibold">Xoá ảnh</Text>
-                                    </Pressable>
-                                )}
+                        <ScrollView contentContainerStyle={{ paddingBottom: 8 }} keyboardShouldPersistTaps="handled">
+                            <View className="px-6 pt-6 pb-4 flex-row items-center justify-between border-b border-gray-100">
+                                <Text className="text-base font-black text-green-900">
+                                    {modal === "add" ? "Thêm món mới" : "Chỉnh sửa món ăn"}
+                                </Text>
+                                <Pressable onPress={closeModal} className="w-8 h-8 rounded-xl bg-gray-50 items-center justify-center">
+                                    <X size={16} color={colors.gray[400]} />
+                                </Pressable>
                             </View>
 
-                            {/* Tên */}
-                            <FieldInput label="Tên món" required full value={form.foodName} onChangeText={(t) => ff("foodName", t)} />
-
-                            {/* Danh mục — pill chọn 1/6 (không có Picker RN trong dự án) */}
-                            <View style={{ marginBottom: 14 }}>
-                                <Text className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-1.5">Danh mục</Text>
-                                <View className="flex-row flex-wrap" style={{ gap: 8 }}>
-                                    {CAT_OPTIONS.map((c) => (
-                                        <Pressable
-                                            key={c}
-                                            onPress={() => ff("categoryId", c)}
-                                            style={{ paddingHorizontal: 12, paddingVertical: 7 }}
-                                            className={`rounded-xl ${form.categoryId === c ? "bg-green-500" : "bg-white border border-gray-200"}`}
-                                        >
-                                            <Text className={`text-xs font-bold ${form.categoryId === c ? "text-white" : "text-gray-600"}`}>{c}</Text>
+                            <View style={{ paddingHorizontal: 20, paddingTop: 16 }}>
+                                {/* Ảnh */}
+                                <View style={{ marginBottom: 14 }}>
+                                    <Text className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">Ảnh món ăn</Text>
+                                    <ImageUploadField
+                                        key={imageFieldKey}
+                                        currentUrl={imageRemoved ? null : form.imageUrl ?? null}
+                                        onSelect={(file) => {
+                                            setImageFile(file);
+                                            setImageRemoved(false);
+                                        }}
+                                    />
+                                    {(imageFile || (!imageRemoved && form.imageUrl)) && (
+                                        <Pressable onPress={handleRemoveImage} style={{ marginTop: 6 }}>
+                                            <Text className="text-xs text-red-400 font-semibold">Xoá ảnh</Text>
                                         </Pressable>
-                                    ))}
-                                </View>
-                            </View>
-
-                            {/* Nguyên liệu */}
-                            <View style={{ marginBottom: 14 }}>
-                                <IngredientPicker selectedIngredients={form.ingredients} onChange={handleIngredientsChange} />
-                            </View>
-
-                            {/* Giá */}
-                            <View className="flex-row flex-wrap justify-between">
-                                <View className="w-[47%]" style={{ marginBottom: 12 }}>
-                                    <Text className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-1.5">Giá vốn (₫)</Text>
-                                    {hasIngredients ? (
-                                        <View className="border border-green-200 bg-green-50 rounded-xl px-3.5 py-2.5 flex-row items-baseline" style={{ gap: 4 }}>
-                                            <Text className="text-sm font-bold text-green-700">{safeFmtVND(computedCostPrice)}</Text>
-                                            <Text className="text-xs font-normal text-green-500">(tự tính)</Text>
-                                        </View>
-                                    ) : (
-                                        <TextInput
-                                            value={form.costPrice}
-                                            onChangeText={(t) => ff("costPrice", t)}
-                                            keyboardType="decimal-pad"
-                                            className="border border-gray-200 rounded-xl px-3.5 py-2.5 text-sm text-gray-800"
-                                        />
                                     )}
                                 </View>
 
-                                <FieldInput
-                                    label="Giá bán (₫)"
-                                    keyboardType="decimal-pad"
-                                    value={form.originalPrice}
-                                    onChangeText={(t) => ff("originalPrice", t)}
-                                />
+                                {/* Tên */}
+                                <FieldInput label="Tên món" required full value={form.foodName} onChangeText={(t) => ff("foodName", t)} />
 
-                                <FieldInput
-                                    label="Trọng số AI [0–1]"
-                                    keyboardType="decimal-pad"
-                                    value={form.aiTrainingWeight}
-                                    onChangeText={(t) => ff("aiTrainingWeight", t)}
-                                />
-
-                                <View className="w-[47%]" style={{ marginBottom: 12 }}>
-                                    <Text className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-1.5">Biên LN dự kiến</Text>
-                                    <View style={{ paddingTop: 8 }}>
-                                        <MarginBar margin={liveMargin} />
+                                {/* Danh mục — pill chọn 1/6 (không có Picker RN trong dự án) */}
+                                <View style={{ marginBottom: 14 }}>
+                                    <Text className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-1.5">Danh mục</Text>
+                                    <View className="flex-row flex-wrap" style={{ gap: 8 }}>
+                                        {CAT_OPTIONS.map((c) => (
+                                            <Pressable
+                                                key={c}
+                                                onPress={() => ff("categoryId", c)}
+                                                style={{ paddingHorizontal: 12, paddingVertical: 7 }}
+                                                className={`rounded-xl ${form.categoryId === c ? "bg-green-500" : "bg-white border border-gray-200"}`}
+                                            >
+                                                <Text className={`text-xs font-bold ${form.categoryId === c ? "text-white" : "text-gray-600"}`}>{c}</Text>
+                                            </Pressable>
+                                        ))}
                                     </View>
+                                </View>
+
+                                {/* Nguyên liệu */}
+                                <View style={{ marginBottom: 14 }}>
+                                    <IngredientPicker selectedIngredients={form.ingredients} onChange={handleIngredientsChange} />
+                                </View>
+
+                                {/* Giá */}
+                                <View className="flex-row flex-wrap justify-between">
+                                    <View className="w-[47%]" style={{ marginBottom: 12 }}>
+                                        <Text className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-1.5">Giá vốn (₫)</Text>
+                                        {hasIngredients ? (
+                                            <View className="border border-green-200 bg-green-50 rounded-xl px-3.5 py-2.5 flex-row items-baseline" style={{ gap: 4 }}>
+                                                <Text className="text-sm font-bold text-green-700">{safeFmtVND(computedCostPrice)}</Text>
+                                                <Text className="text-xs font-normal text-green-500">(tự tính)</Text>
+                                            </View>
+                                        ) : (
+                                            <TextInput
+                                                value={form.costPrice}
+                                                onChangeText={(t) => ff("costPrice", t)}
+                                                keyboardType="decimal-pad"
+                                                className="border border-gray-200 rounded-xl px-3.5 py-2.5 text-sm text-gray-800"
+                                            />
+                                        )}
+                                    </View>
+
+                                    <FieldInput
+                                        label="Giá bán (₫)"
+                                        keyboardType="decimal-pad"
+                                        value={form.originalPrice}
+                                        onChangeText={(t) => ff("originalPrice", t)}
+                                    />
+
+                                    <FieldInput
+                                        label="Trọng số AI [0–1]"
+                                        keyboardType="decimal-pad"
+                                        value={form.aiTrainingWeight}
+                                        onChangeText={(t) => ff("aiTrainingWeight", t)}
+                                    />
+
+                                    <View className="w-[47%]" style={{ marginBottom: 12 }}>
+                                        <Text className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-1.5">Biên LN dự kiến</Text>
+                                        <View style={{ paddingTop: 8 }}>
+                                            <MarginBar margin={liveMargin} />
+                                        </View>
+                                    </View>
+                                </View>
+
+                                {/* Ghi chú */}
+                                <FieldInput label="Ghi chú" full multiline value={form.note} onChangeText={(t) => ff("note", t)} />
+
+                                {/* Trạng thái */}
+                                <View className="flex-row items-center justify-between" style={{ marginBottom: 16 }}>
+                                    <Text className="text-sm font-medium text-gray-600">Đang bán</Text>
+                                    <Switch
+                                        value={form.isAvailable}
+                                        onValueChange={(v) => ff("isAvailable", v)}
+                                        trackColor={{ false: colors.gray[200], true: colors.green[400] }}
+                                        thumbColor={colors.white}
+                                    />
                                 </View>
                             </View>
 
-                            {/* Ghi chú */}
-                            <FieldInput label="Ghi chú" full multiline value={form.note} onChangeText={(t) => ff("note", t)} />
-
-                            {/* Trạng thái */}
-                            <View className="flex-row items-center justify-between" style={{ marginBottom: 16 }}>
-                                <Text className="text-sm font-medium text-gray-600">Đang bán</Text>
-                                <Switch
-                                    value={form.isAvailable}
-                                    onValueChange={(v) => ff("isAvailable", v)}
-                                    trackColor={{ false: colors.gray[200], true: colors.green[400] }}
-                                    thumbColor={colors.white}
-                                />
+                            <View className="flex-row justify-end gap-2 px-5 pt-4 pb-1 border-t border-gray-100">
+                                <Pressable onPress={closeModal} className="px-4 py-2.5 rounded-xl bg-gray-50 border border-gray-200">
+                                    <Text className="text-sm font-bold text-gray-600">Hủy</Text>
+                                </Pressable>
+                                <Pressable
+                                    onPress={handleSave}
+                                    disabled={!form.foodName.trim()}
+                                    style={{ opacity: !form.foodName.trim() ? 0.5 : 1 }}
+                                    className="flex-row items-center gap-1.5 px-4 py-2.5 rounded-xl bg-green-600"
+                                >
+                                    <Check size={14} color={colors.white} />
+                                    <Text className="text-sm font-bold text-white">Xác nhận</Text>
+                                </Pressable>
                             </View>
                         </ScrollView>
-
-                        <View className="flex-row justify-end gap-2 px-5 py-4 border-t border-gray-100">
-                            <Pressable onPress={closeModal} className="px-4 py-2.5 rounded-xl bg-gray-50 border border-gray-200">
-                                <Text className="text-sm font-bold text-gray-600">Hủy</Text>
-                            </Pressable>
-                            <Pressable
-                                onPress={handleSave}
-                                disabled={!form.foodName.trim()}
-                                style={{ opacity: !form.foodName.trim() ? 0.5 : 1 }}
-                                className="flex-row items-center gap-1.5 px-4 py-2.5 rounded-xl bg-green-600"
-                            >
-                                <Check size={14} color={colors.white} />
-                                <Text className="text-sm font-bold text-white">Xác nhận</Text>
-                            </Pressable>
-                        </View>
                     </View>
                 </ModalOverlay>
             )}
 
             {/* ─── Modal chi tiết ─────────────────────────────────────────────── */}
-            <InfoModal food={infoFood} open={modal === "info"} onClose={closeModal} />
+            <InfoModal
+                food={infoFood}
+                open={modal === "info"}
+                onClose={closeModal}
+                onEdit={openEdit}
+                onEditNote={openNoteEdit}
+                onRemove={handleRemove}
+                onToggleAvailable={handleToggleAvailable}
+            />
 
             {/* ─── Modal sửa ghi chú ─────────────────────────────────────────── */}
+            {/* [FIX] Cũng gộp vào 1 ScrollView cho đồng nhất + phòng trường hợp
+                bàn phím che mất ô nhập trên máy nhỏ vẫn cuộn lên xem được. */}
             {modal === "note" && (
                 <ModalOverlay onClose={closeModal}>
-                    <View className="bg-white rounded-3xl overflow-hidden">
-                        <View className="px-6 pt-6 pb-4 border-b border-gray-100">
-                            <Text className="text-base font-black text-green-900" numberOfLines={1}>
-                                Ghi chú — {noteFood?.foodName ?? ""}
-                            </Text>
-                        </View>
-                        <View style={{ padding: 20 }}>
-                            <Text className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-1.5">Ghi chú</Text>
-                            <TextInput
-                                autoFocus
-                                multiline
-                                value={noteDraft}
-                                onChangeText={setNoteDraft}
-                                placeholder="Nhập ghi chú cho món này..."
-                                placeholderTextColor={colors.gray[300]}
-                                className="border border-gray-200 rounded-xl px-3.5 py-2.5 text-sm text-gray-800"
-                                style={{ minHeight: 90, textAlignVertical: "top" }}
-                            />
-                        </View>
-                        <View className="flex-row justify-end gap-2 px-5 pb-5">
-                            <Pressable onPress={closeModal} className="px-4 py-2.5 rounded-xl bg-gray-50 border border-gray-200">
-                                <Text className="text-sm font-bold text-gray-600">Hủy</Text>
-                            </Pressable>
-                            <Pressable onPress={handleSaveNote} className="flex-row items-center gap-1.5 px-4 py-2.5 rounded-xl bg-green-600">
-                                <Check size={14} color={colors.white} />
-                                <Text className="text-sm font-bold text-white">Lưu ghi chú</Text>
-                            </Pressable>
-                        </View>
+                    <View className="bg-white rounded-3xl overflow-hidden" style={{ maxHeight: "90%" }}>
+                        <ScrollView contentContainerStyle={{ paddingBottom: 8 }} keyboardShouldPersistTaps="handled">
+                            <View className="px-6 pt-6 pb-4 border-b border-gray-100">
+                                <Text className="text-base font-black text-green-900" numberOfLines={1}>
+                                    Ghi chú — {noteFood?.foodName ?? ""}
+                                </Text>
+                            </View>
+                            <View style={{ padding: 20 }}>
+                                <Text className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-1.5">Ghi chú</Text>
+                                <TextInput
+                                    autoFocus
+                                    multiline
+                                    value={noteDraft}
+                                    onChangeText={setNoteDraft}
+                                    placeholder="Nhập ghi chú cho món này..."
+                                    placeholderTextColor={colors.gray[300]}
+                                    className="border border-gray-200 rounded-xl px-3.5 py-2.5 text-sm text-gray-800"
+                                    style={{ minHeight: 90, textAlignVertical: "top" }}
+                                />
+                            </View>
+                            <View className="flex-row justify-end gap-2 px-5 pb-5">
+                                <Pressable onPress={closeModal} className="px-4 py-2.5 rounded-xl bg-gray-50 border border-gray-200">
+                                    <Text className="text-sm font-bold text-gray-600">Hủy</Text>
+                                </Pressable>
+                                <Pressable onPress={handleSaveNote} className="flex-row items-center gap-1.5 px-4 py-2.5 rounded-xl bg-green-600">
+                                    <Check size={14} color={colors.white} />
+                                    <Text className="text-sm font-bold text-white">Lưu ghi chú</Text>
+                                </Pressable>
+                            </View>
+                        </ScrollView>
                     </View>
                 </ModalOverlay>
             )}

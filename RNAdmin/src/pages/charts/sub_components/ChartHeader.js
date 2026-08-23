@@ -8,7 +8,7 @@
 import React from "react";
 import { View, Text } from "react-native";
 
-export default function ChartHeader({ icon: Icon, iconColor, title, children }) {
+function ChartHeader({ icon: Icon, iconColor, title, children }) {
   return (
     <View className="flex-row items-center justify-between mb-4 flex-wrap gap-2">
       <View className="flex-row items-center gap-2">
@@ -19,3 +19,5 @@ export default function ChartHeader({ icon: Icon, iconColor, title, children }) 
     </View>
   );
 }
+
+export default React.memo(ChartHeader);

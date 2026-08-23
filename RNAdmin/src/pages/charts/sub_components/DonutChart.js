@@ -2,7 +2,7 @@
 // [MOI] Thay <PieChart>/<Pie> của recharts — tự vẽ donut bằng react-native-svg
 // <Path> (cung tròn arc), công thức toạ độ cung tròn + vị trí nhãn % giữ
 // đúng logic PieLabel.js gốc (điểm giữa bán kính trong/ngoài theo midAngle).
-import React, { useState } from "react";
+import React, { useState, useMemo } from "react";
 import { View, Text, Pressable } from "react-native";
 import Svg, { Path, Text as SvgText } from "react-native-svg";
 
@@ -23,34 +23,42 @@ function arcPath(cx, cy, innerR, outerR, startAngle, endAngle) {
   ].join(" ");
 }
 
-export default function DonutChart({ data = [], colors = [], size = 200, innerRatio = 0.58, paddingAngle = 2 }) {
+function DonutChart({ data = [], colors = [], size = 200, innerRatio = 0.58, paddingAngle = 2 }) {
   const [selected, setSelected] = useState(null);
-  const total = data.reduce((s, d) => s + (Number(d?.value) || 0), 0) || 1;
-  const cx = size / 2;
-  const cy = size / 2;
-  const outerR = size / 2 - 6;
-  const innerR = outerR * innerRatio;
 
-  let angle = -90;
-  const slices = data.map((d, i) => {
-    const value = Number(d?.value) || 0;
-    const sweep = (value / total) * 360;
-    const start = angle + paddingAngle / 2;
-    const end = angle + sweep - paddingAngle / 2;
-    angle += sweep;
-    const mid = (start + end) / 2;
-    const midR = innerR + (outerR - innerR) * 0.5;
-    const percent = value / total;
-    return {
-      d,
-      value,
-      percent,
-      color: colors[i % colors.length],
-      path: end > start ? arcPath(cx, cy, innerR, outerR, start, end) : null,
-      labelX: cx + midR * Math.cos(mid * R),
-      labelY: cy + midR * Math.sin(mid * R),
-    };
-  });
+  // [SUA — tối ưu hiệu suất, đợt 2] Gộp toàn bộ tính toán slice (sin/cos +
+  // arcPath) vào useMemo — trước đây chạy lại mỗi render kể cả khi data/màu
+  // không đổi (vd chỉ vì người dùng bấm 1 chart khác trên trang).
+  const { slices, total, cx, cy, innerR, outerR } = useMemo(() => {
+    const total = data.reduce((s, d) => s + (Number(d?.value) || 0), 0) || 1;
+    const cx = size / 2;
+    const cy = size / 2;
+    const outerR = size / 2 - 6;
+    const innerR = outerR * innerRatio;
+
+    let angle = -90;
+    const slices = data.map((d, i) => {
+      const value = Number(d?.value) || 0;
+      const sweep = (value / total) * 360;
+      const start = angle + paddingAngle / 2;
+      const end = angle + sweep - paddingAngle / 2;
+      angle += sweep;
+      const mid = (start + end) / 2;
+      const midR = innerR + (outerR - innerR) * 0.5;
+      const percent = value / total;
+      return {
+        d,
+        value,
+        percent,
+        color: colors[i % colors.length],
+        path: end > start ? arcPath(cx, cy, innerR, outerR, start, end) : null,
+        labelX: cx + midR * Math.cos(mid * R),
+        labelY: cy + midR * Math.sin(mid * R),
+      };
+    });
+    return { slices, total, cx, cy, innerR, outerR };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, colors, size, innerRatio, paddingAngle]);
 
   const activeSlice = selected != null ? slices[selected] : null;
 
@@ -100,3 +108,5 @@ export default function DonutChart({ data = [], colors = [], size = 200, innerRa
     </View>
   );
 }
+
+export default React.memo(DonutChart);

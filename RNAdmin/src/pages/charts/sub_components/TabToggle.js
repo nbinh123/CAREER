@@ -4,7 +4,7 @@
 import React from "react";
 import { View, Text, Pressable } from "react-native";
 
-export default function TabToggle({ value, onChange, options }) {
+function TabToggle({ value, onChange, options }) {
   return (
     <View className="flex-row gap-0.5 bg-gray-100 rounded-lg p-0.5">
       {options.map(([k, l]) => {
@@ -23,3 +23,5 @@ export default function TabToggle({ value, onChange, options }) {
     </View>
   );
 }
+
+export default React.memo(TabToggle);

@@ -1,5 +1,11 @@
+// src/navigation/CustomDrawerContent.js
+// [UI] Chuyển từ pages/SidePage.js — giữ đúng bố cục: logo + tên quán +
+// "Quản lý quán ăn", danh sách nav lọc theo role, dòng trạng thái "Kết nối
+// thời gian thực" với chấm xanh nhấp nháy. Hiệu ứng CSS @keyframes pulse
+// (opacity 1↔0.4, 2s infinite) được chuyển sang react-native-reanimated
+// loop (xem PulseDot bên dưới) — 1-1 với bản gốc.
 import React, { useEffect } from "react";
-import { View, Text, Image, Pressable, ScrollView } from "react-native";
+import { View, Text, Image, Pressable, ScrollView, StyleSheet } from "react-native";
 import { DrawerContentScrollView } from "@react-navigation/drawer";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Animated, {
@@ -9,6 +15,7 @@ import Animated, {
   withTiming,
   Easing,
 } from "react-native-reanimated";
+import { LogOut } from "lucide-react-native";
 import useAuthZustand from "../zustand/useAuthZustand";
 import { NAV } from "./navConfig";
 import colors from "../theme/tokens";
@@ -39,7 +46,10 @@ function PulseDot() {
 export default function CustomDrawerContent(props) {
   const { navigation, state } = props;
   const insets = useSafeAreaInsets();
+  // [TỐI ƯU - global] Selector riêng thay vì subscribe cả store — xem giải
+  // thích ở AppHeader.js/ProtectedScreen.js (đồng bộ cách sửa 3 nơi).
   const currentUser = useAuthZustand((s) => s.currentUser);
+  const logout = useAuthZustand((s) => s.logout);
 
   const activeRouteName = state.routes[state.index]?.name;
 
@@ -88,13 +98,42 @@ export default function CustomDrawerContent(props) {
       </DrawerContentScrollView>
 
       {/* Trạng thái kết nối realtime */}
-      <View
-        className="p-4 border-t border-gray-100 flex-row items-center gap-2"
-        style={{ paddingBottom: Math.max(insets.bottom, 16) }}
-      >
+      <View className="px-4 py-3 border-t border-gray-100 flex-row items-center gap-2">
         <PulseDot />
         <Text className="text-xs text-gray-400">Kết nối thời gian thực</Text>
+      </View>
+
+      {/* Avatar + đăng xuất */}
+      <View
+        className="px-4 py-3 border-t border-gray-100 flex-row items-center gap-3"
+        style={{ paddingBottom: Math.max(insets.bottom, 16) }}
+      >
+        <View style={styles.avatar}>
+          <Text className="text-white text-sm font-black">
+            {currentUser?.name?.[0]?.toUpperCase() ?? "U"}
+          </Text>
+        </View>
+        <Text className="flex-1 text-sm font-bold text-gray-700" numberOfLines={1}>
+          {currentUser?.name ?? "Người dùng"}
+        </Text>
+        <Pressable
+          onPress={logout}
+          className="w-9 h-9 rounded-xl bg-red-50 items-center justify-center"
+        >
+          <LogOut size={16} color={colors.red[500]} strokeWidth={2.2} />
+        </Pressable>
       </View>
     </View>
   );
 }
+
+const styles = StyleSheet.create({
+  avatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.emerald[500],
+  },
+});

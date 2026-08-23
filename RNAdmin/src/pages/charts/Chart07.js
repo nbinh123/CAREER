@@ -16,6 +16,10 @@
 //
 // Hover tooltip (không có trên RN) → chạm vào biểu đồ để chọn 1 ngày xem số
 // liệu, mặc định chọn sẵn ngày gần nhất có dữ liệu.
+//
+// [SUA — tối ưu hiệu suất, đợt 2] Bọc React.memo — đây là chart nặng nhất
+// (nhiều SvgText/Path nhất trong 10 chart), tránh vẽ lại toàn bộ khi các
+// chart khác trên trang thay đổi mà chính Chart07 không nhận props mới.
 import React, { useMemo, useState } from "react";
 import { View, Text, Pressable, TextInput } from "react-native";
 import Svg, { Defs, LinearGradient, Stop, Path, Line as SvgLine, Text as SvgText, Circle } from "react-native-svg";
@@ -38,7 +42,7 @@ const TICK_OPTIONS = [4, 5, 6, 8, 10];
 const AXIS_TICK_DAYS = [1, 5, 10, 15, 20, 25, 30];
 const VIEW_W = 340;
 
-export default function Chart07({ data = [], breakeven: externalBe, breakevenInput: externalBeInput, onBreakeven }) {
+function Chart07({ data = [], breakeven: externalBe, breakevenInput: externalBeInput, onBreakeven }) {
   const [localBe, setLocalBe] = useState(300000);
   const [localBeStr, setLocalBeStr] = useState("300000");
   const [tickCount, setTickCount] = useState(6);
@@ -303,5 +307,7 @@ function LegendDot({ color, label, dashed }) {
     </View>
   );
 }
+
+export default React.memo(Chart07);
 
 

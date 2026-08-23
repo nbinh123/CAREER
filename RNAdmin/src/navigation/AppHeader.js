@@ -1,15 +1,24 @@
+// src/navigation/AppHeader.js
+// [UI] Chuyển từ phần <header> trong App.js gốc. Vì kiến trúc RN tách hẳn
+// nhánh "chưa đăng nhập" (LoginPage riêng, không có header) khỏi nhánh
+// "đã đăng nhập" (Drawer luôn có header này), phần nút "Đăng nhập" khi
+// !isLoggedIn của bản gốc không còn cần thiết — người dùng chỉ thấy header
+// này sau khi đã đăng nhập, y hệt hiệu ứng cuối cùng nhìn thấy trên web.
 import React from "react";
-import { View, Text, Pressable, StyleSheet } from "react-native";
+import { View, Text, Pressable } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { Menu, Bell, UserPlus, LogOut } from "lucide-react-native";
+import { Menu, Bell, UserPlus } from "lucide-react-native";
 import useAuthZustand from "../zustand/useAuthZustand";
 import { NAV } from "./navConfig";
 import colors from "../theme/tokens";
 
 export default function AppHeader({ navigation, route }) {
   const insets = useSafeAreaInsets();
+  // [TỐI ƯU - global] Header dùng chung cho MỌI screen trong Drawer — tách
+  // selector riêng từng field thay vì subscribe cả store, tránh re-render
+  // header (và theo đó, phần header của screen đang mở) mỗi khi 1 field
+  // auth không liên quan (vd shiftStartTime) đổi giá trị.
   const currentUser = useAuthZustand((s) => s.currentUser);
-  const logout = useAuthZustand((s) => s.logout);
   const stopWorking = useAuthZustand((s) => s.stopWorking);
   const beginWorking = useAuthZustand((s) => s.beginWorking);
   const isWorking = useAuthZustand((s) => s.isWorking);
@@ -56,36 +65,8 @@ export default function AppHeader({ navigation, route }) {
               <UserPlus size={15} color={colors.emerald[700]} strokeWidth={2.5} />
             </Pressable>
           )}
-
-          {/* Avatar + tên */}
-          <View className="flex-row items-center gap-2">
-            <View style={styles.avatar}>
-              <Text className="text-white text-sm font-black">
-                {currentUser?.name?.[0]?.toUpperCase() ?? "U"}
-              </Text>
-            </View>
-          </View>
-
-          {/* Đăng xuất */}
-          <Pressable
-            onPress={logout}
-            className="w-9 h-9 rounded-xl bg-red-50 items-center justify-center"
-          >
-            <LogOut size={16} color={colors.red[500]} strokeWidth={2.2} />
-          </Pressable>
         </View>
       </View>
     </View>
   );
 }
-
-const styles = StyleSheet.create({
-  avatar: {
-    width: 36,
-    height: 36,
-    borderRadius: 12,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: colors.emerald[500],
-  },
-});

@@ -6,7 +6,7 @@
 import React from "react";
 import { View, Text, TextInput } from "react-native";
 
-export default function PeriodInput({ label, unitLabel = "kỳ", value, onChange, min = 2, bg, border, text, textDim }) {
+function PeriodInput({ label, unitLabel = "kỳ", value, onChange, min = 2, bg, border, text, textDim }) {
   return (
     <View
       className="flex-row items-center gap-1 rounded-lg px-2 py-1"
@@ -27,3 +27,5 @@ export default function PeriodInput({ label, unitLabel = "kỳ", value, onChange
     </View>
   );
 }
+
+export default React.memo(PeriodInput);

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 import {
     View,
     Text,
@@ -31,7 +31,7 @@ import {
 import socket from "../utils/socket";
 import fmtVND from "../utils/fmtVND";
 import fmtDate from "../utils/fmtDate";
-import { postData } from "../utils/callAPI";
+import { postData, getData } from "../utils/callAPI";
 import colors from "../theme/tokens";
 
 // ─── Hằng số [GIU-NGUYEN] ───────────────────────────────────────────────────
@@ -41,6 +41,13 @@ const NEW_CHAT_TOAST_DURATION = 6000; // toast tin nhắn mới tự ẩn sau 6s
 const ACTION_TOAST_DURATION = 3500; // toast kết quả thao tác (thanh toán...) tự ẩn sau 3.5s
 const HISTORY_SEARCH_DEBOUNCE = 350; // [PERF] trì hoãn filter lịch sử để không chạy lại trên mỗi keystroke
 const AUTO_ADVANCE_DELAY = 30000; // [NGHIỆP VỤ] "Đã xác nhận" và "Đang làm" tự chuyển bước tiếp theo sau 30s, không cần bấm nút
+const HISTORY_PAGE_SIZE = 5; // [PHÂN TRANG] mỗi trang lịch sử tải 5 đơn, bấm "Xem thêm" để tải trang kế
+// [PHÂN TRANG] Base queryKey dùng chung giữa useInfiniteQuery (trong
+// OrderHistorySection) và queryClient.invalidateQueries (ở component cha,
+// khi phát hiện có đơn vừa chuyển sang completed/cancelled qua socket) —
+// react-query khớp theo tiền tố nên invalidate bằng key này sẽ làm mới mọi
+// query lịch sử đang mở, bất kể đang gõ từ khoá tìm kiếm gì.
+const HISTORY_QUERY_KEY_BASE = ["online-order-history"];
 
 const PAYMENT_OPTIONS = [
     ["CASH", "💵 Tiền mặt"],
@@ -519,7 +526,25 @@ const ChatModal = React.memo(function ChatModal({ visible, customerId, title, me
    Muốn ảo hoá thật cho danh sách lịch sử cần tách phần header (thống kê,
    tab) ra khỏi vùng cuộn — đây là thay đổi layout/UX vượt phạm vi "tối ưu
    không đổi UI", nên tôi không tự ý làm mà để bạn quyết định. ──────────── */
-const OrderHistorySection = React.memo(function OrderHistorySection({ orders, chatThreads, onViewChat }) {
+/* ── Tab "Lịch sử" ─────────────────────────────────────────────────────────
+   [PHÂN TRANG] Lịch sử giờ tải qua REST có phân trang (5 đơn/trang, nút "Xem
+   thêm") bằng useInfiniteQuery, thay vì lọc từ mảng `orders` đến từ socket
+   "online_orders_state" (vốn bắn lại NGUYÊN danh sách mỗi lần cập nhật — đây
+   từng là điểm bị flag "danh sách lịch sử không giới hạn" ở các lượt review
+   hiệu năng trước). Phân trang giải quyết vấn đề đó TẬN GỐC: danh sách trong
+   bộ nhớ giờ luôn có giới hạn (5, 10, 15... tuỳ số lần bấm "Xem thêm"), nên
+   .map() là đủ, không cần FlatList/ảo hoá nữa.
+
+   Từ khoá tìm kiếm (debouncedSearch) nằm trong queryKey → đổi từ khoá sẽ tự
+   bắt đầu 1 query mới từ trang 1 (tìm kiếm chạy Ở BACKEND trên toàn bộ lịch
+   sử, không chỉ trong các trang đã tải — đúng hơn cách lọc client cũ). Vẫn
+   giữ ô tìm kiếm là state cục bộ + debounce 350ms như trước, tránh gõ 1 ký
+   tự là bắn 1 request.
+
+   [PERF] Vẫn tách thành component riêng, giữ `search`/`detailOrder` là state
+   cục bộ ở đây — gõ tìm kiếm hoặc mở modal chi tiết không re-render toàn
+   trang (đơn hàng, thống kê, toast...). ─────────────────────────────────── */
+const OrderHistorySection = React.memo(function OrderHistorySection({ chatThreads, onViewChat }) {
     const [search, setSearch] = useState("");
     const [debouncedSearch, setDebouncedSearch] = useState("");
     const [detailOrder, setDetailOrder] = useState(null);
@@ -531,16 +556,53 @@ const OrderHistorySection = React.memo(function OrderHistorySection({ orders, ch
         return () => clearTimeout(debounceTimerRef.current);
     }, [search]);
 
-    const filteredOrders = useMemo(() => {
-        const keyword = debouncedSearch.trim().toLowerCase();
-        if (!keyword) return orders;
-        return orders.filter(
-            (o) =>
-                o.customerName?.toLowerCase().includes(keyword) ||
-                o.phone?.includes(keyword) ||
-                o.id?.toLowerCase().includes(keyword)
-        );
-    }, [orders, debouncedSearch]);
+    const historyQueryKey = useMemo(() => [...HISTORY_QUERY_KEY_BASE, debouncedSearch], [debouncedSearch]);
+
+    // GIẢ ĐỊNH CẦN BẠN KIỂM TRA: gọi getData({ url, params }) — giả sử
+    // getData nhận query string qua object `params` giống cách postData nhận
+    // `data`. Nếu getData thực tế của bạn nhận query string khác (vd. nối
+    // thẳng vào url), đổi lại phần gọi getData bên dưới cho khớp. Endpoint
+    // "/orders/online/history" là endpoint MỚI, cần thêm ở backend — xem file
+    // tham khảo đính kèm.
+    const {
+        data,
+        fetchNextPage,
+        hasNextPage,
+        isFetchingNextPage,
+        isLoading,
+        isError,
+        error,
+        refetch,
+    } = useInfiniteQuery({
+        queryKey: historyQueryKey,
+        queryFn: async ({ pageParam }) => {
+            const res = await getData({
+                url: "/orders/online/history",
+                params: { page: pageParam, limit: HISTORY_PAGE_SIZE, search: debouncedSearch || undefined },
+            });
+            if (!res.success) throw new Error(res.message || `Lỗi tải lịch sử (HTTP ${res.status})`);
+            return res.data; // kỳ vọng { orders: [...], page, hasMore }
+        },
+        initialPageParam: 1,
+        getNextPageParam: (lastPage) => (lastPage?.hasMore ? (lastPage.page ?? 1) + 1 : undefined),
+        // Không cần staleTime ngắn như mặc định (10s) vì đã có
+        // queryClient.invalidateQueries chủ động ở component cha ngay khi
+        // socket xác nhận có đơn chuyển sang completed/cancelled.
+        staleTime: 30_000,
+    });
+
+    const orders = useMemo(() => {
+        const pages = data?.pages ?? [];
+        const out = [];
+        for (const page of pages) {
+            const list = Array.isArray(page?.orders) ? page.orders : [];
+            for (const raw of list) {
+                const normalized = normalizeOnlineOrder(raw);
+                if (normalized) out.push(normalized);
+            }
+        }
+        return out;
+    }, [data]);
 
     const hasChatWithDetail = !!detailOrder && chatThreads.some((t) => t.customerId === detailOrder.customerId);
 
@@ -561,19 +623,41 @@ const OrderHistorySection = React.memo(function OrderHistorySection({ orders, ch
             </View>
 
             <View className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
-                {filteredOrders.length === 0 ? (
+                {isLoading ? (
+                    <View className="items-center py-14">
+                        <ActivityIndicator size="small" color={colors.green[500]} />
+                        <Text className="text-xs text-gray-400 mt-2">Đang tải lịch sử...</Text>
+                    </View>
+                ) : isError ? (
+                    <View className="items-center py-14 px-6" style={{ gap: 10 }}>
+                        <Text className="text-sm text-red-500 text-center">
+                            {error?.message || "Không tải được lịch sử đơn"}
+                        </Text>
+                        <ActionBtn label="Thử lại" variant="secondary" onPress={() => refetch()} />
+                    </View>
+                ) : orders.length === 0 ? (
                     <EmptyState icon={Search} text="Chưa có đơn nào trong lịch sử" />
                 ) : (
-                    filteredOrders.map((order, idx) => (
+                    orders.map((order, idx) => (
                         <OrderHistoryCard
                             key={order.id}
                             order={order}
-                            isLast={idx === filteredOrders.length - 1}
+                            isLast={idx === orders.length - 1}
                             onPress={() => setDetailOrder(order)}
                         />
                     ))
                 )}
             </View>
+
+            {!isLoading && !isError && hasNextPage && (
+                <ActionBtn
+                    label={isFetchingNextPage ? "Đang tải..." : "Xem thêm"}
+                    variant="secondary"
+                    loading={isFetchingNextPage}
+                    disabled={isFetchingNextPage}
+                    onPress={() => fetchNextPage()}
+                />
+            )}
 
             {!!detailOrder && (
                 <ModalOverlay onClose={() => setDetailOrder(null)}>
@@ -674,6 +758,11 @@ const CancelConfirmModal = React.memo(function CancelConfirmModal({ order, onClo
    MAIN COMPONENT
 ════════════════════════════════════════════════════════════ */
 export default function OnlineOrdersPage() {
+    // [PHÂN TRANG] Dùng để invalidate query lịch sử ("Lịch sử" tab) ngay khi
+    // phát hiện qua socket có đơn vừa chuyển sang completed/cancelled — xem
+    // effect socket bên dưới.
+    const queryClient = useQueryClient();
+
     // ── State [GIU-NGUYEN, đổi tên mobileStatusFilter → statusFilter vì đây
     // giờ là bộ lọc DUY NHẤT, không còn phân biệt mobile/desktop]
     // [PERF] historySearch, detailOrder, cancelReason, chatDraft đã chuyển
@@ -749,8 +838,27 @@ export default function OnlineOrdersPage() {
         // không đổi nội dung — nhờ đó React.memo(OrderCard)/React.memo(
         // OrderHistoryCard) mới thực sự bỏ qua re-render được. Không đổi
         // hành vi/dữ liệu hiển thị, chỉ đổi cách tạo object.
+        //
+        // [PHÂN TRANG] Đồng thời phát hiện đơn nào MỚI chuyển sang
+        // completed/cancelled ở lần cập nhật này (so với snapshot `orders`
+        // trước đó) để invalidate query lịch sử — làm ở đây (dựa trên state
+        // đã được server xác nhận qua socket) thay vì invalidate ngay khi
+        // bấm nút thanh toán/huỷ, để tránh trường hợp gọi lại API lịch sử
+        // TRƯỚC KHI backend kịp lưu xong thay đổi.
         const handleOrdersState = (list) =>
-            setOrders((prev) => (Array.isArray(list) ? mergeOrdersPreservingRefs(prev, list) : []));
+            setOrders((prev) => {
+                const merged = Array.isArray(list) ? mergeOrdersPreservingRefs(prev, list) : [];
+                const prevHistoryIds = new Set(
+                    prev.filter((o) => o.status === "completed" || o.status === "cancelled").map((o) => o.id)
+                );
+                const enteredHistory = merged.some(
+                    (o) => (o.status === "completed" || o.status === "cancelled") && !prevHistoryIds.has(o.id)
+                );
+                if (enteredHistory) {
+                    queryClient.invalidateQueries({ queryKey: HISTORY_QUERY_KEY_BASE });
+                }
+                return merged;
+            });
         const handleOrderCreated = (order) => {
             const normalized = normalizeOnlineOrder(order);
             if (!normalized || !normalized.id) return;
@@ -800,7 +908,7 @@ export default function OnlineOrdersPage() {
             orderToastTimers.clear();
             clearTimeout(chatToastTimer.current);
         };
-    }, [dismissOrderToast]);
+    }, [dismissOrderToast, queryClient]);
 
     useEffect(() => {
         ordersRef.current = orders;
@@ -874,14 +982,10 @@ export default function OnlineOrdersPage() {
     const totalActive = activeByStatus.pending.length + activeByStatus.confirmed.length
         + activeByStatus.preparing.length + activeByStatus.delivering.length;
 
-    // [PERF] Bỏ phần filter theo từ khoá tìm kiếm khỏi memo này — từ khoá giờ
-    // được xử lý cục bộ bên trong OrderHistorySection (có debounce), nên
-    // memo này chỉ còn phụ thuộc `orders` như các memo khác, không phụ
-    // thuộc vào state gõ-liên-tục nữa.
-    const historyBaseList = useMemo(
-        () => orders.filter((o) => o.status === "completed" || o.status === "cancelled"),
-        [orders]
-    );
+    // [PHÂN TRANG] historyBaseList (lọc completed/cancelled từ `orders` phía
+    // socket) không còn cần nữa — OrderHistorySection giờ tự tải dữ liệu
+    // lịch sử có phân trang qua REST (xem component đó), không còn dựa vào
+    // mảng `orders` đầy đủ ở đây nữa.
 
     const todayCompleted = useMemo(() => {
         const today = new Date().toDateString();
@@ -1171,7 +1275,7 @@ export default function OnlineOrdersPage() {
                                 </View>
                             )
                         ) : (
-                            <OrderHistorySection orders={historyBaseList} chatThreads={chatThreads} onViewChat={goToChatThread} />
+                            <OrderHistorySection chatThreads={chatThreads} onViewChat={goToChatThread} />
                         )}
                     </View>
                 ) : (

@@ -3,7 +3,12 @@
 // (để recharts tự auto-scale) — ở đây tự tính topTick = max*1.2 (đệm 20%)
 // làm tương đương, vì BarLineChart cần trục Y tường minh. Giữ nguyên màu
 // xen kẽ theo index (Cell gốc) qua colorByIndex.
-import React from "react";
+//
+// [SUA — tối ưu hiệu suất, đợt 2] React.memo + useMemo cho bars/barAxis (xem
+// ghi chú ở Chart01.js). TF_OPTIONS đưa ra module scope — trước đây là mảng
+// literal tạo mới mỗi render, truyền cho TabToggle (đã memo) sẽ vô hiệu hoá
+// memo đó nếu vẫn để inline.
+import React, { useMemo } from "react";
 import { BarChart2 } from "lucide-react-native";
 import fmtVND from "../../utils/fmtVND";
 import colors, { chart } from "../../theme/tokens";
@@ -13,33 +18,42 @@ import TabToggle from "./sub_components/TabToggle";
 import BarLineChart from "./sub_components/BarLineChart";
 import { fmtK } from "./helpers/mathHelpers";
 
-export default function Chart02({ data = {}, tf = "week", onTf }) {
+const TF_OPTIONS = [
+  ["week", "Tuần"],
+  ["month", "Tháng"],
+];
+
+function Chart02({ data = {}, tf = "week", onTf }) {
   const chartData = data?.days || [];
   const maxVal = chartData.length > 0 ? Math.max(...chartData.map((d) => d.revenue || 0)) : 0;
   const topTick = maxVal > 0 ? maxVal * 1.2 : 1000;
-  const customTicks = [0, topTick * 0.25, topTick * 0.5, topTick * 0.75, topTick];
+  const customTicks = useMemo(() => [0, topTick * 0.25, topTick * 0.5, topTick * 0.75, topTick], [topTick]);
+
+  const bars = useMemo(
+    () => [
+      {
+        key: "revenue",
+        name: "Doanh thu",
+        color: chart.blueBarA,
+        colorByIndex: (i) => (i % 2 === 0 ? chart.blueBarA : chart.blueBarB),
+        format: fmtVND,
+      },
+    ],
+    []
+  );
+  const barAxis = useMemo(
+    () => ({ max: customTicks[4], ticks: customTicks, formatter: fmtK, tooltipFormatter: fmtVND }),
+    [customTicks]
+  );
 
   return (
     <ChartCard>
       <ChartHeader icon={BarChart2} iconColor={colors.blue[500]} title={`Doanh thu trong ${tf === "week" ? "tuần" : "tháng"}`}>
-        <TabToggle value={tf} onChange={onTf} options={[["week", "Tuần"], ["month", "Tháng"]]} />
+        <TabToggle value={tf} onChange={onTf} options={TF_OPTIONS} />
       </ChartHeader>
-      <BarLineChart
-        data={chartData}
-        height={260}
-        bars={[
-          {
-            key: "revenue",
-            name: "Doanh thu",
-            color: chart.blueBarA,
-            colorByIndex: (i) => (i % 2 === 0 ? chart.blueBarA : chart.blueBarB),
-            format: fmtVND,
-          },
-        ]}
-        barAxis={{ max: customTicks[4], ticks: customTicks, formatter: fmtK, tooltipFormatter: fmtVND }}
-        gridColor={chart.blueGrid}
-        xTickEvery={tf === "month" ? 5 : 1}
-      />
+      <BarLineChart data={chartData} height={260} bars={bars} barAxis={barAxis} gridColor={chart.blueGrid} xTickEvery={tf === "month" ? 5 : 1} />
     </ChartCard>
   );
 }
+
+export default React.memo(Chart02);

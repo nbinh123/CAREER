@@ -22,6 +22,41 @@ import StatCard from "../components/StatCard";
 import colors from "../theme/tokens";
 
 /* ════════════════════════════════════════════════════════════
+   GHI CHÚ BẢN CẬP NHẬT NÀY
+
+   1. [PERF] Toàn bộ state tự quản (rows, stats, pager, loading, error,
+      hàm load()) được thay bằng @tanstack/react-query:
+      - Cache tự động theo (trang, tìm kiếm, loại, khoảng ngày) — quay
+        lại đúng tổ hợp bộ lọc vừa xem trong 15s không cần gọi lại API.
+      - placeholderData: keepPreviousData giữ nguyên danh sách cũ khi
+        đang tải trang/bộ lọc mới, tránh nháy trắng màn hình.
+      - Sau khi nhập kho / ghi nhận hư hỏng thành công, chỉ cần
+        invalidateQueries — không tự gọi lại load() thủ công nữa.
+      Yêu cầu: cần cài đặt `@tanstack/react-query` và bọc App trong
+      `QueryClientProvider` ở gốc cây component (nếu dự án chưa có).
+      (Bản ghi chú này giả định @tanstack/react-query v5 — nếu dự án
+      đang dùng v4 thì đổi `placeholderData: keepPreviousData` thành
+      `keepPreviousData: true` và đổi `isPending` thành `isLoading`.)
+
+   2. [FIX-SCROLL] 2 modal (Nhập kho / Ghi nhận hư hỏng) trước đây kéo
+      không lướt được, dù kéo ở vùng trống giữa các trường hay ở tiêu
+      đề. Nguyên nhân: ScrollView bên trong modal không có `flex: 1`,
+      nên theo mặc định của Yoga (flexShrink: 0), nó tự co giãn theo
+      đúng chiều cao nội dung thay vì bị ép vào phần còn lại của
+      `maxHeight` khung modal cha — tức là bên trong ScrollView không
+      hề có phần "tràn" để cuộn (frame height == content height), mọi
+      thao tác kéo đều vô tác dụng dù phần dưới bị cắt hình do
+      `overflow: hidden` của View cha. Phần tiêu đề (nằm tách hẳn bên
+      ngoài ScrollView) thì dĩ nhiên không thể kéo-cuộn được vì không
+      thuộc vùng scroll.
+      → Đã thêm `flex: 1` cho ScrollView để nó thực sự bị giới hạn
+      chiều cao và có thể cuộn, đồng thời đưa tiêu đề vào làm phần tử
+      đầu tiên (dùng `stickyHeaderIndices={[0]}`) của chính ScrollView
+      đó — tiêu đề vẫn dính ở trên khi cuộn, nhưng kéo bắt đầu từ đó
+      giờ cũng điều khiển được việc cuộn nội dung bên dưới.
+════════════════════════════════════════════════════════════ */
+
+/* ════════════════════════════════════════════════════════════
    CONSTANTS [GIU-NGUYEN]
 ════════════════════════════════════════════════════════════ */
 const DAMAGE_REASONS = [
@@ -116,7 +151,18 @@ async function uploadInvoiceImport(formData) {
 ════════════════════════════════════════════════════════════ */
 
 /* Overlay dùng chung cho mọi modal — tương đương e.stopPropagation() bên
-   web, cùng pattern ModalOverlay đã dùng ở IngredientsPage.js/Customers.js. */
+   web, cùng pattern ModalOverlay đã dùng ở IngredientsPage.js/Customers.js.
+   [FIX-SCROLL-2] Trước đây lớp "chặn tap lan ra ngoài" là 1 Pressable —
+   Pressable tự nhận quyền responder ngay từ lúc chạm (để nhận biết
+   press-in/press-out), nên với modal mà TOÀN BỘ nội dung (kể cả tiêu đề,
+   nút hành động) đều nằm trong 1 ScrollView duy nhất như hiện tại, việc có
+   thêm 1 Pressable bao NGOÀI ScrollView vẫn tiềm ẩn rủi ro tranh quyền
+   responder ở đúng điểm chạm đầu tiên trên toàn bộ modal. Đổi sang View
+   thường + onStartShouldSetResponder={() => true}: vẫn giữ được đúng hành
+   vi "chạm bên trong modal thì không đóng, chạm ra ngoài (nền mờ) thì
+   đóng", nhưng không có logic theo dõi press nào cạnh tranh với ScrollView
+   — nhường hẳn quyền xử lý kéo/cuộn cho ScrollView ngay từ điểm chạm đầu
+   tiên, bất kể chạm ở đâu trên modal. */
 function ModalOverlay({ onClose, maxWidth = 440, children }) {
   return (
     <Modal transparent animationType="fade" onRequestClose={onClose}>
@@ -130,9 +176,9 @@ function ModalOverlay({ onClose, maxWidth = 440, children }) {
           padding: 16,
         }}
       >
-        <Pressable onPress={() => {}} style={{ width: "100%", maxWidth }}>
+        <View onStartShouldSetResponder={() => true} style={{ width: "100%", maxWidth }}>
           {children}
-        </Pressable>
+        </View>
       </Pressable>
     </Modal>
   );
@@ -510,27 +556,33 @@ function ImportModal({ open, onClose, onSuccess, ingredients }) {
                     style={{ paddingHorizontal: 14, paddingVertical: 11, minHeight: 72, textAlignVertical: "top" }}
                   />
                 </View>
+
+                {/* [FIX-SCROLL-3] Nút hành động giờ là phần tử cuối cùng
+                    BÊN TRONG cùng ScrollView với phần còn lại của modal
+                    (trước đây tách riêng, cố định ngoài ScrollView) — để
+                    kéo bắt đầu từ chính vùng nút cũng cuộn được nội dung,
+                    đúng yêu cầu "lướt được bất kể lướt từ điểm nào trên
+                    modal". Đổi lại: trên form dài + màn hình nhỏ, có thể
+                    cần cuộn xuống cuối mới thấy nút — nếu muốn nút luôn cố
+                    định hiển thị thay vì cuộn theo, nói mình biết để đổi lại. */}
+                <View className="flex-row justify-end border-t border-gray-100" style={{ gap: 10, paddingTop: 14 }}>
+                  <Pressable onPress={onClose} disabled={loading} className="bg-gray-50 border border-gray-200 rounded-xl" style={{ paddingHorizontal: 16, paddingVertical: 10 }}>
+                    <Text className="text-sm font-bold text-gray-600">Hủy</Text>
+                  </Pressable>
+                  <Pressable
+                    onPress={submit}
+                    disabled={loading}
+                    style={{ opacity: loading ? 0.6 : 1, paddingHorizontal: 16, paddingVertical: 10, flexDirection: "row", alignItems: "center", gap: 6 }}
+                    className="bg-blue-600 rounded-xl"
+                  >
+                    {loading && <ActivityIndicator size="small" color={colors.white} />}
+                    <Text className="text-sm font-bold text-white">{loading ? "Đang lưu..." : "Xác nhận nhập kho"}</Text>
+                  </Pressable>
+                </View>
               </>
             )}
           </View>
         </ScrollView>
-
-        {mode === "form" && (
-          <View className="flex-row justify-end border-t border-gray-100" style={{ gap: 10, paddingHorizontal: 20, paddingVertical: 14 }}>
-            <Pressable onPress={onClose} disabled={loading} className="bg-gray-50 border border-gray-200 rounded-xl" style={{ paddingHorizontal: 16, paddingVertical: 10 }}>
-              <Text className="text-sm font-bold text-gray-600">Hủy</Text>
-            </Pressable>
-            <Pressable
-              onPress={submit}
-              disabled={loading}
-              style={{ opacity: loading ? 0.6 : 1, paddingHorizontal: 16, paddingVertical: 10, flexDirection: "row", alignItems: "center", gap: 6 }}
-              className="bg-blue-600 rounded-xl"
-            >
-              {loading && <ActivityIndicator size="small" color={colors.white} />}
-              <Text className="text-sm font-bold text-white">{loading ? "Đang lưu..." : "Xác nhận nhập kho"}</Text>
-            </Pressable>
-          </View>
-        )}
       </View>
     </ModalOverlay>
   );
@@ -746,29 +798,29 @@ function ExportModal({ open, onClose, onSuccess, ingredients }) {
                     />
                   </View>
                 )}
+
+                {/* [FIX-SCROLL-3] xem ghi chú ở ImportModal — nút hành động
+                    giờ nằm trong cùng ScrollView thay vì cố định bên ngoài. */}
+                <View className="flex-row justify-end border-t border-gray-100" style={{ gap: 10, paddingTop: 14 }}>
+                  <Pressable onPress={onClose} disabled={loading} className="bg-gray-50 border border-gray-200 rounded-xl" style={{ paddingHorizontal: 16, paddingVertical: 10 }}>
+                    <Text className="text-sm font-bold text-gray-600">Hủy</Text>
+                  </Pressable>
+                  <Pressable
+                    onPress={submit}
+                    disabled={loading}
+                    style={{ opacity: loading ? 0.6 : 1, paddingHorizontal: 16, paddingVertical: 10, flexDirection: "row", alignItems: "center", gap: 6 }}
+                    className="bg-red-600 rounded-xl"
+                  >
+                    {loading && <ActivityIndicator size="small" color={colors.white} />}
+                    <Text className="text-sm font-bold text-white">
+                      {loading ? "Đang xử lý..." : confirmed ? "Xác nhận ghi nhận" : "Ghi nhận hư hỏng"}
+                    </Text>
+                  </Pressable>
+                </View>
               </>
             )}
           </View>
         </ScrollView>
-
-        {mode === "form" && (
-          <View className="flex-row justify-end border-t border-gray-100" style={{ gap: 10, paddingHorizontal: 20, paddingVertical: 14 }}>
-            <Pressable onPress={onClose} disabled={loading} className="bg-gray-50 border border-gray-200 rounded-xl" style={{ paddingHorizontal: 16, paddingVertical: 10 }}>
-              <Text className="text-sm font-bold text-gray-600">Hủy</Text>
-            </Pressable>
-            <Pressable
-              onPress={submit}
-              disabled={loading}
-              style={{ opacity: loading ? 0.6 : 1, paddingHorizontal: 16, paddingVertical: 10, flexDirection: "row", alignItems: "center", gap: 6 }}
-              className="bg-red-600 rounded-xl"
-            >
-              {loading && <ActivityIndicator size="small" color={colors.white} />}
-              <Text className="text-sm font-bold text-white">
-                {loading ? "Đang xử lý..." : confirmed ? "Xác nhận ghi nhận" : "Ghi nhận hư hỏng"}
-              </Text>
-            </Pressable>
-          </View>
-        )}
       </View>
     </ModalOverlay>
   );

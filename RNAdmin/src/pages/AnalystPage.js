@@ -1,7 +1,43 @@
+// src/pages/AnalystPage.js
+// [UI] Chuyển đổi AnalystPage.js gốc. Giữ nguyên 100% state của UI (timeframe
+// tf2/tf4/tf5/tf6/tfPie/tfCustomer/tfPid, EMA/MA period, date range Chart03,
+// breakeven Chart07) — chỉ thay LỚP DỮ LIỆU (useEffect + useState + fetch thủ
+// công + refreshKey) bằng @tanstack/react-query, theo yêu cầu tối ưu hiệu
+// suất tiếp theo sau đợt phân tích trước đó. Lý do đổi và lợi ích cụ thể:
+//
+//   1) Cache + dedup theo query key: chart1 (cố định "day"), chart4/5/6 (tf4/
+//      tf5/tf6) và customerData (Chart08) đều gọi CÙNG endpoint
+//      `/chart-data?tf=X` — bản cũ gọi riêng lẻ 4-5 request dù tf trùng nhau
+//      (vd mặc định tf4=tf5="day" đã trùng ngay từ lúc mount). Dùng chung 1
+//      queryKey ["analyst","chart-data",tf] cho tất cả → trùng tf thì chỉ 1
+//      request thật, các chart còn lại dùng lại cache — giảm số lượng gọi
+//      mạng thực tế mà không đổi hành vi hiển thị.
+//   2) refetchInterval thay cho setInterval thủ công — mỗi query tự poll độc
+//      lập, và tự động tôn trọng focusManager (xem App.js: AppState → app
+//      xuống nền thì toàn bộ polling tạm dừng, không cần code thêm).
+//   3) Thêm useIsFocused() (React Navigation) gate refetchInterval — dừng
+//      polling khi người dùng đang ở màn hình KHÁC trong app (không chỉ lúc
+//      app xuống nền) — đúng ý "chạy mượt, không lãng phí" đã nêu ở đợt phân
+//      tích trước, mà bản setInterval cũ không làm được (nó chạy bất kể màn
+//      hình có đang được xem hay không, miễn AnalystPage còn mounted).
+//   4) placeholderData: keepPreviousData cho các query đổi theo lựa chọn
+//      người dùng (đổi tf/kỳ/ngày) — giữ biểu đồ cũ hiển thị trong lúc chờ
+//      dữ liệu mới, tránh biểu đồ nháy về rỗng rồi mới có số — mượt hơn hẳn
+//      bản cũ (trước đó state reset về [] ngay khi tf đổi, đợi fetch xong).
+//   5) isRefreshing/lastRefresh không còn là state thủ công — suy ra trực
+//      tiếp từ useIsFetching()/dataUpdatedAt của react-query, bớt 1 nguồn
+//      state có thể lệch với thực tế đang fetch hay không.
+//
+// Chart10 (PID) là điểm cần chú ý nhất: Chart10.js gọi onRowsChange(newRows)
+// SAU KHI PATCH THÀNH CÔNG để cập nhật lạc quan UI — hàm này KHÔNG đổi chữ ký
+// (vẫn nhận nguyên mảng rows mới), chỉ đổi bên trong từ setPidRows(newRows)
+// sang queryClient.setQueryData(pidQueryKey, newRows) — nên Chart10.js không
+// phải sửa gì cả.
 import React, { useState, useEffect, useCallback } from "react";
-import { View, Text, Pressable, ScrollView, RefreshControl } from "react-native";
-import { useIsFocused } from "@react-navigation/native";
+import { View, Text, Pressable, ScrollView, RefreshControl, InteractionManager } from "react-native";
 import { DollarSign, ShoppingCart, Users, TrendingUp, RefreshCw } from "lucide-react-native";
+import { useIsFocused } from "@react-navigation/native";
+import { useQuery, useQueryClient, useIsFetching, keepPreviousData } from "@tanstack/react-query";
 import fmtVND from "../utils/fmtVND";
 import StatCard from "../components/StatCard";
 import { apiFetch } from "./charts/helpers/apiHelpers";
@@ -17,49 +53,60 @@ import Chart08 from "./charts/Chart08";
 import Chart09 from "./charts/Chart09";
 import Chart10 from "./charts/Chart10";
 
-export default function AnalystPage() {
-  // ── Refresh control ───────────────────────────────────────────────────────
-  const [refreshKey, setRefreshKey] = useState(0);
-  const [lastRefresh, setLastRefresh] = useState(new Date());
-  const [isRefreshing, setIsRefreshing] = useState(false);
+// [GIU-NGUYEN] toArray/toStats giữ nguyên nguyên văn bản gốc — chỉ hoist ra
+// module scope vì không phụ thuộc props/state, không cần định nghĩa lại mỗi
+// render (trước đây định nghĩa trong thân component, vô hại nhưng thừa).
+const toArray = (data) => (Array.isArray(data) ? data : []);
 
-  const refresh = useCallback(() => {
-    setIsRefreshing(true);
-    setRefreshKey((k) => k + 1);
-    setLastRefresh(new Date());
-    setTimeout(() => setIsRefreshing(false), 800);
+const DEFAULT_STATS = { totalRevenue: 0, totalBills: 0, avgBill: 0, totalCost: 0 };
+
+const toStats = (data) =>
+  data && typeof data === "object" && !Array.isArray(data)
+    ? {
+        totalRevenue: Number(data.totalRevenue) || 0,
+        totalBills: Number(data.totalBills) || 0,
+        avgBill: Number(data.avgBill) || 0,
+        totalCost: Number(data.totalCost) || 0,
+      }
+    : DEFAULT_STATS;
+
+const POLL_MS = 60_000; // giữ đúng chu kỳ auto-poll 60s của bản gốc
+
+// [MOI — tối ưu hiệu suất, đợt 2] 10 chart đều vẽ SVG khá nặng (nhiều nhất
+// là Chart07/Chart10) — nếu mount đồng thời NGAY khi màn hình Analyst vừa
+// chuyển vào (đúng lúc animation chuyển màn hình của Drawer đang chạy) sẽ
+// giật/khựng animation đó. StatCards (rẻ, không SVG) vẫn render ngay; 10
+// chart hoãn mount tới khi InteractionManager báo mọi animation/tương tác đã
+// xong. Việc fetch dữ liệu (các useQuery ở trên) KHÔNG bị hoãn theo — chạy
+// song song ngay từ đầu — nên phần lớn trường hợp khi chart thật sự mount
+// (thường chỉ trễ vài trăm ms) thì dữ liệu đã sẵn sàng, không có màn hình
+// trống rồi mới có số.
+const SKELETON_HEIGHTS = [340, 340, 380, 230, 230, 350, 500, 340, 280, 620];
+
+function ChartsSkeleton() {
+  return (
+    <>
+      {SKELETON_HEIGHTS.map((h, i) => (
+        <View key={i} className="bg-white rounded-2xl border border-gray-100" style={{ height: h }} />
+      ))}
+    </>
+  );
+}
+
+export default function AnalystPage() {
+  const queryClient = useQueryClient();
+  const isFocused = useIsFocused(); // màn hình Analyst có đang được xem hay không
+  const refetchInterval = isFocused ? POLL_MS : false;
+
+  // Hoãn mount 10 chart tới sau khi interaction/animation hiện tại (vd
+  // animation mở Drawer) đã xong — xem ghi chú SKELETON_HEIGHTS ở trên.
+  const [chartsReady, setChartsReady] = useState(false);
+  useEffect(() => {
+    const task = InteractionManager.runAfterInteractions(() => setChartsReady(true));
+    return () => task.cancel();
   }, []);
 
-  const toArray = (data) => (Array.isArray(data) ? data : []);
-
-  const toStats = (data) =>
-    data && typeof data === "object" && !Array.isArray(data)
-      ? {
-          totalRevenue: Number(data.totalRevenue) || 0,
-          totalBills: Number(data.totalBills) || 0,
-          avgBill: Number(data.avgBill) || 0,
-          totalCost: Number(data.totalCost) || 0,
-        }
-      : { totalRevenue: 0, totalBills: 0, avgBill: 0, totalCost: 0 };
-
-  // [PERF-FIX] NGUYÊN NHÂN CHÍNH gây delay 1-1,5s khi chuyển trang: Drawer
-  // không unmount AnalystPage khi rời tab, nên interval 60s này vẫn chạy
-  // NGẦM vô thời hạn dù đang đứng ở trang khác — mỗi lần bắn, `refresh()`
-  // đổi refreshKey → 8/11 effect bên dưới refetch đồng thời + 10 chart
-  // (EMA/MA/PID/heatmap) re-render lại toàn bộ. Nếu người dùng bấm chuyển
-  // trang đúng lúc tick này nổ ra, JS thread bận xử lý loạt request/re-render
-  // đó, khiến thao tác chuyển trang bị khựng lại 1-1,5s dù không liên quan
-  // gì tới trang đích. Chặn theo isFocused để việc polling dừng hẳn ngay khi
-  // rời trang, chỉ chạy lại khi quay về Analyst.
-  const isFocused = useIsFocused();
-
-  useEffect(() => {
-    if (!isFocused) return;
-    const id = setInterval(refresh, 60_000);
-    return () => clearInterval(id);
-  }, [isFocused, refresh]);
-
-  // ── Timeframe states ──────────────────────────────────────────────────────
+  // ── Timeframe states (giữ nguyên) ─────────────────────────────────────────
   const [tf2, setTf2] = useState("week");
   const [tf4, setTf4] = useState("day");
   const [tf5, setTf5] = useState("day");
@@ -68,85 +115,146 @@ export default function AnalystPage() {
   const [tfCustomer, setTfCustomer] = useState("hour");
   const [tfPid, setTfPid] = useState("day");
 
-  // ── EMA / MA period states ────────────────────────────────────────────────
+  // ── EMA / MA period states (giữ nguyên) ───────────────────────────────────
   const [c3MaPeriod, setC3MaPeriod] = useState(7);
   const [c4EmaPeriod, setC4EmaPeriod] = useState(5);
   const [c5EmaPeriod, setC5EmaPeriod] = useState(5);
 
-  // ── Chart 3 date range ────────────────────────────────────────────────────
+  // ── Chart 3 date range (giữ nguyên) ───────────────────────────────────────
   const today = new Date();
   const fmtDate = (d) => d.toISOString().split("T")[0];
   const [dateFrom, setDateFrom] = useState(fmtDate(new Date(today.getFullYear(), today.getMonth(), 1)));
   const [dateTo, setDateTo] = useState(fmtDate(today));
 
-  // ── Chart 7 breakeven ─────────────────────────────────────────────────────
+  // ── Chart 7 breakeven (giữ nguyên, chỉ bọc useCallback để prop ổn định
+  //    tham chiếu — cần cho React.memo ở Chart07 không bị re-render thừa) ───
   const [breakeven, setBreakeven] = useState(300_000);
   const [breakevenInput, setBreakevenInput] = useState("300000");
+  const handleBreakeven = useCallback((numVal, strVal) => {
+    setBreakeven(numVal);
+    setBreakevenInput(strVal);
+  }, []);
 
-  // ── Fetched data ──────────────────────────────────────────────────────────
-  const [statsData, setStatsData] = useState({ totalRevenue: 0, totalBills: 0, avgBill: 0, totalCost: 0 });
-  const [chart1Data, setChart1Data] = useState([]);
-  const [chart2Data, setChart2Data] = useState([]);
-  const [chart3Data, setChart3Data] = useState([]);
-  const [chart4Data, setChart4Data] = useState([]);
-  const [chart5Data, setChart5Data] = useState([]);
-  const [chart6Data, setChart6Data] = useState([]);
-  const [cumulativeData, setCumulativeData] = useState([]);
-  const [customerData, setCustomerData] = useState([]);
-  const [pieData, setPieData] = useState([]);
-  const [heatmapData, setHeatmapData] = useState([]);
-  const [pidRows, setPidRows] = useState([]);
+  // ── Derived tf cho Chart08 (giữ đúng logic gốc: hour→day, còn lại→week) ──
+  const customerTf = tfCustomer === "hour" ? "day" : "week";
 
-  // ── API effects ───────────────────────────────────────────────────────────
-  useEffect(() => {
-    apiFetch("/weekly?offset=0").then((data) => setStatsData(toStats(data))).catch(console.error);
-  }, [refreshKey]);
+  // ══ QUERIES ════════════════════════════════════════════════════════════
+  // Ghi chú key: nhiều chart cùng gọi `/chart-data?tf=X` (Chart01 cố định
+  // "day", Chart04→tf4, Chart05→tf5, Chart06→tf6, Chart08→customerTf) — dùng
+  // chung tiền tố ["analyst","chart-data",tf] để trùng tf thì tự dedup.
+  const statsQuery = useQuery({
+    queryKey: ["analyst", "weekly", 0],
+    queryFn: () => apiFetch("/weekly?offset=0"),
+    refetchInterval,
+  });
 
-  useEffect(() => {
-    apiFetch("/chart-data?tf=day").then((data) => setChart1Data(toArray(data))).catch(console.error);
-  }, [refreshKey]);
+  const chart1Query = useQuery({
+    queryKey: ["analyst", "chart-data", "day"],
+    queryFn: () => apiFetch("/chart-data?tf=day"),
+    refetchInterval,
+  });
 
-  useEffect(() => {
-    apiFetch(`/${tf2 !== "month" ? "weekly?offset=0" : "monthly?offset=0"}`).then((data) => setChart2Data(toArray(data))).catch(console.error);
-  }, [tf2, refreshKey]);
+  const chart2Query = useQuery({
+    queryKey: ["analyst", "revenue-period", tf2],
+    queryFn: () => apiFetch(`/${tf2 !== "month" ? "weekly?offset=0" : "monthly?offset=0"}`),
+    refetchInterval,
+    placeholderData: keepPreviousData,
+  });
 
-  useEffect(() => {
-    if (!dateFrom || !dateTo) return;
-    apiFetch(`/range?from=${dateFrom}&to=${dateTo}`).then((data) => setChart3Data(toArray(data))).catch(console.error);
-  }, [dateFrom, dateTo, refreshKey]);
+  const chart3Query = useQuery({
+    queryKey: ["analyst", "range", dateFrom, dateTo],
+    queryFn: () => apiFetch(`/range?from=${dateFrom}&to=${dateTo}`),
+    enabled: !!dateFrom && !!dateTo,
+    refetchInterval,
+    placeholderData: keepPreviousData,
+  });
 
-  useEffect(() => {
-    apiFetch(`/chart-data?tf=${tf4}`).then((data) => setChart4Data(toArray(data))).catch(console.error);
-  }, [tf4, refreshKey]);
+  const chart4Query = useQuery({
+    queryKey: ["analyst", "chart-data", tf4],
+    queryFn: () => apiFetch(`/chart-data?tf=${tf4}`),
+    refetchInterval,
+    placeholderData: keepPreviousData,
+  });
 
-  useEffect(() => {
-    apiFetch(`/chart-data?tf=${tf5}`).then((data) => setChart5Data(toArray(data))).catch(console.error);
-  }, [tf5, refreshKey]);
+  const chart5Query = useQuery({
+    queryKey: ["analyst", "chart-data", tf5],
+    queryFn: () => apiFetch(`/chart-data?tf=${tf5}`),
+    refetchInterval,
+    placeholderData: keepPreviousData,
+  });
 
-  useEffect(() => {
-    apiFetch(`/chart-data?tf=${tf6}`).then((data) => setChart6Data(toArray(data))).catch(console.error);
-  }, [tf6, refreshKey]);
+  const chart6Query = useQuery({
+    queryKey: ["analyst", "chart-data", tf6],
+    queryFn: () => apiFetch(`/chart-data?tf=${tf6}`),
+    refetchInterval,
+    placeholderData: keepPreviousData,
+  });
 
-  useEffect(() => {
-    apiFetch("/cumulative").then((data) => setCumulativeData(toArray(data))).catch(console.error);
-  }, [refreshKey]);
+  const cumulativeQuery = useQuery({
+    queryKey: ["analyst", "cumulative"],
+    queryFn: () => apiFetch("/cumulative"),
+    refetchInterval,
+  });
 
-  useEffect(() => {
-    const tf = tfCustomer === "hour" ? "day" : "week";
-    apiFetch(`/chart-data?tf=${tf}`).then((data) => setCustomerData(toArray(data))).catch(console.error);
-  }, [tfCustomer, refreshKey]);
+  const customerQuery = useQuery({
+    queryKey: ["analyst", "chart-data", customerTf],
+    queryFn: () => apiFetch(`/chart-data?tf=${customerTf}`),
+    refetchInterval,
+    placeholderData: keepPreviousData,
+  });
 
-  useEffect(() => {
-    apiFetch(`/top-dishes?period=${tfPie}&top=7`).then((data) => setPieData(toArray(data))).catch(console.error);
-  }, [tfPie, refreshKey]);
+  const pieQuery = useQuery({
+    queryKey: ["analyst", "top-dishes", tfPie, 7],
+    queryFn: () => apiFetch(`/top-dishes?period=${tfPie}&top=7`),
+    refetchInterval,
+    placeholderData: keepPreviousData,
+  });
 
-  useEffect(() => {
-    apiFetch("/heatmap").then((data) => setHeatmapData(toArray(data))).catch(console.error);
-  }, [refreshKey]);
+  const heatmapQuery = useQuery({
+    queryKey: ["analyst", "heatmap"],
+    queryFn: () => apiFetch("/heatmap"),
+    refetchInterval,
+  });
 
-  useEffect(() => {
-    apiFetch(`/pid?tf=${tfPid}`).then((data) => setPidRows(toArray(data))).catch(console.error);
-  }, [tfPid, refreshKey]);
+  const pidQueryKey = ["analyst", "pid", tfPid];
+  const pidQuery = useQuery({
+    queryKey: pidQueryKey,
+    queryFn: () => apiFetch(`/pid?tf=${tfPid}`),
+    refetchInterval,
+    placeholderData: keepPreviousData,
+  });
+
+  // Chart10 cập nhật lạc quan sau khi PATCH thành công — ghi thẳng vào cache
+  // của query hiện hành thay vì setState cục bộ (xem ghi chú đầu file).
+  const handlePidRowsChange = useCallback(
+    (newRows) => {
+      queryClient.setQueryData(pidQueryKey, newRows);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [queryClient, tfPid]
+  );
+
+  // ── Trạng thái làm mới suy ra từ react-query, không cần state thủ công ───
+  const isRefreshing = useIsFetching({ queryKey: ["analyst"] }) > 0;
+  const lastRefresh = statsQuery.dataUpdatedAt ? new Date(statsQuery.dataUpdatedAt) : new Date();
+
+  const refresh = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: ["analyst"] });
+  }, [queryClient]);
+
+  // ── Giá trị hiển thị (áp dụng toArray/toStats như bản gốc) ────────────────
+  const statsData = toStats(statsQuery.data);
+  const chart1Data = toArray(chart1Query.data);
+  const chart2Data = toArray(chart2Query.data);
+  const chart3Data = toArray(chart3Query.data);
+  const chart4Data = toArray(chart4Query.data);
+  const chart5Data = toArray(chart5Query.data);
+  const chart6Data = toArray(chart6Query.data);
+  const cumulativeData = toArray(cumulativeQuery.data);
+  const customerData = toArray(customerQuery.data);
+  const pieData = toArray(pieQuery.data);
+  const heatmapData = toArray(heatmapQuery.data);
+  const pidRows = toArray(pidQuery.data);
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
@@ -186,51 +294,52 @@ export default function AnalystPage() {
         <StatCard icon={TrendingUp} label="Chi phí nguyên liệu" value={fmtVND(Math.round(statsData.totalCost))} color="rose" />
       </View>
 
-      {/* ── Chart 01: Revenue by hour + EMA ── */}
-      <Chart01 data={chart1Data} />
+      {/* ── 10 chart — hoãn mount tới khi hết animation/tương tác (xem ghi
+          chú SKELETON_HEIGHTS đầu file); trong lúc chờ hiện khung skeleton
+          giữ đúng chiều cao gần đúng để không giật layout khi chart popIn. */}
+      {chartsReady ? (
+        <>
+          {/* ── Chart 01: Revenue by hour + EMA ── */}
+          <Chart01 data={chart1Data} />
 
-      {/* ── Chart 02: Revenue week/month ── */}
-      <Chart02 data={chart2Data} tf={tf2} onTf={setTf2} />
+          {/* ── Chart 02: Revenue week/month ── */}
+          <Chart02 data={chart2Data} tf={tf2} onTf={setTf2} />
 
-      {/* ── Chart 03: Date range + MA ── */}
-      <Chart03
-        data={chart3Data}
-        dateFrom={dateFrom}
-        dateTo={dateTo}
-        maPeriod={c3MaPeriod}
-        onDateFrom={setDateFrom}
-        onDateTo={setDateTo}
-        onMaPeriod={setC3MaPeriod}
-      />
+          {/* ── Chart 03: Date range + MA ── */}
+          <Chart03
+            data={chart3Data}
+            dateFrom={dateFrom}
+            dateTo={dateTo}
+            maPeriod={c3MaPeriod}
+            onDateFrom={setDateFrom}
+            onDateTo={setDateTo}
+            onMaPeriod={setC3MaPeriod}
+          />
 
-      {/* ── Charts 04 & 05: Bill count + Avg bill ── */}
-      <View style={{ gap: 20 }}>
-        <Chart04 data={chart4Data} tf={tf4} emaPeriod={c4EmaPeriod} onTf={setTf4} onEma={setC4EmaPeriod} />
-        <Chart05 data={chart5Data} tf={tf5} emaPeriod={c5EmaPeriod} onTf={setTf5} onEma={setC5EmaPeriod} />
-      </View>
+          {/* ── Charts 04 & 05: Bill count + Avg bill ── */}
+          <View style={{ gap: 20 }}>
+            <Chart04 data={chart4Data} tf={tf4} emaPeriod={c4EmaPeriod} onTf={setTf4} onEma={setC4EmaPeriod} />
+            <Chart05 data={chart5Data} tf={tf5} emaPeriod={c5EmaPeriod} onTf={setTf5} onEma={setC5EmaPeriod} />
+          </View>
 
-      {/* ── Chart 06: Revenue + Cost + Profit ── */}
-      <Chart06 data={chart6Data} tf={tf6} onTf={setTf6} />
+          {/* ── Chart 06: Revenue + Cost + Profit ── */}
+          <Chart06 data={chart6Data} tf={tf6} onTf={setTf6} />
 
-      {/* ── Chart 07: Cumulative profit + breakeven ── */}
-      <Chart07
-        data={cumulativeData}
-        breakeven={breakeven}
-        breakevenInput={breakevenInput}
-        onBreakeven={(numVal, strVal) => {
-          setBreakeven(numVal);
-          setBreakevenInput(strVal);
-        }}
-      />
+          {/* ── Chart 07: Cumulative profit + breakeven ── */}
+          <Chart07 data={cumulativeData} breakeven={breakeven} breakevenInput={breakevenInput} onBreakeven={handleBreakeven} />
 
-      {/* ── Chart 08: Customer traffic + avg bill ── */}
-      <Chart08 data={customerData} tf={tfCustomer} onTf={setTfCustomer} />
+          {/* ── Chart 08: Customer traffic + avg bill ── */}
+          <Chart08 data={customerData} tf={tfCustomer} onTf={setTfCustomer} />
 
-      {/* ── Chart 09: Pie top dishes + Heatmap ── */}
-      <Chart09 pieData={pieData} heatmapData={heatmapData} tfPie={tfPie} onTfPie={setTfPie} />
+          {/* ── Chart 09: Pie top dishes + Heatmap ── */}
+          <Chart09 pieData={pieData} heatmapData={heatmapData} tfPie={tfPie} onTfPie={setTfPie} />
 
-      {/* ── Chart 10: PID Ingredient Planning ── */}
-      <Chart10 pidRows={pidRows} tf={tfPid} onTf={setTfPid} onRowsChange={setPidRows} />
+          {/* ── Chart 10: PID Ingredient Planning ── */}
+          <Chart10 pidRows={pidRows} tf={tfPid} onTf={setTfPid} onRowsChange={handlePidRowsChange} />
+        </>
+      ) : (
+        <ChartsSkeleton />
+      )}
     </ScrollView>
   );
 }

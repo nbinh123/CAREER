@@ -11,23 +11,27 @@
 // đăng nhập, vì import tĩnh của LoginPage/RegisterPage/AppDrawer đều bị
 // evaluate ngay khi module RootNavigator.js được load — không đợi tới lúc
 // isAuthenticated=true). RegisterPage chỉ admin mới dùng, không cần thiết
-// phải trả phí evaluate module ngay từ màn hình Login → chuyển sang
-// React.lazy, bọc Suspense qua withSuspense.js (xem thêm ghi chú tương tự
-// ở AppDrawer.js — nguồn chính của vấn đề nằm ở đó, 12 trang + 10 chart).
+// phải trả phí evaluate module ngay từ màn hình Login → chuyển sang import
+// động qua lazyScreen() (xem thêm ghi chú tương tự ở AppDrawer.js — nguồn
+// chính của vấn đề nằm ở đó, 12 trang + 10 chart).
+//
+// [BUGFIX] Đã đổi từ React.lazy() + withSuspense sang lazyScreen() — lý do
+// chi tiết nằm trong lazyScreen.js (tránh lỗi "hasn't mounted yet" do
+// Suspense xung đột với react-native-screens SceneView trên React 19).
 import React from "react";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import useAuthZustand from "../zustand/useAuthZustand";
 import AppDrawer from "./AppDrawer";
 import LoginPage from "../pages/LoginPage";
 import { withProtection } from "./ProtectedScreen";
-import withSuspense from "./withSuspense";
+import lazyScreen from "./lazyScreen";
 import { makePlaceholder } from "../pages/PlaceholderPage";
 
-const RegisterPage = React.lazy(() => import("../pages/RegisterPage"));
+const RegisterPage = lazyScreen(() => import("../pages/RegisterPage"));
 
 const Stack = createNativeStackNavigator();
 const ShiftScreen = withProtection(makePlaceholder("Ca làm việc"));
-const ProtectedRegister = withSuspense(withProtection(RegisterPage, { allowedRoles: ["admin"] }));
+const ProtectedRegister = withProtection(RegisterPage, { allowedRoles: ["admin"] });
 
 export default function RootNavigator() {
   const isAuthenticated = useAuthZustand((s) => s.isAuthenticated);

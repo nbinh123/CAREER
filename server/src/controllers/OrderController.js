@@ -9,6 +9,13 @@ const {
     recordVoucherRedemption,
     releaseVoucherForOrder
 } = require("./service/voucherService");
+const HISTORY_STATUSES = ["completed", "cancelled"];
+const DEFAULT_LIMIT = 5;
+const MAX_LIMIT = 50; // chặn client truyền limit quá lớn
+
+function escapeRegExp(str) {
+    return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 class OrderController {
 
@@ -294,6 +301,55 @@ class OrderController {
 
             return res.status(500).json({
                 message: error.message || "Internal server error"
+            });
+        }
+    }
+
+    async getHistory(req, res) {
+        try {
+            const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+            const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || DEFAULT_LIMIT, 1), MAX_LIMIT);
+            const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
+
+            const match = { status: { $in: HISTORY_STATUSES } };
+
+            if (search) {
+                const regex = new RegExp(escapeRegExp(search), "i");
+                match.$or = [{ customerName: regex }, { phone: regex }];
+                // Ô tìm kiếm ở frontend cho phép tìm theo "mã đơn" — nếu chuỗi
+                // gõ vào là 1 ObjectId hợp lệ, thêm khớp chính xác theo _id.
+                if (mongoose.isValidObjectId(search)) {
+                    match.$or.push({ _id: new mongoose.Types.ObjectId(search) });
+                }
+            }
+
+            const skip = (page - 1) * limit;
+
+            // "5 đơn gần nhất" hiểu là 5 đơn vừa XỬ LÝ XONG gần đây nhất
+            // (completedAt/cancelledAt), không phải vừa được TẠO (createdAt) —
+            // 1 đơn có thể nằm ở pending khá lâu trước khi được xác nhận/hoàn
+            // tất. Model đã có sẵn completedAt/cancelledAt nên tận dụng luôn,
+            // fallback về createdAt cho các case cả 2 đều null.
+            const rows = await Order.aggregate([
+                { $match: match },
+                {
+                    $addFields: {
+                        historyAt: { $ifNull: ["$completedAt", { $ifNull: ["$cancelledAt", "$createdAt"] }] },
+                    },
+                },
+                { $sort: { historyAt: -1 } },
+                { $skip: skip },
+                { $limit: limit + 1 }, // lấy dư 1 bản ghi để biết còn trang sau hay không
+            ]);
+
+            const hasMore = rows.length > limit;
+            const orders = hasMore ? rows.slice(0, limit) : rows;
+
+            return res.json({ orders, page, hasMore });
+        } catch (error) {
+            console.error("Error fetching online order history:", error);
+            return res.status(500).json({
+                message: error.message || "Internal server error",
             });
         }
     }
