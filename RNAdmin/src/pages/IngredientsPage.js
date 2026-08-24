@@ -711,7 +711,7 @@ export default function IngredientsPage() {
                 `nestedScrollEnabled` để tăng độ ổn định nhận diện cử chỉ
                 cuộn trên Android trong layout lồng nhau kiểu này. */}
             <ScrollView
-              style={{ flex: 1 }}
+              style={{ flexShrink: 1 }}
               contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 16 }}
               keyboardShouldPersistTaps="handled"
               nestedScrollEnabled

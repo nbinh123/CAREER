@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
   Image,
   Platform,
+  useWindowDimensions,
 } from "react-native";
 import * as ImagePicker from "expo-image-picker";
 import DateTimePicker from "@react-native-community/datetimepicker";
@@ -39,21 +40,33 @@ import colors from "../theme/tokens";
       `keepPreviousData: true` và đổi `isPending` thành `isLoading`.)
 
    2. [FIX-SCROLL] 2 modal (Nhập kho / Ghi nhận hư hỏng) trước đây kéo
-      không lướt được, dù kéo ở vùng trống giữa các trường hay ở tiêu
-      đề. Nguyên nhân: ScrollView bên trong modal không có `flex: 1`,
-      nên theo mặc định của Yoga (flexShrink: 0), nó tự co giãn theo
-      đúng chiều cao nội dung thay vì bị ép vào phần còn lại của
-      `maxHeight` khung modal cha — tức là bên trong ScrollView không
-      hề có phần "tràn" để cuộn (frame height == content height), mọi
-      thao tác kéo đều vô tác dụng dù phần dưới bị cắt hình do
-      `overflow: hidden` của View cha. Phần tiêu đề (nằm tách hẳn bên
-      ngoài ScrollView) thì dĩ nhiên không thể kéo-cuộn được vì không
-      thuộc vùng scroll.
-      → Đã thêm `flex: 1` cho ScrollView để nó thực sự bị giới hạn
-      chiều cao và có thể cuộn, đồng thời đưa tiêu đề vào làm phần tử
-      đầu tiên (dùng `stickyHeaderIndices={[0]}`) của chính ScrollView
-      đó — tiêu đề vẫn dính ở trên khi cuộn, nhưng kéo bắt đầu từ đó
-      giờ cũng điều khiển được việc cuộn nội dung bên dưới.
+      không lướt được ở bất kỳ đâu trên modal. Nguyên nhân gốc: ScrollView
+      bên trong modal không có `flex: 1`, nên tự co giãn theo đúng chiều
+      cao nội dung thay vì bị ép vào phần còn lại của khung modal cha —
+      không hề có phần "tràn" để cuộn.
+      → Đã thêm `flex: 1` cho ScrollView, và đưa hàng nút "Hủy / Xác nhận"
+      (trước tách riêng, cố định ngoài ScrollView) vào làm phần tử cuối
+      cùng BÊN TRONG cùng ScrollView — tiêu đề, nội dung, nút hành động
+      nay thuộc chung 1 vùng cuộn duy nhất.
+
+      [FIX-MODAL-KHONG-HIEN] Thêm `flex: 1` xong lại sinh lỗi MỚI: bấm nút
+      mở modal chỉ thấy nền tối, khung trắng biến mất. Nguyên nhân thật:
+      `maxHeight: "88%"` là phần trăm tính trên 1 Pressable cha KHÔNG có
+      chiều cao xác định (Pressable đó chỉ auto-size theo nội dung, vì
+      Pressable ông của nó dùng justifyContent/alignItems: "center" chứ
+      không stretch) — phần trăm trên 1 giá trị chưa xác định + flex:1 đòi
+      không gian xác định ngay bên dưới tạo thành vòng phụ thuộc vòng
+      tròn, Yoga không giải được nên trả về chiều cao 0.
+      → Gộp phần khung (nền trắng, bo góc, giới hạn chiều cao) vào ngay
+      Pressable "chặn tap" trong ModalOverlay (bớt 1 tầng auto-size trung
+      gian), và đổi `maxHeight: "88%"` (chuỗi phần trăm) sang SỐ PIXEL cụ
+      thể tính từ `useWindowDimensions()` — không còn phụ thuộc chiều cao
+      (chưa xác định) của View cha nào nữa.
+      Cũng đã thử `stickyHeaderIndices` (tiêu đề dính khi cuộn) và đổi lớp
+      chặn-tap sang View + onStartShouldSetResponder — nhưng cả 2 không
+      liên quan đến lỗi này nên đã bỏ, quay về Pressable chuẩn, không
+      sticky header, để giữ mọi thứ đơn giản/ổn định nhất có thể.
+
 ════════════════════════════════════════════════════════════ */
 
 /* ════════════════════════════════════════════════════════════
@@ -152,18 +165,30 @@ async function uploadInvoiceImport(formData) {
 
 /* Overlay dùng chung cho mọi modal — tương đương e.stopPropagation() bên
    web, cùng pattern ModalOverlay đã dùng ở IngredientsPage.js/Customers.js.
-   [FIX-SCROLL-2] Trước đây lớp "chặn tap lan ra ngoài" là 1 Pressable —
-   Pressable tự nhận quyền responder ngay từ lúc chạm (để nhận biết
-   press-in/press-out), nên với modal mà TOÀN BỘ nội dung (kể cả tiêu đề,
-   nút hành động) đều nằm trong 1 ScrollView duy nhất như hiện tại, việc có
-   thêm 1 Pressable bao NGOÀI ScrollView vẫn tiềm ẩn rủi ro tranh quyền
-   responder ở đúng điểm chạm đầu tiên trên toàn bộ modal. Đổi sang View
-   thường + onStartShouldSetResponder={() => true}: vẫn giữ được đúng hành
-   vi "chạm bên trong modal thì không đóng, chạm ra ngoài (nền mờ) thì
-   đóng", nhưng không có logic theo dõi press nào cạnh tranh với ScrollView
-   — nhường hẳn quyền xử lý kéo/cuộn cho ScrollView ngay từ điểm chạm đầu
-   tiên, bất kể chạm ở đâu trên modal. */
+   [FIX-MODAL-KHONG-HIEN — nguyên nhân thật sự] Modal vẫn hiện nền tối (nên
+   Pressable overlay chắc chắn có render) nhưng khung trắng bên trong biến
+   mất — đây là dấu hiệu kinh điển của việc Yoga không tính được kích
+   thước, KHÔNG phải lỗi hiển thị của Modal.
+   Chuỗi bao bọc trước đó: Pressable nền (flex:1, justifyContent/
+   alignItems: "center" — KHÔNG stretch, KHÔNG gán height cho con) →
+   Pressable rộng maxWidth (không có height/flex riêng, tự auto-size theo
+   nội dung) → View maxHeight: "88%" (PHẦN TRĂM — tính trên chiều cao của
+   chính Pressable auto-size phía trên, tức là tính trên 1 giá trị CHƯA
+   XÁC ĐỊNH) → ScrollView flex:1 (đòi "lấp đầy" không gian còn lại của
+   parent). Ba tầng auto-size lồng nhau + 1 phần trăm tính trên chiều cao
+   chưa xác định + 1 flex:1 đòi không gian xác định tạo thành vòng phụ
+   thuộc vòng tròn — Yoga không giải được nên trả về chiều cao 0, khung
+   modal biến mất dù nền mờ vẫn hiện bình thường.
+   → Gộp việc định khung (bg trắng, bo góc, giới hạn chiều cao) vào NGAY
+   Pressable "chặn tap" này — bớt 1 tầng auto-size trung gian — và đổi
+   maxHeight từ chuỗi phần trăm "88%" sang SỐ PIXEL cụ thể tính từ
+   useWindowDimensions(), để không còn phụ thuộc vào chiều cao (chưa xác
+   định) của bất kỳ View cha nào nữa. flex:1 ở ScrollView bên trong giờ
+   tính trên 1 con số rõ ràng, không còn vòng lặp phụ thuộc. */
 function ModalOverlay({ onClose, maxWidth = 440, children }) {
+  const { height: windowHeight } = useWindowDimensions();
+  const cardMaxHeight = Math.round(windowHeight * 0.88);
+
   return (
     <Modal transparent animationType="fade" onRequestClose={onClose}>
       <Pressable
@@ -176,13 +201,27 @@ function ModalOverlay({ onClose, maxWidth = 440, children }) {
           padding: 16,
         }}
       >
-        <View onStartShouldSetResponder={() => true} style={{ width: "100%", maxWidth }}>
-          {children}
-        </View>
+        <Pressable
+          onPress={() => { }}
+          className="bg-white rounded-3xl overflow-hidden"
+          style={{ width: "100%", maxWidth, maxHeight: cardMaxHeight }}
+        >
+          {/* [FIX-MODAL-HEIGHT-0] maxHeight đặt THẲNG lên ScrollView (số px
+              xác định) thay vì flex:1 trên ScrollView + maxHeight trên cha.
+              flex:1 cần cha có chiều cao xác định để chia; ở đây cha chỉ
+              có maxHeight (giới hạn, không phải kích thước xác định) nên
+              vẫn tự đo theo nội dung con → vòng phụ thuộc vòng tròn, Yoga
+              trả về 0. Đặt maxHeight trực tiếp lên ScrollView cho nó một
+              con số rõ ràng để tự đo, không cần đi vòng qua flex của cha. */}
+          <ScrollView style={{ maxHeight: cardMaxHeight }} keyboardShouldPersistTaps="handled">
+            {children}
+          </ScrollView>
+        </Pressable>
       </Pressable>
     </Modal>
   );
 }
+
 
 /* ── Ô chọn ngày, thay <input type="date"> ──────────────────────────── */
 const DateField = React.memo(function DateField({ label, value, onChange }) {
@@ -446,118 +485,119 @@ function ImportModal({ open, onClose, onSuccess, ingredients }) {
 
   return (
     <ModalOverlay onClose={onClose}>
-      <View className="bg-white rounded-3xl overflow-hidden" style={{ maxHeight: "88%" }}>
-        {/* [FIX-SCROLL] flex:1 để ScrollView thực sự bị giới hạn chiều cao
-            (chứ không tự co theo nội dung) và stickyHeaderIndices để tiêu
-            đề vẫn nằm trong vùng kéo-cuộn được — xem ghi chú đầu file. */}
-        <ScrollView style={{ flex: 1 }} stickyHeaderIndices={[0]} keyboardShouldPersistTaps="handled">
-          <View className="bg-white px-6 pt-6 pb-4 flex-row items-center justify-between border-b border-gray-100">
-            <Text className="text-base font-black text-green-900">
-              {mode === "picker" ? "Chọn nguyên liệu" : "Nhập kho"}
-            </Text>
-            <Pressable onPress={onClose} className="w-8 h-8 rounded-xl bg-gray-50 items-center justify-center">
-              <Text className="text-gray-400 text-base">✕</Text>
-            </Pressable>
-          </View>
+      {/* [FIX-SCROLL] flex:1 để ScrollView thực sự bị giới hạn chiều cao
+          (chứ không tự co theo nội dung) — xem ghi chú đầu file. Đã bỏ
+          stickyHeaderIndices (tiêu đề không còn dính khi cuộn nữa) và bỏ
+          View bọc ngoài (bg-white/rounded/maxHeight) — phần khung đó nay
+          nằm ngay trong ModalOverlay để tránh chồng nhiều lớp auto-size
+          gây lỗi Yoga tính sai chiều cao (xem ghi chú ở ModalOverlay). */}
+      <View className="bg-white px-6 pt-6 pb-4 flex-row items-center justify-between border-b border-gray-100">
+        <Text className="text-base font-black text-green-900">
+          {mode === "picker" ? "Chọn nguyên liệu" : "Nhập kho"}
+        </Text>
+        <Pressable onPress={onClose} className="w-8 h-8 rounded-xl bg-gray-50 items-center justify-center">
+          <Text className="text-gray-400 text-base">✕</Text>
+        </Pressable>
+      </View>
 
-          <View style={{ padding: 20, gap: 14 }}>
-            {mode === "picker" ? (
-              <IngredientPickerBody
-                ingredients={ingredients}
-                selectedId={form.ingredientId}
-                onPick={(id) => {
-                  setForm((f) => ({ ...f, ingredientId: id }));
-                  setMode("form");
-                }}
-                onCancel={() => setMode("form")}
+      <View style={{ padding: 20, gap: 14 }}>
+        {mode === "picker" ? (
+          <IngredientPickerBody
+            ingredients={ingredients}
+            selectedId={form.ingredientId}
+            onPick={(id) => {
+              setForm((f) => ({ ...f, ingredientId: id }));
+              setMode("form");
+            }}
+            onCancel={() => setMode("form")}
+          />
+        ) : (
+          <>
+            {!!error && (
+              <View className="bg-red-50 border border-red-200 rounded-xl px-3.5 py-2.5">
+                <Text className="text-red-600 text-[13px]">{error}</Text>
+              </View>
+            )}
+
+            <View style={{ gap: 5 }}>
+              <Text className="text-xs font-bold text-gray-600" style={{ letterSpacing: 0.3 }}>
+                Nguyên liệu <Text className="text-red-500">*</Text>
+              </Text>
+              <Pressable
+                onPress={() => setMode("picker")}
+                className="bg-[#FAFBFC] border border-gray-200 rounded-xl"
+                style={{ paddingHorizontal: 14, paddingVertical: 12 }}
+              >
+                <Text className={ing ? "text-sm text-gray-800" : "text-sm text-gray-300"}>
+                  {ing ? ing.ingredientName : "Gõ tên nguyên liệu cần nhập..."}
+                </Text>
+              </Pressable>
+            </View>
+
+            {!!ing && (
+              <View className="bg-gray-50 border border-gray-200 rounded-lg flex-row flex-wrap" style={{ gap: 14, paddingHorizontal: 13, paddingVertical: 10 }}>
+                <Text className="text-[12.5px] text-gray-600">
+                  Tồn kho: <Text className="font-bold text-gray-800">{fmt.num(ing.quantity)} {ing.smallUnit}</Text>
+                </Text>
+                <Text className="text-[12.5px] text-gray-600">
+                  Đơn vị lớn: <Text className="font-bold text-gray-800">{ing.largeUnit}</Text>
+                </Text>
+                <Text className="text-[12.5px] text-gray-600">
+                  Giá/{ing.largeUnit}: <Text className="font-bold text-gray-800">{fmt.money(ing.pricePerLargeUnit)}</Text>
+                </Text>
+              </View>
+            )}
+
+            <View style={{ gap: 5 }}>
+              <Text className="text-xs font-bold text-gray-600" style={{ letterSpacing: 0.3 }}>
+                Số lượng ({ing?.smallUnit || "đơn vị"}) <Text className="text-red-500">*</Text>
+              </Text>
+              <TextInput
+                value={form.quantity}
+                onChangeText={(t) => setForm((f) => ({ ...f, quantity: t }))}
+                placeholder="Nhập số lượng..."
+                placeholderTextColor={colors.gray[300]}
+                keyboardType="decimal-pad"
+                className="border border-gray-200 rounded-xl text-sm text-gray-800"
+                style={{ paddingHorizontal: 14, paddingVertical: 11 }}
               />
-            ) : (
-              <>
-                {!!error && (
-                  <View className="bg-red-50 border border-red-200 rounded-xl px-3.5 py-2.5">
-                    <Text className="text-red-600 text-[13px]">{error}</Text>
-                  </View>
+            </View>
+
+            {amount > 0 && (
+              <View className="bg-emerald-50 border border-emerald-200 rounded-lg" style={{ paddingHorizontal: 14, paddingVertical: 11 }}>
+                <Text className="text-emerald-700 font-bold font-mono text-sm">Thành tiền ≈ {fmt.money(amount)}</Text>
+              </View>
+            )}
+
+            <View style={{ gap: 5 }}>
+              <Text className="text-xs font-bold text-gray-600" style={{ letterSpacing: 0.3 }}>Ảnh hóa đơn</Text>
+              <Pressable
+                onPress={pickImage}
+                className="border border-dashed border-gray-300 rounded-xl items-center justify-center bg-[#FAFBFC]"
+                style={{ padding: 18, minHeight: 90 }}
+              >
+                {preview ? (
+                  <Image source={{ uri: preview }} style={{ width: "100%", height: 120, borderRadius: 8 }} resizeMode="cover" />
+                ) : (
+                  <Text className="text-[13px] text-gray-400 font-medium">📷 Chạm để tải ảnh hóa đơn</Text>
                 )}
+              </Pressable>
+            </View>
 
-                <View style={{ gap: 5 }}>
-                  <Text className="text-xs font-bold text-gray-600" style={{ letterSpacing: 0.3 }}>
-                    Nguyên liệu <Text className="text-red-500">*</Text>
-                  </Text>
-                  <Pressable
-                    onPress={() => setMode("picker")}
-                    className="bg-[#FAFBFC] border border-gray-200 rounded-xl"
-                    style={{ paddingHorizontal: 14, paddingVertical: 12 }}
-                  >
-                    <Text className={ing ? "text-sm text-gray-800" : "text-sm text-gray-300"}>
-                      {ing ? ing.ingredientName : "Gõ tên nguyên liệu cần nhập..."}
-                    </Text>
-                  </Pressable>
-                </View>
+            <View style={{ gap: 5 }}>
+              <Text className="text-xs font-bold text-gray-600" style={{ letterSpacing: 0.3 }}>Ghi chú</Text>
+              <TextInput
+                value={form.note}
+                onChangeText={(t) => setForm((f) => ({ ...f, note: t }))}
+                placeholder="Ghi chú thêm (không bắt buộc)..."
+                placeholderTextColor={colors.gray[300]}
+                multiline
+                className="border border-gray-200 rounded-xl text-sm text-gray-800"
+                style={{ paddingHorizontal: 14, paddingVertical: 11, minHeight: 72, textAlignVertical: "top" }}
+              />
+            </View>
 
-                {!!ing && (
-                  <View className="bg-gray-50 border border-gray-200 rounded-lg flex-row flex-wrap" style={{ gap: 14, paddingHorizontal: 13, paddingVertical: 10 }}>
-                    <Text className="text-[12.5px] text-gray-600">
-                      Tồn kho: <Text className="font-bold text-gray-800">{fmt.num(ing.quantity)} {ing.smallUnit}</Text>
-                    </Text>
-                    <Text className="text-[12.5px] text-gray-600">
-                      Đơn vị lớn: <Text className="font-bold text-gray-800">{ing.largeUnit}</Text>
-                    </Text>
-                    <Text className="text-[12.5px] text-gray-600">
-                      Giá/{ing.largeUnit}: <Text className="font-bold text-gray-800">{fmt.money(ing.pricePerLargeUnit)}</Text>
-                    </Text>
-                  </View>
-                )}
-
-                <View style={{ gap: 5 }}>
-                  <Text className="text-xs font-bold text-gray-600" style={{ letterSpacing: 0.3 }}>
-                    Số lượng ({ing?.smallUnit || "đơn vị"}) <Text className="text-red-500">*</Text>
-                  </Text>
-                  <TextInput
-                    value={form.quantity}
-                    onChangeText={(t) => setForm((f) => ({ ...f, quantity: t }))}
-                    placeholder="Nhập số lượng..."
-                    placeholderTextColor={colors.gray[300]}
-                    keyboardType="decimal-pad"
-                    className="border border-gray-200 rounded-xl text-sm text-gray-800"
-                    style={{ paddingHorizontal: 14, paddingVertical: 11 }}
-                  />
-                </View>
-
-                {amount > 0 && (
-                  <View className="bg-emerald-50 border border-emerald-200 rounded-lg" style={{ paddingHorizontal: 14, paddingVertical: 11 }}>
-                    <Text className="text-emerald-700 font-bold font-mono text-sm">Thành tiền ≈ {fmt.money(amount)}</Text>
-                  </View>
-                )}
-
-                <View style={{ gap: 5 }}>
-                  <Text className="text-xs font-bold text-gray-600" style={{ letterSpacing: 0.3 }}>Ảnh hóa đơn</Text>
-                  <Pressable
-                    onPress={pickImage}
-                    className="border border-dashed border-gray-300 rounded-xl items-center justify-center bg-[#FAFBFC]"
-                    style={{ padding: 18, minHeight: 90 }}
-                  >
-                    {preview ? (
-                      <Image source={{ uri: preview }} style={{ width: "100%", height: 120, borderRadius: 8 }} resizeMode="cover" />
-                    ) : (
-                      <Text className="text-[13px] text-gray-400 font-medium">📷 Chạm để tải ảnh hóa đơn</Text>
-                    )}
-                  </Pressable>
-                </View>
-
-                <View style={{ gap: 5 }}>
-                  <Text className="text-xs font-bold text-gray-600" style={{ letterSpacing: 0.3 }}>Ghi chú</Text>
-                  <TextInput
-                    value={form.note}
-                    onChangeText={(t) => setForm((f) => ({ ...f, note: t }))}
-                    placeholder="Ghi chú thêm (không bắt buộc)..."
-                    placeholderTextColor={colors.gray[300]}
-                    multiline
-                    className="border border-gray-200 rounded-xl text-sm text-gray-800"
-                    style={{ paddingHorizontal: 14, paddingVertical: 11, minHeight: 72, textAlignVertical: "top" }}
-                  />
-                </View>
-
-                {/* [FIX-SCROLL-3] Nút hành động giờ là phần tử cuối cùng
+            {/* [FIX-SCROLL-3] Nút hành động giờ là phần tử cuối cùng
                     BÊN TRONG cùng ScrollView với phần còn lại của modal
                     (trước đây tách riêng, cố định ngoài ScrollView) — để
                     kéo bắt đầu từ chính vùng nút cũng cuộn được nội dung,
@@ -565,24 +605,22 @@ function ImportModal({ open, onClose, onSuccess, ingredients }) {
                     modal". Đổi lại: trên form dài + màn hình nhỏ, có thể
                     cần cuộn xuống cuối mới thấy nút — nếu muốn nút luôn cố
                     định hiển thị thay vì cuộn theo, nói mình biết để đổi lại. */}
-                <View className="flex-row justify-end border-t border-gray-100" style={{ gap: 10, paddingTop: 14 }}>
-                  <Pressable onPress={onClose} disabled={loading} className="bg-gray-50 border border-gray-200 rounded-xl" style={{ paddingHorizontal: 16, paddingVertical: 10 }}>
-                    <Text className="text-sm font-bold text-gray-600">Hủy</Text>
-                  </Pressable>
-                  <Pressable
-                    onPress={submit}
-                    disabled={loading}
-                    style={{ opacity: loading ? 0.6 : 1, paddingHorizontal: 16, paddingVertical: 10, flexDirection: "row", alignItems: "center", gap: 6 }}
-                    className="bg-blue-600 rounded-xl"
-                  >
-                    {loading && <ActivityIndicator size="small" color={colors.white} />}
-                    <Text className="text-sm font-bold text-white">{loading ? "Đang lưu..." : "Xác nhận nhập kho"}</Text>
-                  </Pressable>
-                </View>
-              </>
-            )}
-          </View>
-        </ScrollView>
+            <View className="flex-row justify-end border-t border-gray-100" style={{ gap: 10, paddingTop: 14 }}>
+              <Pressable onPress={onClose} disabled={loading} className="bg-gray-50 border border-gray-200 rounded-xl" style={{ paddingHorizontal: 16, paddingVertical: 10 }}>
+                <Text className="text-sm font-bold text-gray-600">Hủy</Text>
+              </Pressable>
+              <Pressable
+                onPress={submit}
+                disabled={loading}
+                style={{ opacity: loading ? 0.6 : 1, paddingHorizontal: 16, paddingVertical: 10, flexDirection: "row", alignItems: "center", gap: 6 }}
+                className="bg-blue-600 rounded-xl"
+              >
+                {loading && <ActivityIndicator size="small" color={colors.white} />}
+                <Text className="text-sm font-bold text-white">{loading ? "Đang lưu..." : "Xác nhận nhập kho"}</Text>
+              </Pressable>
+            </View>
+          </>
+        )}
       </View>
     </ModalOverlay>
   );
@@ -667,161 +705,161 @@ function ExportModal({ open, onClose, onSuccess, ingredients }) {
 
   return (
     <ModalOverlay onClose={onClose} maxWidth={480}>
-      <View className="bg-white rounded-3xl overflow-hidden" style={{ maxHeight: "88%" }}>
-        {/* [FIX-SCROLL] xem ghi chú đầu file */}
-        <ScrollView style={{ flex: 1 }} stickyHeaderIndices={[0]} keyboardShouldPersistTaps="handled">
-          <View className="bg-white px-6 pt-6 pb-4 flex-row items-center justify-between border-b border-gray-100">
-            <Text className="text-base font-black text-green-900">
-              {mode === "picker" ? "Chọn nguyên liệu" : "Ghi nhận nguyên liệu hư hỏng"}
-            </Text>
-            <Pressable onPress={onClose} className="w-8 h-8 rounded-xl bg-gray-50 items-center justify-center">
-              <Text className="text-gray-400 text-base">✕</Text>
-            </Pressable>
-          </View>
+      {/* [FIX-SCROLL] xem ghi chú ở ImportModal/ModalOverlay — đã bỏ
+          stickyHeaderIndices và View bọc ngoài (khung nay nằm trong
+          ModalOverlay). */}
+      <ScrollView style={{ flex: 1 }} keyboardShouldPersistTaps="handled">
+        <View className="bg-white px-6 pt-6 pb-4 flex-row items-center justify-between border-b border-gray-100">
+          <Text className="text-base font-black text-green-900">
+            {mode === "picker" ? "Chọn nguyên liệu" : "Ghi nhận nguyên liệu hư hỏng"}
+          </Text>
+          <Pressable onPress={onClose} className="w-8 h-8 rounded-xl bg-gray-50 items-center justify-center">
+            <Text className="text-gray-400 text-base">✕</Text>
+          </Pressable>
+        </View>
 
-          <View style={{ padding: 20, gap: 14 }}>
-            {mode === "picker" ? (
-              <IngredientPickerBody
-                ingredients={ingredients}
-                selectedId={form.ingredientId}
-                onPick={(id) => {
-                  setForm((f) => ({ ...f, ingredientId: id }));
-                  setConfirmed(false);
-                  setMode("form");
-                }}
-                onCancel={() => setMode("form")}
-              />
-            ) : (
-              <>
-                {!!error && (
-                  <View className="bg-red-50 border border-red-200 rounded-xl px-3.5 py-2.5">
-                    <Text className="text-red-600 text-[13px]">{error}</Text>
-                  </View>
-                )}
-                {confirmed && !error && (
-                  <View className="bg-amber-50 border border-amber-200 rounded-xl px-3.5 py-2.5">
-                    <Text className="text-amber-700 text-[13px]" style={{ lineHeight: 19 }}>
-                      Xác nhận ghi nhận <Text className="font-black">{form.quantity} {ing?.smallUnit}</Text> hư hỏng của{" "}
-                      <Text className="font-black">{ing?.ingredientName}</Text>? Nhấn "Xác nhận ghi nhận" lần nữa để hoàn tất.
-                    </Text>
-                  </View>
-                )}
-
-                <View style={{ gap: 5 }}>
-                  <Text className="text-xs font-bold text-gray-600" style={{ letterSpacing: 0.3 }}>
-                    Nguyên liệu <Text className="text-red-500">*</Text>
-                  </Text>
-                  <Pressable
-                    onPress={() => setMode("picker")}
-                    className="bg-[#FAFBFC] border border-gray-200 rounded-xl"
-                    style={{ paddingHorizontal: 14, paddingVertical: 12 }}
-                  >
-                    <Text className={ing ? "text-sm text-gray-800" : "text-sm text-gray-300"}>
-                      {ing ? `${ing.ingredientName} (${ing.smallUnit})` : "— Chọn nguyên liệu —"}
-                    </Text>
-                  </Pressable>
+        <View style={{ padding: 20, gap: 14 }}>
+          {mode === "picker" ? (
+            <IngredientPickerBody
+              ingredients={ingredients}
+              selectedId={form.ingredientId}
+              onPick={(id) => {
+                setForm((f) => ({ ...f, ingredientId: id }));
+                setConfirmed(false);
+                setMode("form");
+              }}
+              onCancel={() => setMode("form")}
+            />
+          ) : (
+            <>
+              {!!error && (
+                <View className="bg-red-50 border border-red-200 rounded-xl px-3.5 py-2.5">
+                  <Text className="text-red-600 text-[13px]">{error}</Text>
                 </View>
+              )}
+              {confirmed && !error && (
+                <View className="bg-amber-50 border border-amber-200 rounded-xl px-3.5 py-2.5">
+                  <Text className="text-amber-700 text-[13px]" style={{ lineHeight: 19 }}>
+                    Xác nhận ghi nhận <Text className="font-black">{form.quantity} {ing?.smallUnit}</Text> hư hỏng của{" "}
+                    <Text className="font-black">{ing?.ingredientName}</Text>? Nhấn "Xác nhận ghi nhận" lần nữa để hoàn tất.
+                  </Text>
+                </View>
+              )}
 
-                {!!ing && (
-                  <View className="bg-gray-50 border border-gray-200 rounded-lg flex-row flex-wrap" style={{ gap: 14, paddingHorizontal: 13, paddingVertical: 10 }}>
-                    <Text className="text-[12.5px] text-gray-600">
-                      Tồn kho:{" "}
-                      <Text className="font-bold" style={{ color: ing.quantity <= 0 ? colors.red[600] : colors.green[600] }}>
-                        {fmt.num(ing.quantity)} {ing.smallUnit}
-                      </Text>
-                    </Text>
-                    <Text className="text-[12.5px] text-gray-600">
-                      Đơn vị lớn: <Text className="font-bold text-gray-800">{ing.largeUnit}</Text>
-                    </Text>
-                  </View>
-                )}
+              <View style={{ gap: 5 }}>
+                <Text className="text-xs font-bold text-gray-600" style={{ letterSpacing: 0.3 }}>
+                  Nguyên liệu <Text className="text-red-500">*</Text>
+                </Text>
+                <Pressable
+                  onPress={() => setMode("picker")}
+                  className="bg-[#FAFBFC] border border-gray-200 rounded-xl"
+                  style={{ paddingHorizontal: 14, paddingVertical: 12 }}
+                >
+                  <Text className={ing ? "text-sm text-gray-800" : "text-sm text-gray-300"}>
+                    {ing ? `${ing.ingredientName} (${ing.smallUnit})` : "— Chọn nguyên liệu —"}
+                  </Text>
+                </Pressable>
+              </View>
 
+              {!!ing && (
+                <View className="bg-gray-50 border border-gray-200 rounded-lg flex-row flex-wrap" style={{ gap: 14, paddingHorizontal: 13, paddingVertical: 10 }}>
+                  <Text className="text-[12.5px] text-gray-600">
+                    Tồn kho:{" "}
+                    <Text className="font-bold" style={{ color: ing.quantity <= 0 ? colors.red[600] : colors.green[600] }}>
+                      {fmt.num(ing.quantity)} {ing.smallUnit}
+                    </Text>
+                  </Text>
+                  <Text className="text-[12.5px] text-gray-600">
+                    Đơn vị lớn: <Text className="font-bold text-gray-800">{ing.largeUnit}</Text>
+                  </Text>
+                </View>
+              )}
+
+              <View style={{ gap: 5 }}>
+                <Text className="text-xs font-bold text-gray-600" style={{ letterSpacing: 0.3 }}>
+                  Số lượng ({ing?.smallUnit || "đơn vị"}) <Text className="text-red-500">*</Text>
+                </Text>
+                <TextInput
+                  value={form.quantity}
+                  onChangeText={(t) => { setForm((f) => ({ ...f, quantity: t })); setConfirmed(false); }}
+                  placeholder="Nhập số lượng hư hỏng..."
+                  placeholderTextColor={colors.gray[300]}
+                  keyboardType="decimal-pad"
+                  className="border border-gray-200 rounded-xl text-sm text-gray-800"
+                  style={{ paddingHorizontal: 14, paddingVertical: 11 }}
+                />
+              </View>
+
+              <View style={{ gap: 5 }}>
+                <Text className="text-xs font-bold text-gray-600" style={{ letterSpacing: 0.3 }}>
+                  Lý do hư hỏng <Text className="text-red-500">*</Text>
+                </Text>
+                <View style={{ gap: 6 }}>
+                  {DAMAGE_REASONS.map((value) => {
+                    const active = form.reason === value;
+                    return (
+                      <Pressable
+                        key={value}
+                        onPress={() => { setForm((f) => ({ ...f, reason: value, customNote: "" })); setConfirmed(false); }}
+                        className={`flex-row items-center rounded-xl border ${active ? "border-amber-400 bg-amber-50" : "border-gray-200"}`}
+                        style={{ gap: 10, paddingHorizontal: 13, paddingVertical: 10 }}
+                      >
+                        <View
+                          style={{
+                            width: 16, height: 16, borderRadius: 8, borderWidth: 2,
+                            borderColor: active ? colors.amber[500] : colors.gray[300],
+                            backgroundColor: active ? colors.amber[500] : "transparent",
+                            alignItems: "center", justifyContent: "center",
+                          }}
+                        >
+                          {active && <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: colors.white }} />}
+                        </View>
+                        <Text className={`text-[13.5px] ${active ? "font-bold text-amber-700" : "font-medium text-gray-600"}`}>{value}</Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              </View>
+
+              {isOther && (
                 <View style={{ gap: 5 }}>
                   <Text className="text-xs font-bold text-gray-600" style={{ letterSpacing: 0.3 }}>
-                    Số lượng ({ing?.smallUnit || "đơn vị"}) <Text className="text-red-500">*</Text>
+                    Lý do cụ thể <Text className="text-red-500">*</Text>
                   </Text>
                   <TextInput
-                    value={form.quantity}
-                    onChangeText={(t) => { setForm((f) => ({ ...f, quantity: t })); setConfirmed(false); }}
-                    placeholder="Nhập số lượng hư hỏng..."
+                    value={form.customNote}
+                    onChangeText={(t) => setForm((f) => ({ ...f, customNote: t }))}
+                    placeholder="Nhập lý do hư hỏng..."
                     placeholderTextColor={colors.gray[300]}
-                    keyboardType="decimal-pad"
+                    multiline
                     className="border border-gray-200 rounded-xl text-sm text-gray-800"
-                    style={{ paddingHorizontal: 14, paddingVertical: 11 }}
+                    style={{ paddingHorizontal: 14, paddingVertical: 11, minHeight: 72, textAlignVertical: "top" }}
                   />
                 </View>
+              )}
 
-                <View style={{ gap: 5 }}>
-                  <Text className="text-xs font-bold text-gray-600" style={{ letterSpacing: 0.3 }}>
-                    Lý do hư hỏng <Text className="text-red-500">*</Text>
-                  </Text>
-                  <View style={{ gap: 6 }}>
-                    {DAMAGE_REASONS.map((value) => {
-                      const active = form.reason === value;
-                      return (
-                        <Pressable
-                          key={value}
-                          onPress={() => { setForm((f) => ({ ...f, reason: value, customNote: "" })); setConfirmed(false); }}
-                          className={`flex-row items-center rounded-xl border ${active ? "border-amber-400 bg-amber-50" : "border-gray-200"}`}
-                          style={{ gap: 10, paddingHorizontal: 13, paddingVertical: 10 }}
-                        >
-                          <View
-                            style={{
-                              width: 16, height: 16, borderRadius: 8, borderWidth: 2,
-                              borderColor: active ? colors.amber[500] : colors.gray[300],
-                              backgroundColor: active ? colors.amber[500] : "transparent",
-                              alignItems: "center", justifyContent: "center",
-                            }}
-                          >
-                            {active && <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: colors.white }} />}
-                          </View>
-                          <Text className={`text-[13.5px] ${active ? "font-bold text-amber-700" : "font-medium text-gray-600"}`}>{value}</Text>
-                        </Pressable>
-                      );
-                    })}
-                  </View>
-                </View>
-
-                {isOther && (
-                  <View style={{ gap: 5 }}>
-                    <Text className="text-xs font-bold text-gray-600" style={{ letterSpacing: 0.3 }}>
-                      Lý do cụ thể <Text className="text-red-500">*</Text>
-                    </Text>
-                    <TextInput
-                      value={form.customNote}
-                      onChangeText={(t) => setForm((f) => ({ ...f, customNote: t }))}
-                      placeholder="Nhập lý do hư hỏng..."
-                      placeholderTextColor={colors.gray[300]}
-                      multiline
-                      className="border border-gray-200 rounded-xl text-sm text-gray-800"
-                      style={{ paddingHorizontal: 14, paddingVertical: 11, minHeight: 72, textAlignVertical: "top" }}
-                    />
-                  </View>
-                )}
-
-                {/* [FIX-SCROLL-3] xem ghi chú ở ImportModal — nút hành động
+              {/* [FIX-SCROLL-3] xem ghi chú ở ImportModal — nút hành động
                     giờ nằm trong cùng ScrollView thay vì cố định bên ngoài. */}
-                <View className="flex-row justify-end border-t border-gray-100" style={{ gap: 10, paddingTop: 14 }}>
-                  <Pressable onPress={onClose} disabled={loading} className="bg-gray-50 border border-gray-200 rounded-xl" style={{ paddingHorizontal: 16, paddingVertical: 10 }}>
-                    <Text className="text-sm font-bold text-gray-600">Hủy</Text>
-                  </Pressable>
-                  <Pressable
-                    onPress={submit}
-                    disabled={loading}
-                    style={{ opacity: loading ? 0.6 : 1, paddingHorizontal: 16, paddingVertical: 10, flexDirection: "row", alignItems: "center", gap: 6 }}
-                    className="bg-red-600 rounded-xl"
-                  >
-                    {loading && <ActivityIndicator size="small" color={colors.white} />}
-                    <Text className="text-sm font-bold text-white">
-                      {loading ? "Đang xử lý..." : confirmed ? "Xác nhận ghi nhận" : "Ghi nhận hư hỏng"}
-                    </Text>
-                  </Pressable>
-                </View>
-              </>
-            )}
-          </View>
-        </ScrollView>
-      </View>
+              <View className="flex-row justify-end border-t border-gray-100" style={{ gap: 10, paddingTop: 14 }}>
+                <Pressable onPress={onClose} disabled={loading} className="bg-gray-50 border border-gray-200 rounded-xl" style={{ paddingHorizontal: 16, paddingVertical: 10 }}>
+                  <Text className="text-sm font-bold text-gray-600">Hủy</Text>
+                </Pressable>
+                <Pressable
+                  onPress={submit}
+                  disabled={loading}
+                  style={{ opacity: loading ? 0.6 : 1, paddingHorizontal: 16, paddingVertical: 10, flexDirection: "row", alignItems: "center", gap: 6 }}
+                  className="bg-red-600 rounded-xl"
+                >
+                  {loading && <ActivityIndicator size="small" color={colors.white} />}
+                  <Text className="text-sm font-bold text-white">
+                    {loading ? "Đang xử lý..." : confirmed ? "Xác nhận ghi nhận" : "Ghi nhận hư hỏng"}
+                  </Text>
+                </Pressable>
+              </View>
+            </>
+          )}
+        </View>
+      </ScrollView>
     </ModalOverlay>
   );
 }

@@ -10,7 +10,7 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
-  useWindowDimensions,
+  Dimensions,
 } from "react-native";
 import Animated, { FadeInDown, FadeOutDown } from "react-native-reanimated";
 import DateTimePicker from "@react-native-community/datetimepicker";
@@ -42,6 +42,20 @@ import colors from "../theme/tokens";
 const TABLE_COUNT = 12;
 const CHAT_TOOLTIP_DURATION = 8000; // tooltip tự ẩn sau 8s nếu admin không bấm vào
 const ACTION_TOAST_DURATION = 3500;
+
+const { height: SCREEN_HEIGHT } = Dimensions.get("window");
+// [FIX] Modal chi tiết bàn (TableDetailModalBody) có 1 ScrollView cuộn nội
+// dung + 1 khối "Tổng cộng/Thanh toán" cố định NGAY DƯỚI, dựng bằng
+// ScrollView flex:1 + View chân trang tự nhiên. Kiểu bố cục này CẦN cha
+// trực tiếp có height CỐ ĐỊNH thì Yoga mới có "khoảng trống còn lại" để
+// chia cho flex:1 — trước đây cha chỉ có maxHeight:"80%" (tự co theo nội
+// dung, có chặn trần chứ không phải kích thước xác định), nên ScrollView
+// bên trong co về cao 0 và toàn bộ danh sách món (chờ xác nhận/đã xác nhận)
+// biến mất — đúng lỗi đã gặp: bấm bàn có món, modal hiện nhưng trống trơn,
+// nhảy thẳng từ tiêu đề xuống "Tổng cộng". Đổi sang height cố định (tính
+// theo % chiều cao màn hình bằng Dimensions, giữ đúng tinh thần 80% cũ)
+// để cha có kích thước xác định, ScrollView tính được chiều cao còn lại.
+const TABLE_DETAIL_MODAL_HEIGHT = Math.round(SCREEN_HEIGHT * 0.8);
 
 const PAYMENT_OPTIONS = [
   ["CASH", "💵 Tiền mặt"],
@@ -114,16 +128,25 @@ function normalizeTable(raw) {
   };
 }
 
-// ─── So sánh 2 bàn theo nội dung, không theo thứ tự key [FIX #3] ──────────
-// Trước đây dùng JSON.stringify(prev) === JSON.stringify(normalized) để giữ
-// nguyên reference bàn không đổi (cho React.memo phát huy tác dụng). Nhưng
-// JSON.stringify phụ thuộc THỨ TỰ KEY của object — nếu server trả về field
-// không theo đúng thứ tự cũ (rất dễ xảy ra khi dữ liệu đi qua DB/serialize
-// lại), so sánh này luôn ra "khác" dù nội dung y hệt, khiến toàn bộ 12
-// TableCard re-render ở MỌI lần server bắn "tables_state" — kể cả khi chẳng
-// có gì đổi. Đây là nguyên nhân chính gây cảm giác re-render dồn dập/giật.
-// Hàm dưới đây so sánh theo field cụ thể, không phụ thuộc thứ tự key.
-function tableEquals(a, b) {
+// [FIX] So sánh 2 bản ghi bàn đã chuẩn hoá để quyết định giữ nguyên
+// reference cũ (phục vụ React.memo trên TableCard) hay không.
+// Trước đây dùng JSON.stringify(prev) === JSON.stringify(normalized) so
+// toàn bộ object — SAI vì JSON.stringify nhạy với THỨ TỰ KEY. `normalized`
+// được tạo bằng {...raw, active:…, chatEnabled:…}: nếu raw của cùng 1 bàn
+// giữa 2 lần server bắn "tables_state" có tập field hiện diện khác nhau
+// (vd: bàn trống thì raw không có sẵn key guestName/guestPhone, có khách
+// thì có — hoặc field nào đó server thêm/bớt tuỳ thời điểm) thì thứ tự key
+// của object kết quả đổi theo, dù GIÁ TRỊ hiển thị không đổi gì. So sánh
+// bằng JSON.stringify khi đó luôn ra "khác nhau" → return object MỚI cho
+// cả 12 bàn ở MỌI lần server bắn sự kiện, vô hiệu hoá hoàn toàn React.memo
+// trên TableCard → cả lưới bàn re-render liên tục theo tần suất
+// "tables_state" từ server dù không có gì thật sự đổi trên màn hình — đúng
+// cảm giác "re-render rất nhanh, không mượt" đã gặp.
+// Sửa bằng cách so từng field cụ thể, không phụ thuộc thứ tự key. Riêng
+// items/pendingItems/messages vẫn stringify vì đây là mảng object server
+// trả nguyên vẹn (không bị spread/reorder như object bàn ở trên) nên thứ
+// tự key bên trong từng phần tử ổn định giữa các lần gọi.
+function sameTableSnapshot(a, b) {
   if (a === b) return true;
   if (!a || !b) return false;
   return (
@@ -132,11 +155,7 @@ function tableEquals(a, b) {
     a.chatEnabled === b.chatEnabled &&
     a.guestName === b.guestName &&
     a.guestPhone === b.guestPhone &&
-    a.name === b.name &&
-    (a.since?.getTime?.() ?? null) === (b.since?.getTime?.() ?? null) &&
-    a.items?.length === b.items?.length &&
-    a.pendingItems?.length === b.pendingItems?.length &&
-    a.messages?.length === b.messages?.length &&
+    (a.since ? a.since.getTime() : null) === (b.since ? b.since.getTime() : null) &&
     JSON.stringify(a.items) === JSON.stringify(b.items) &&
     JSON.stringify(a.pendingItems) === JSON.stringify(b.pendingItems) &&
     JSON.stringify(a.messages) === JSON.stringify(b.messages)
@@ -180,18 +199,35 @@ function ActionBtn({ icon: Icon, label, onPress, variant = "secondary", disabled
   );
 }
 
-/* Overlay dùng chung cho mọi modal — tương đương e.stopPropagation() bên web. */
+/* Overlay dùng chung cho mọi modal.
+   [FIX] Áp dụng lại đúng kỹ thuật đã sửa ở MenuPage.js: Pressable lồng
+   Pressable (bản cũ) ép Pressable trong giành JS responder ngay lúc chạm,
+   ScrollView native bên trong không có cách đàm phán lại responder một
+   cách đáng tin cậy → vuốt để cuộn nội dung dài (chat, danh sách món, lịch
+   sử đơn...) trong modal có thể bị "nuốt" mất. Thay bằng 2 lớp CHỒNG NHAU
+   kiểu anh em (không lồng cha-con): lớp dưới là Pressable nền phủ kín màn
+   hình lo việc tap-outside-to-close, lớp trên là View nội dung không có
+   touch handler riêng nào — chạm/vuốt vào nội dung sẽ trúng thẳng View đó
+   (và ScrollView bên trong), không đi qua Pressable nền, nên cuộn hoạt
+   động bình thường; chạm ra ngoài nội dung mới trúng Pressable nền và đóng
+   modal (vẫn giữ hành vi tap-outside-to-close như cũ). */
 function ModalOverlay({ onClose, children }) {
   return (
     <Modal transparent animationType="fade" onRequestClose={onClose}>
-      <Pressable
-        onPress={onClose}
-        style={{ flex: 1, backgroundColor: "rgba(20,83,45,0.35)", alignItems: "center", justifyContent: "center", padding: 20 }}
-      >
-        <Pressable onPress={() => {}} style={{ width: "100%", maxWidth: 440 }}>
-          {children}
-        </Pressable>
-      </Pressable>
+      <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 20 }}>
+        <Pressable
+          onPress={onClose}
+          style={{
+            position: "absolute",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: "rgba(20,83,45,0.35)",
+          }}
+        />
+        <View style={{ width: "100%", maxWidth: 440 }}>{children}</View>
+      </View>
     </Modal>
   );
 }
@@ -292,21 +328,7 @@ function DateField({ label, value, onChange }) {
 // nhận thẳng closure — nhờ đó khi component cha re-render vì lý do không liên
 // quan (gõ chat, gõ search...), 12 TableCard không bị buộc re-render theo vì
 // props (table, onPress, onToggleActive, onOpenChat) đều giữ nguyên reference.
-//
-// [FIX #4 — đồng bộ chiều cao card] Trước đây mỗi khối nội dung (tên khách,
-// khối trạng thái "Trống"/"Đang có khách", dòng "món chờ", dòng "Chưa mở")
-// chỉ được MOUNT khi điều kiện đúng (guestName && ..., hasPending && ...,
-// !table.active && ...). Vì các bàn khác nhau có tổ hợp điều kiện khác nhau
-// (bàn có khách nhưng đã mở gọi món vs. bàn trống nhưng chưa mở gọi món...),
-// tổng số dòng — và do đó chiều cao thật — của mỗi card lệch nhau, khiến các
-// hàng trong lưới flexWrap bị so le/lệch giữa các bàn active/inactive.
-// Fix: mỗi khối nay LUÔN được render với 1 View bọc ngoài có chiều cao cố
-// định (height cố định theo số dòng tối đa của khối đó); nội dung bên trong
-// vẫn hiện/ẩn theo điều kiện như cũ, nhưng khoảng không nó chiếm giữ trên
-// card thì luôn như nhau. Nhờ vậy mọi TableCard — bất kể trống/có khách,
-// có/không tên khách, có/không món chờ, đã mở/chưa mở gọi món — đều cao
-// bằng nhau tuyệt đối, các hàng trong lưới luôn thẳng hàng.
-const TableCard = React.memo(function TableCard({ table, isSelected, onPress, onToggleActive, onOpenChat, cardWidth }) {
+const TableCard = React.memo(function TableCard({ table, isSelected, onPress, onToggleActive, onOpenChat }) {
   const tSub = table.items.reduce((s, i) => s + i.unitPrice * i.quantity, 0);
   const hasPending = table.pendingItems?.length > 0;
   const hasUnreadChat = (table.messages || []).some((m) => m.from === "guest" && !m.read);
@@ -317,19 +339,12 @@ const TableCard = React.memo(function TableCard({ table, isSelected, onPress, on
   const handleSwitchToggle = useCallback(() => onToggleActive(table.id, table.active), [onToggleActive, table.id, table.active]);
   const handleOpenChat = useCallback(() => onOpenChat(table.id), [onOpenChat, table.id]);
 
-  // [FIX #6 — 2 bàn/hàng] Trước đây dùng width: "31%" (ước lượng theo %) cho
-  // lưới 3 cột — cách này chỉ "vừa may" khít vì %*3 + 2 khoảng gap luôn nhỏ
-  // hơn 100% một chút, không chính xác tuyệt đối. Nay đổi sang lưới 2 cột và
-  // nhận cardWidth tính SẴN bằng px từ OrdersPage (dựa theo chiều rộng màn
-  // hình thật, trừ đúng padding 2 bên + đúng 1 khoảng gap giữa 2 cột, chia
-  // đôi) — đảm bảo đúng khít 2 bàn/hàng, cân đối tuyệt đối trên mọi kích
-  // thước màn hình, không còn phụ thuộc ước lượng % nữa.
   return (
-    <View style={{ width: cardWidth }}>
+    <View style={{ width: "31%" }}>
       <Pressable
         onPress={handlePress}
         style={{ opacity: table.active ? 1 : 0.6 }}
-        className={`rounded-2xl px-2 pt-3 pb-20 items-center border-2 ${
+        className={`rounded-2xl px-2 pt-3 pb-8 items-center border-2 ${
           isSelected
             ? "border-green-500 bg-green-50"
             : table.status === "occupied"
@@ -356,105 +371,85 @@ const TableCard = React.memo(function TableCard({ table, isSelected, onPress, on
         <Text className="font-bold text-sm text-gray-700 mt-1" numberOfLines={1}>
           {table.name}
         </Text>
-
-        {/* Tên khách — luôn chiếm 1 dòng cố định [FIX #4] */}
-        <View style={{ height: 13, justifyContent: "center" }}>
-          {!!table.guestName && (
-            <Text className="text-[10px] text-gray-400" numberOfLines={1}>
-              {table.guestName}
+        {!!table.guestName && (
+          <Text className="text-[10px] text-gray-400" numberOfLines={1}>
+            {table.guestName}
+          </Text>
+        )}
+        {table.status === "occupied" ? (
+          <View className="items-center mt-1">
+            <Text className="text-xs font-bold text-orange-600">
+              {table.items.reduce((s, i) => s + i.quantity, 0)} món
             </Text>
-          )}
-        </View>
-
-        {/* Trạng thái bàn — luôn chiếm đúng chiều cao 2 dòng (kể cả khi
-            "Trống" chỉ có 1 dòng nội dung), để không lệch với bàn đang có
-            khách (2 dòng: số món + tổng tiền) [FIX #4] */}
-        <View className="mt-1" style={{ height: 32, alignItems: "center", justifyContent: "center" }}>
-          {table.status === "occupied" ? (
-            <>
-              <Text className="text-xs font-bold text-orange-600">
-                {table.items.reduce((s, i) => s + i.quantity, 0)} món
-              </Text>
-              <Text className="text-xs text-orange-500">{safeFmtVND(tSub)}</Text>
-            </>
-          ) : (
-            <Text className="text-xs text-gray-400">Trống</Text>
-          )}
-        </View>
-
-        {/* Món đang chờ xác nhận — luôn chiếm 1 dòng cố định [FIX #4] */}
-        <View style={{ height: 14, justifyContent: "center" }}>
-          {hasPending && (
-            <Text className="text-[10px] text-red-500 font-bold text-center">
-              {table.pendingItems.length} món chờ
-            </Text>
-          )}
-        </View>
-
-        {/* Trạng thái khoá gọi món — luôn chiếm 1 dòng cố định [FIX #4] */}
-        <View className="mt-1" style={{ height: 14, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 3 }}>
-          {!table.active && (
-            <>
-              <Lock size={9} color={colors.gray[400]} />
-              <Text className="text-[10px] font-bold text-gray-400">Chưa mở</Text>
-            </>
-          )}
-        </View>
+            <Text className="text-xs text-orange-500">{safeFmtVND(tSub)}</Text>
+          </View>
+        ) : (
+          <Text className="text-xs text-gray-400 mt-1">Trống</Text>
+        )}
+        {hasPending && (
+          <Text className="text-[10px] text-red-500 font-bold mt-0.5 text-center">
+            {table.pendingItems.length} món chờ
+          </Text>
+        )}
+        {!table.active && (
+          <View className="flex-row items-center mt-1" style={{ gap: 3 }}>
+            <Lock size={9} color={colors.gray[400]} />
+            <Text className="text-[10px] font-bold text-gray-400">Chưa mở</Text>
+          </View>
+        )}
       </Pressable>
 
-      {/* Toggle mở/khoá gọi món — bỏ nền tròn trắng, chỉ còn switch nổi trực
-          tiếp trên card; kích thước gấp đôi (scale 0.62 → 1.24) và xích vào
-          gần nhau hơn (khoảng cách mép tăng 8 → 14) [FIX #10: to gấp đôi, bỏ
-          nền trắng, xích lại gần nhau theo yêu cầu].
-          [FIX #2] hitSlop mở rộng vùng bấm quanh switch. */}
-      <View
-        style={{
-          position: "absolute",
-          bottom: 6,
-          left: 14,
-          width: 68,
-          height: 68,
-          alignItems: "center",
-          justifyContent: "center",
-        }}
-        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+      {/* Toggle mở/khoá gọi món — luôn hiện trên mobile, không cần hover
+          (khác bản gốc: bản gốc chỉ hiện khi hover trên desktop).
+          [FIX] Switch scale 0.62 cũ quá nhỏ (~32×19px, dưới ngưỡng chạm tối
+          thiểu 44×44 theo khuyến nghị accessibility) nên khó bấm trúng. Tăng
+          scale lên 0.85 (~43×26px) cho dễ nhìn hơn, đồng thời bọc thêm 1
+          Pressable có padding + hitSlop làm vùng chạm mở rộng thật sự — chạm
+          trúng đúng con Switch thu nhỏ hay chạm vào viền đệm quanh nó đều
+          gọi cùng 1 hàm handleSwitchToggle nên không lo bấm đúp/bấm hụt. */}
+      <Pressable
+        onPress={handleSwitchToggle}
+        hitSlop={8}
+        style={{ position: "absolute", top: 0, left: -6, padding: 6 }}
       >
         <Switch
           value={!!table.active}
           onValueChange={handleSwitchToggle}
           trackColor={{ false: colors.gray[200], true: colors.green[400] }}
           thumbColor={colors.white}
-          style={{ transform: [{ scaleX: 1.24 }, { scaleY: 1.24 }] }}
+          style={{ transform: [{ scaleX: 0.85 }, { scaleY: 0.85 }] }}
         />
-      </View>
+      </Pressable>
 
-      {/* Nút mở chat + chấm báo tin nhắn chưa đọc — bỏ nền tròn trắng, icon
-          nổi trực tiếp, kích thước gấp đôi (16 → 32), xích vào gần switch
-          hơn (khoảng cách mép tăng 8 → 14) [FIX #10]. */}
+      {/* Nút mở chat + chấm báo tin nhắn chưa đọc — góc dưới. */}
       <Pressable
         onPress={handleOpenChat}
         style={{
           position: "absolute",
-          bottom: 6,
-          right: 14,
-          width: 68,
-          height: 68,
+          bottom: 4,
+          alignSelf: "center",
+          width: 26,
+          height: 26,
+          borderRadius: 13,
+          backgroundColor: colors.white,
+          borderWidth: 1,
+          borderColor: colors.gray[200],
           alignItems: "center",
           justifyContent: "center",
         }}
       >
-        <MessageCircle size={32} color={table.chatEnabled === false ? colors.gray[300] : colors.gray[500]} />
+        <MessageCircle size={13} color={table.chatEnabled === false ? colors.gray[300] : colors.gray[500]} />
         {hasUnreadChat && (
           <View
             style={{
               position: "absolute",
-              top: 10,
-              right: 10,
-              width: 20,
-              height: 20,
-              borderRadius: 10,
+              top: -2,
+              right: -2,
+              width: 10,
+              height: 10,
+              borderRadius: 5,
               backgroundColor: colors.red[500],
-              borderWidth: 2,
+              borderWidth: 1.5,
               borderColor: colors.white,
             }}
           />
@@ -549,43 +544,7 @@ const ChatMessagesList = React.memo(
    modal này đang mở đều khiến toàn bộ nội dung modal (danh sách món, có thể
    khá dài) render lại — dù dữ liệu của chính bàn đang xem không đổi. Nhờ
    React.memo + props ổn định, modal giờ chỉ vẽ lại khi dữ liệu thật sự liên
-   quan (table, selectedPending, confirmLoading, subtotal...) thay đổi.
-
-   [FIX #1 — modal không hiện món] ScrollView bên dưới trước đây dùng
-   `style={{ flex: 1 }}`. flex: 1 chỉ tính đúng khi View cha có kích thước
-   XÁC ĐỊNH để chia phần không gian còn lại. Nhưng View cha trực tiếp (ở
-   OrdersPage, bọc quanh ModalHeader + component này) chỉ có `maxHeight: "80%"`
-   — không phải chiều cao cố định — nên kích thước thật của nó là auto (co
-   theo nội dung con). Trong tình huống "flex:1 bên trong parent auto-height",
-   Yoga (layout engine của RN) có thể tính ScrollView này về 0 chiều cao thay
-   vì co theo nội dung, trong khi Header/Footer (không dùng flex) vẫn hiện
-   bình thường — đúng hiện tượng: header + dòng "Tổng cộng/Thanh toán" hiện,
-   còn khối "Cần xác nhận"/"Đã xác nhận" ở giữa biến mất dù dữ liệu vẫn có
-   (pendingSubtotal > 0 vẫn hiện ở footer).
-   Fix: dùng flexGrow/flexShrink + minHeight: 0 thay vì flex: 1, đúng pattern
-   "an toàn" mà 2 modal khác trong file (thanh toán, chi tiết đơn) đã dùng
-   (maxHeight cố định thay vì flex trong parent auto-height). minHeight: 0 là
-   chi tiết hay bị bỏ sót: mặc định flex item có min-height: auto, khiến nó
-   từ chối co lại đúng cách trong container bị giới hạn chiều cao.
-
-   [FIX #5 — modal quá nhỏ / chỉ cuộn được vài chỗ] Nguyên nhân gốc của cả
-   FIX #1 lẫn hiện tượng "cuộn chập chờn" nằm ở CHÍNH parent maxHeight: "80%"
-   ở OrdersPage: "80%" là phần trăm, và phần trăm chỉ tính được khi ancestor
-   gần nhất có chiều cao XÁC ĐỊNH. Nhưng ancestor trực tiếp của nó (Pressable
-   bọc modal trong ModalOverlay) không hề có height cố định — nó tự co theo
-   nội dung (width:"100%", maxWidth:440, không có height). Parent auto-height
-   + con dùng % height là vòng lặp không thể giải (con cần biết height của
-   cha để tính %, cha lại cần biết height của con để tự co) — Yoga xử lý
-   trường hợp này không ổn định giữa các thiết bị/bản RN, khiến khối modal
-   có lúc co lại chỉ vừa đúng nội dung (nhìn "quá nhỏ") thay vì thật sự giãn
-   tới 80% màn hình, và ScrollView bên trong (vốn cần 1 chiều cao XÁC ĐỊNH
-   của cha để flexGrow/flexShrink hoạt động đúng — xem FIX #1) chỉ nhận được
-   khoảng trống rất hẹp/không ổn định để cuộn, tạo cảm giác "chỉ cuộn được ở
-   vài chỗ". Fix: thay "80%" (chuỗi %) bằng 1 số px CỐ ĐỊNH tính từ chiều cao
-   màn hình thực tế (useWindowDimensions ở OrdersPage) — px cố định thì Yoga
-   luôn tính được ngay, không phụ thuộc việc ancestor có definite height hay
-   không, giống hệt cách 2 modal kia (thanh toán, chi tiết đơn) đã dùng
-   maxHeight: 480 (số cố định) và luôn hoạt động ổn định. */
+   quan (table, selectedPending, confirmLoading, subtotal...) thay đổi. */
 const TableDetailModalBody = React.memo(function TableDetailModalBody({
   table,
   subtotal,
@@ -599,10 +558,7 @@ const TableDetailModalBody = React.memo(function TableDetailModalBody({
 }) {
   return (
     <>
-      <ScrollView
-        style={{ flexGrow: 1, flexShrink: 1, minHeight: 0 }}
-        contentContainerStyle={{ padding: 12, gap: 14 }}
-      >
+      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 12, gap: 14 }}>
         {!!table.since && (
           <Text className="text-xs text-gray-400">
             {safeFmtDate(table.since instanceof Date ? table.since.toISOString() : table.since)}
@@ -783,22 +739,6 @@ export default function OrdersPage() {
   // đúng 1 instance module-level, đúng khuyến nghị của React Query.
   const queryClient = useQueryClient();
 
-  // [FIX #5] Chiều cao thật của màn hình, dùng để tính maxHeight CỐ ĐỊNH
-  // (theo px) cho modal chi tiết bàn thay vì chuỗi phần trăm "80%" — xem
-  // giải thích đầy đủ ở comment [FIX #5] phía trên TableDetailModalBody.
-  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
-  const tableModalMaxHeight = Math.round(windowHeight * 0.86);
-
-  // [FIX #6] Chiều rộng thật của 1 TableCard cho lưới 2 bàn/hàng — trừ đúng
-  // padding ngang của ScrollView bao ngoài (16 mỗi bên, xem contentContainerStyle
-  // bên dưới) và đúng 1 khoảng gap giữa 2 cột (gap: 10 ở lưới bàn), rồi chia
-  // đôi. Tính bằng px thật thay vì ước lượng % để 2 bàn luôn khít đúng 1
-  // hàng, cân đối trên mọi kích thước màn hình — cùng cách tiếp cận với
-  // tableModalMaxHeight ở trên.
-  const GRID_HORIZONTAL_PADDING = 16;
-  const GRID_COLUMN_GAP = 10;
-  const tableCardWidth = Math.floor((windowWidth - GRID_HORIZONTAL_PADDING * 2 - GRID_COLUMN_GAP) / 2);
-
   useEffect(() => {
     chatOpenTableIdRef.current = chatOpenTableId;
   }, [chatOpenTableId]);
@@ -850,15 +790,14 @@ export default function OrdersPage() {
     };
     const handleDisconnect = () => setConnected(false);
 
-    // [PERF][FIX #3] Server gửi lại TOÀN BỘ danh sách bàn mỗi lần "tables_state"
-    // bắn ra, kể cả khi chỉ 1 bàn thay đổi. normalizeTable() luôn tạo object
-    // mới nên nếu set thẳng, cả 12 TableCard đều nhận props mới (dù nội dung
-    // y hệt) và re-render dù đã bọc React.memo. Ở đây so sánh với bàn cũ theo
-    // id bằng tableEquals() (so field cụ thể, KHÔNG phụ thuộc thứ tự key —
-    // khác với JSON.stringify(prev) === JSON.stringify(normalized) trước đây,
-    // vốn coi 2 object có cùng nội dung nhưng khác thứ tự key là "khác nhau"
-    // và gây re-render toàn bộ lưới bàn ở mỗi lần server emit), giữ nguyên
-    // reference nếu nội dung không đổi để memo phát huy tác dụng.
+    // [PERF] Server gửi lại TOÀN BỘ danh sách bàn mỗi lần "tables_state" bắn ra,
+    // kể cả khi chỉ 1 bàn thay đổi. normalizeTable() luôn tạo object mới nên
+    // nếu set thẳng, cả 12 TableCard đều nhận props mới (dù nội dung y hệt) và
+    // re-render dù đã bọc React.memo. Ở đây so sánh với bàn cũ theo id, giữ
+    // nguyên reference nếu nội dung không đổi để memo phát huy tác dụng.
+    // [FIX] Dùng sameTableSnapshot() (so từng field) thay vì
+    // JSON.stringify(cả object) — xem ghi chú tại khai báo hàm này ở đầu
+    // file để biết lý do JSON.stringify không đáng tin cậy ở đây.
     const handleTablesState = (serverTables) => {
       if (!Array.isArray(serverTables)) {
         setTables([]);
@@ -871,7 +810,7 @@ export default function OrdersPage() {
             const normalized = normalizeTable(raw);
             if (!normalized) return null;
             const prev = prevById.get(normalized.id);
-            if (prev && tableEquals(prev, normalized)) {
+            if (sameTableSnapshot(prev, normalized)) {
               return prev; // không đổi gì → giữ reference cũ
             }
             return normalized;
@@ -1006,14 +945,8 @@ export default function OrdersPage() {
   // [PERF] Nhận (tableId, currentActive) thay vì cả object "table" để callback
   // này hoàn toàn không phụ thuộc `tables` — giữ được identity ổn định qua mọi
   // render, cho phép truyền thẳng xuống TableCard mà không cần bọc arrow mới.
-  // [FIX #3] Thêm cập nhật lạc quan (optimistic) vào state cục bộ trước khi
-  // emit — trước đây UI phải chờ server phát lại toàn bộ "tables_state" mới
-  // đổi, tạo cảm giác trễ/giật mỗi lần bấm toggle. Nếu server sau đó trả về
-  // giá trị khác (vd. bị chặn), handleTablesState ở trên vẫn sẽ ghi đè đúng
-  // theo dữ liệu thật từ server như bình thường.
   const handleToggleActive = useCallback((tableId, currentActive) => {
     if (!socketRef.current) return;
-    setTables((prev) => prev.map((t) => (t.id === tableId ? { ...t, active: !currentActive } : t)));
     socketRef.current.emit("toggle_table_active", { tableId, active: !currentActive });
   }, []);
   const handleToggleChat = useCallback((table) => {
@@ -1214,7 +1147,6 @@ export default function OrdersPage() {
                   onPress={handleSelectTable}
                   onToggleActive={handleToggleActive}
                   onOpenChat={openChat}
-                  cardWidth={tableCardWidth}
                 />
               ))}
             </View>
@@ -1356,20 +1288,10 @@ export default function OrdersPage() {
       </ScrollView>
 
       {/* ── Modal chi tiết bàn (thay panel cố định lg+ / Modal mobile gốc —
-          RN chỉ giữ 1 biến thể Modal, xem ghi chú platform ở đầu file).
-          [FIX #1] Thêm flexShrink: 1 bên cạnh maxHeight — giúp View này thực
-          sự co lại đúng theo nội dung con trong giới hạn cho phép, để
-          ScrollView bên trong (flexGrow/flexShrink/minHeight: 0) có 1 khoảng
-          không gian XÁC ĐỊNH để giãn vào, thay vì bị tính về 0.
-          [FIX #5] maxHeight nay là 1 số px CỐ ĐỊNH (tableModalMaxHeight, tính
-          từ useWindowDimensions ở trên) thay vì chuỗi "80%" — xem giải thích
-          đầy đủ ở comment [FIX #5] phía trên TableDetailModalBody. Nhờ đó
-          modal luôn giãn đúng tới ~86% chiều cao màn hình thay vì có lúc co
-          lại chỉ vừa khít nội dung, và ScrollView bên trong cuộn được trên
-          toàn bộ vùng nội dung thay vì chỉ vài chỗ. */}
+          RN chỉ giữ 1 biến thể Modal, xem ghi chú platform ở đầu file) ──── */}
       {!!activeTable && (
         <ModalOverlay onClose={() => setSelectedId(null)}>
-          <View className="bg-white rounded-3xl overflow-hidden" style={{ maxHeight: tableModalMaxHeight, flexShrink: 1 }}>
+          <View className="bg-white rounded-3xl overflow-hidden" style={{ height: TABLE_DETAIL_MODAL_HEIGHT }}>
             <ModalHeader
               title={[activeTable.name, activeTable.guestName, activeTable.guestPhone].filter(Boolean).join(" - ")}
               onClose={() => setSelectedId(null)}

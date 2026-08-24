@@ -7,7 +7,7 @@ export const queryClient = new QueryClient({
     defaultOptions: {
         queries: {
             retry: 1, // API đã có interceptor xử lý 401/lỗi ở callAPI.js — không cần retry nhiều lần
-            staleTime: 10_000, // mặc định 10s; từng màn hình có thể override riêng (StoragePage.js dùng 15s)
+            staleTime: 300_000, // mặc định 10s; từng màn hình có thể override riêng (StoragePage.js dùng 15s)
         },
     },
 });

@@ -30,17 +30,11 @@ import {
     RotateCcw,
     Trash2,
     X,
-    FolderOpen,
     RefreshCcw,
-    StickyNote,
-    Upload,
 } from "lucide-react-native";
 import fmtVND from "../utils/fmtVND";
 import extractCatName from "../utils/extractCatName";
 import useFoodZustand from "../zustand/useFoodZustand";
-import exportJSON from "../utils/exportJSON";
-import importJSON, { pickJSONFile } from "../utils/importJSON";
-import { API_URL } from "../config/api";
 import ImageUploadField from "../components/ImageUploadField";
 import IngredientPicker from "../components/IngredientPicker";
 import colors from "../theme/tokens";
@@ -190,34 +184,46 @@ function FieldInput({ label, required, value, onChangeText, keyboardType = "defa
     );
 }
 
-/* Overlay dùng chung cho cả 3 modal — tương đương e.stopPropagation() bên web */
-// [FIX] Pressable lồng Pressable trước đây khiến Pressable trong giành
-// responder ngay từ lúc chạm, không nhường lại cho ScrollView con khi vuốt
-// ở vùng trống/label → vuốt không di chuyển. Thay bằng View với responder
-// tối giản: vẫn chặn tap đơn lan ra ngoài (onStartShouldSetResponder), nhưng
-// LUÔN nhường lại (onResponderTerminationRequest => true) ngay khi ScrollView
-// bên trong muốn nhận cử chỉ do phát hiện đang kéo/vuốt.
+/* Overlay dùng chung cho cả 3 modal.
+   [FIX] Bản trước dùng 1 Pressable bọc ngoài (onPress = đóng modal) rồi
+   lồng 1 View bên trong dùng onStartShouldSetResponder/
+   onResponderTerminationRequest để "chặn" tap lan ra ngoài. Cách này ép
+   View đó giành JS responder ngay lúc chạm (touch start), trong khi
+   ScrollView native bên trong cuộn bằng gesture recognizer native (không
+   đàm phán trả lại responder qua JS responder system như PanResponder/
+   Touchable) → View cha vẫn giữ responder, vuốt bị "nuốt" mất bất kể bắt
+   đầu vuốt ở đâu trong modal.
+
+   Thay bằng kỹ thuật 2 lớp CHỒNG NHAU kiểu anh em (sibling), không lồng
+   cha-con:
+   - Lớp dưới: Pressable phủ kín toàn overlay, chỉ làm nền + đóng modal
+     khi chạm ra ngoài nội dung (tap-outside-to-close — có chủ đích, giữ
+     nguyên).
+   - Lớp trên: View chứa nội dung modal, KHÔNG có touch handler riêng nào.
+   Vì là 2 view anh em cùng cấp, RN hit-test theo lớp trên cùng tại đúng
+   điểm chạm: chạm/vuốt vào vùng nội dung sẽ trúng thẳng View nội dung (và
+   ScrollView bên trong nó) — không đi qua Pressable nền — nên ScrollView
+   cuộn bình thường như không hề có overlay bao ngoài. Chạm ra ngoài vùng
+   nội dung mới trúng Pressable nền và đóng modal. */
 function ModalOverlay({ onClose, children }) {
     return (
         <Modal transparent animationType="fade" onRequestClose={onClose}>
-            <Pressable
-                onPress={onClose}
-                style={{
-                    flex: 1,
-                    backgroundColor: "rgba(20,83,45,0.35)",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    padding: 20,
-                }}
-            >
-                <View
-                    onStartShouldSetResponder={() => true}
-                    onResponderTerminationRequest={() => true}
-                    style={{ width: "100%", maxWidth: 460 }}
-                >
+            <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 20 }}>
+                <Pressable
+                    onPress={onClose}
+                    style={{
+                        position: "absolute",
+                        top: 0,
+                        left: 0,
+                        right: 0,
+                        bottom: 0,
+                        backgroundColor: "rgba(20,83,45,0.35)",
+                    }}
+                />
+                <View style={{ width: "100%", maxWidth: 460 }}>
                     {children}
                 </View>
-            </Pressable>
+            </View>
         </Modal>
     );
 }
@@ -372,13 +378,15 @@ const LIST_CONTENT_STYLE = { padding: GRID_PADDING, paddingBottom: 40, gap: 12 }
 const COLUMN_WRAPPER_STYLE = { gap: GRID_GAP };
 
 // ─── Info Modal ─────────────────────────────────────────────────────────
-// [UI] Giờ là nơi duy nhất chứa các hành động Sửa/Ghi chú/Xoá/Bật-tắt bán
-// (trước đây nằm trên từng FoodCard). Bật/tắt "Đang bán" cần phản ánh SỐNG
-// trong lúc modal đang mở — xem ghi chú tại chỗ khai báo `infoFood` trong
-// MenuPage (dùng useMemo tra cứu theo id thay vì lưu snapshot tĩnh), nếu
-// không Switch sẽ hiện sai trạng thái ngay sau khi bấm.
-function InfoModal({ food, open, onClose, onEdit, onEditNote, onRemove, onToggleAvailable }) {
-    if (!open || !food) return null;
+// [UI] Nơi chứa các hành động Sửa/Xoá/Bật-tắt bán (trước đây nằm trên từng
+// FoodCard). Ghi chú không sửa nhanh tại đây nữa — chỉnh sửa ghi chú dùng
+// chung ô "Ghi chú" trong modal Thêm/Sửa món để tránh trùng lặp 2 chỗ sửa.
+// Bật/tắt "Đang bán" cần phản ánh SỐNG trong lúc modal đang mở — xem ghi
+// chú tại chỗ khai báo `infoFood` trong MenuPage (dùng useMemo tra cứu theo
+// id thay vì lưu snapshot tĩnh), nếu không Switch sẽ hiện sai trạng thái
+// ngay sau khi bấm.
+function InfoModal({ food, onClose, onEdit, onRemove, onToggleAvailable }) {
+    if (!food) return null;
     const catName = extractCatName(food.categoryId);
     const pct = food.percentageDiscount ?? food.categoryId?.percentageDiscount ?? 0;
     const fixed = food.fixedDiscount ?? food.categoryId?.fixedDiscount ?? 0;
@@ -400,9 +408,8 @@ function InfoModal({ food, open, onClose, onEdit, onEditNote, onRemove, onToggle
     ];
 
     return (
-        <ModalOverlay onClose={onClose}>
-            <View className="bg-white rounded-3xl overflow-hidden" style={{ maxHeight: "90%" }}>
-                {/* [FIX] Tiêu đề + nội dung + hàng nút hành động giờ nằm CHUNG
+        <View className="bg-white rounded-3xl overflow-hidden" style={{ maxHeight: "90%" }}>
+            {/* [FIX] Tiêu đề + nội dung + hàng nút hành động giờ nằm CHUNG
                     1 ScrollView — không còn phần nào cố định ngoài vùng cuộn,
                     nên vuốt bắt đầu từ bất kỳ đâu trên modal (kể cả dòng tiêu
                     đề, hàng nút dưới cùng) đều cuộn được. Đánh đổi: hàng nút
@@ -441,6 +448,15 @@ function InfoModal({ food, open, onClose, onEdit, onEditNote, onRemove, onToggle
                             ))}
                         </View>
 
+                        {!!food.note && (
+                            <View className="mt-4">
+                                <Text className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">Ghi chú</Text>
+                                <View className="bg-gray-50 rounded-lg px-3 py-2.5">
+                                    <Text className="text-gray-700 text-xs leading-5">{food.note}</Text>
+                                </View>
+                            </View>
+                        )}
+
                         {food.ingredients?.length > 0 && (
                             <View className="mt-4">
                                 <Text className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">Nguyên liệu</Text>
@@ -461,7 +477,6 @@ function InfoModal({ food, open, onClose, onEdit, onEditNote, onRemove, onToggle
                     <View className="flex-row items-center justify-between px-5 py-4 border-t border-gray-100" style={{ gap: 8 }}>
                         <View className="flex-row items-center" style={{ gap: 6 }}>
                             <IconBtn icon={Edit2} onPress={() => onEdit(food)} />
-                            <IconBtn icon={StickyNote} tone={food.note ? "active" : "default"} onPress={() => onEditNote(food)} />
                             <IconBtn
                                 icon={Trash2}
                                 tone="danger"
@@ -477,7 +492,6 @@ function InfoModal({ food, open, onClose, onEdit, onEditNote, onRemove, onToggle
                     </View>
                 </ScrollView>
             </View>
-        </ModalOverlay>
     );
 }
 
@@ -502,7 +516,7 @@ export default function MenuPage() {
 
     const [catFilter, setCatFilter] = useState("Tất cả");
     const [search, setSearch] = useState("");
-    const [modal, setModal] = useState(null); // null | "add" | "edit" | "info" | "note"
+    const [modal, setModal] = useState(null); // null | "add" | "edit" | "info"
     const [form, setForm] = useState(EMPTY_FOOD);
     const [editId, setEditId] = useState(null);
     const [imageFile, setImageFile] = useState(null);
@@ -510,32 +524,7 @@ export default function MenuPage() {
     const [imageFieldKey, setImageFieldKey] = useState(0);
     const [infoFoodId, setInfoFoodId] = useState(null);
     const [saveStatus, setSaveStatus] = useState(null);
-    const [noteFood, setNoteFood] = useState(null);
-    const [noteDraft, setNoteDraft] = useState("");
     const [refreshMsg, setRefreshMsg] = useState(null);
-    const [isImporting, setIsImporting] = useState(false);
-    const [importError, setImportError] = useState(null);
-
-    // [PERF] openEdit/openInfo/openNoteEdit được truyền thẳng xuống FoodCard/
-    // InfoModal. Nếu để là function thường, MenuPage re-render lần nào cũng
-    // tạo reference mới → React.memo trên FoodCard mất tác dụng.
-    // useCallback([]) giữ nguyên reference vì các hàm này chỉ dùng setter
-    // (setForm/setModal/...) vốn đã ổn định giữa các lần render.
-    const openNoteEdit = useCallback((fd) => {
-        setNoteFood(fd);
-        setNoteDraft(fd.note || "");
-        setModal("note");
-    }, []);
-
-    // handleSaveNote KHÔNG truyền xuống FoodCard nên không cần useCallback —
-    // giữ nguyên dạng function thường như bản gốc để code dễ đọc.
-    const handleSaveNote = () => {
-        if (!noteFood) return;
-        stageUpdateFood({ ...noteFood, note: noteDraft }, null); // không đổi ảnh
-        setModal(null);
-        setNoteFood(null);
-        setNoteDraft("");
-    };
 
     useEffect(() => {
         getFoods();
@@ -600,37 +589,17 @@ export default function MenuPage() {
         []
     );
 
-    // [PERF] Modal controls — truyền vào phần header đã useMemo. Nếu để
-    // function thường, mỗi lần MenuPage render sẽ tạo reference mới → làm
-    // "hỏng" điều kiện memo của header, kéo theo FlatList render lại oan
-    // uổng. useCallback([]) giữ reference ổn định.
+    // [PERF] openEdit/openInfo được truyền thẳng xuống FoodCard/InfoModal.
+    // Nếu để là function thường, MenuPage re-render lần nào cũng tạo
+    // reference mới → React.memo trên FoodCard mất tác dụng. useCallback([])
+    // giữ nguyên reference vì các hàm này chỉ dùng setter (setForm/setModal/...)
+    // vốn đã ổn định giữa các lần render.
     const openAdd = useCallback(() => {
         setForm({ ...EMPTY_FOOD });
         setImageFile(null);
         setImageRemoved(false);
         setModal("add");
     }, []);
-
-    const exportData = useCallback(() => {
-        exportJSON(`${API_URL}/api/foods`, "foods").catch((err) => {
-            console.error("exportData:", err);
-        });
-    }, []);
-
-    const handleImportPick = useCallback(async () => {
-        setImportError(null);
-        setIsImporting(true);
-        try {
-            const data = await pickJSONFile();
-            if (!data) return; // người dùng huỷ chọn file
-            await importJSON(`${API_URL}/api/foods`, data, "foods");
-            await getFoods(); // tải lại danh sách mới nhất
-        } catch (err) {
-            setImportError(err?.message || "Import thất bại");
-        } finally {
-            setIsImporting(false);
-        }
-    }, [getFoods]);
 
     const openEdit = useCallback((fd) => {
         setForm({
@@ -661,8 +630,6 @@ export default function MenuPage() {
         setEditId(null);
         setImageFile(null);
         setImageRemoved(false);
-        setNoteFood(null);
-        setNoteDraft("");
         setInfoFoodId(null);
     };
 
@@ -740,113 +707,97 @@ export default function MenuPage() {
     // PureComponent, nó thấy props không đổi nên BỎ QUA re-render hoàn toàn.
     const headerSection = useMemo(
         () => (
-            <View style={{ gap: 14 }}>
-                {/* ── Header ────────────────────────────────────────────────── */}
-                <View>
-                    <Text className="text-2xl font-black text-green-900">Thực đơn</Text>
-                    <Text className="text-gray-500 text-sm mt-0.5">
-                        {visibleFoods.length} món • {visibleFoods.filter((f) => f.isAvailable).length} đang bán
-                    </Text>
-                </View>
+        <View style={{ gap: 14 }}>
+            {/* ── Header ────────────────────────────────────────────────── */}
+            <View>
+                <Text className="text-2xl font-black text-green-900">Thực đơn</Text>
+                <Text className="text-gray-500 text-sm mt-0.5">
+                    {visibleFoods.length} món • {visibleFoods.filter((f) => f.isAvailable).length} đang bán
+                </Text>
+            </View>
 
-                {/* ── Toolbar hành động ────────────────────────────────────── */}
-                <View className="flex-row flex-wrap items-center" style={{ gap: 8 }}>
-                    {pendingCount > 0 && (
-                        <>
-                            <ActionBtn icon={RotateCcw} label="Huỷ thay đổi" variant="outline" disabled={loading} onPress={discardChanges} />
-                            <Pressable
-                                onPress={handleSaveAll}
-                                disabled={loading || saveStatus === "saving"}
-                                style={{ opacity: loading || saveStatus === "saving" ? 0.6 : 1 }}
-                                className={`flex-row items-center gap-1.5 px-4 py-2.5 rounded-xl ${saveStatus === "saving" ? "bg-amber-400" : saveStatus === "error" ? "bg-red-500" : "bg-amber-500"
-                                    }`}
-                            >
-                                <Save size={14} color={colors.white} />
-                                <Text className="text-sm font-bold text-white">
-                                    {saveStatus === "saving" ? "Đang lưu…" : saveStatus === "error" ? "Lỗi, thử lại" : `Lưu ${pendingCount} thay đổi`}
-                                </Text>
-                            </Pressable>
-                        </>
-                    )}
-                    {saveStatus === "saved" && pendingCount === 0 && (
-                        <View className="flex-row items-center" style={{ gap: 4 }}>
-                            <Check size={14} color={colors.green[600]} />
-                            <Text className="text-sm text-green-600 font-bold">Đã lưu thành công</Text>
-                        </View>
-                    )}
-
-                    <ActionBtn icon={Plus} label="Thêm món mới" variant="primary" disabled={loading} onPress={openAdd} />
-
-                    {refreshMsg && (
-                        <View className="flex-row items-center" style={{ gap: 4 }}>
-                            <Check size={14} color={colors.blue[500]} />
-                            <Text className="text-sm text-blue-600 font-bold">{refreshMsg}</Text>
-                        </View>
-                    )}
-                    <ActionBtn
-                        icon={RefreshCcw}
-                        label="Làm mới"
-                        loading={loading}
-                        disabled={loading || pendingCount > 0}
-                        onPress={handleRefreshCosts}
-                    />
-                    <ActionBtn icon={FolderOpen} label="Xuất JSON" disabled={loading} onPress={exportData} />
-                    <ActionBtn
-                        icon={Upload}
-                        label={isImporting ? "Đang tải lên..." : "Tải lên JSON"}
-                        loading={isImporting}
-                        disabled={loading || isImporting}
-                        onPress={handleImportPick}
-                    />
-                </View>
-
-                {/* ── Banner lỗi ───────────────────────────────────────────── */}
-                {!!error && (
-                    <View className="flex-row items-center justify-between gap-3 bg-red-50 border border-red-200 rounded-xl px-4 py-3">
-                        <Text className="flex-1 text-red-700 text-sm">{error}</Text>
-                        <Pressable onPress={clearError}>
-                            <X size={14} color={colors.red[600]} />
+            {/* ── Toolbar hành động ────────────────────────────────────── */}
+            <View className="flex-row flex-wrap items-center" style={{ gap: 8 }}>
+                {pendingCount > 0 && (
+                    <>
+                        <ActionBtn icon={RotateCcw} label="Huỷ thay đổi" variant="outline" disabled={loading} onPress={discardChanges} />
+                        <Pressable
+                            onPress={handleSaveAll}
+                            disabled={loading || saveStatus === "saving"}
+                            style={{ opacity: loading || saveStatus === "saving" ? 0.6 : 1 }}
+                            className={`flex-row items-center gap-1.5 px-4 py-2.5 rounded-xl ${saveStatus === "saving" ? "bg-amber-400" : saveStatus === "error" ? "bg-red-500" : "bg-amber-500"
+                                }`}
+                        >
+                            <Save size={14} color={colors.white} />
+                            <Text className="text-sm font-bold text-white">
+                                {saveStatus === "saving" ? "Đang lưu…" : saveStatus === "error" ? "Lỗi, thử lại" : `Lưu ${pendingCount} thay đổi`}
+                            </Text>
                         </Pressable>
-                    </View>
+                    </>
                 )}
-                {!!importError && (
-                    <View className="flex-row items-center justify-between gap-3 bg-red-50 border border-red-200 rounded-xl px-4 py-3">
-                        <Text className="flex-1 text-red-700 text-sm">{importError}</Text>
-                        <Pressable onPress={() => setImportError(null)}>
-                            <X size={14} color={colors.red[600]} />
-                        </Pressable>
+                {saveStatus === "saved" && pendingCount === 0 && (
+                    <View className="flex-row items-center" style={{ gap: 4 }}>
+                        <Check size={14} color={colors.green[600]} />
+                        <Text className="text-sm text-green-600 font-bold">Đã lưu thành công</Text>
                     </View>
                 )}
 
-                {/* ── Search + Filter ──────────────────────────────────────── */}
-                <View style={{ gap: 10 }}>
-                    <View style={{ position: "relative", justifyContent: "center" }}>
-                        <View style={{ position: "absolute", left: 14, zIndex: 1 }}>
-                            <Search size={14} color={colors.gray[400]} />
-                        </View>
-                        <TextInput
-                            value={search}
-                            onChangeText={setSearch}
-                            placeholder="Tìm món ăn..."
-                            placeholderTextColor={colors.gray[300]}
-                            className="bg-white border border-gray-200 rounded-xl text-sm text-gray-800"
-                            style={{ paddingLeft: 38, paddingRight: 14, paddingVertical: 11 }}
-                        />
+                <ActionBtn icon={Plus} label="Thêm món mới" variant="primary" disabled={loading} onPress={openAdd} />
+
+                {refreshMsg && (
+                    <View className="flex-row items-center" style={{ gap: 4 }}>
+                        <Check size={14} color={colors.blue[500]} />
+                        <Text className="text-sm text-blue-600 font-bold">{refreshMsg}</Text>
                     </View>
-                    <View className="flex-row flex-wrap" style={{ gap: 8 }}>
-                        {CAT_FILTER.map((c) => (
-                            <Pressable
-                                key={c}
-                                onPress={() => setCatFilter(c)}
-                                style={{ paddingHorizontal: 12, paddingVertical: 7 }}
-                                className={`rounded-xl ${catFilter === c ? "bg-green-500" : "bg-white border border-gray-200"}`}
-                            >
-                                <Text className={`text-xs font-bold ${catFilter === c ? "text-white" : "text-gray-600"}`}>{c}</Text>
-                            </Pressable>
-                        ))}
+                )}
+                <ActionBtn
+                    icon={RefreshCcw}
+                    label="Làm mới"
+                    loading={loading}
+                    disabled={loading || pendingCount > 0}
+                    onPress={handleRefreshCosts}
+                />
+            </View>
+
+            {/* ── Banner lỗi ───────────────────────────────────────────── */}
+            {!!error && (
+                <View className="flex-row items-center justify-between gap-3 bg-red-50 border border-red-200 rounded-xl px-4 py-3">
+                    <Text className="flex-1 text-red-700 text-sm">{error}</Text>
+                    <Pressable onPress={clearError}>
+                        <X size={14} color={colors.red[600]} />
+                    </Pressable>
+                </View>
+            )}
+
+            {/* ── Search + Filter ──────────────────────────────────────── */}
+            <View style={{ gap: 10 }}>
+                <View style={{ position: "relative", justifyContent: "center" }}>
+                    <View style={{ position: "absolute", left: 14, zIndex: 1 }}>
+                        <Search size={14} color={colors.gray[400]} />
                     </View>
+                    <TextInput
+                        value={search}
+                        onChangeText={setSearch}
+                        placeholder="Tìm món ăn..."
+                        placeholderTextColor={colors.gray[300]}
+                        className="bg-white border border-gray-200 rounded-xl text-sm text-gray-800"
+                        style={{ paddingLeft: 38, paddingRight: 14, paddingVertical: 11 }}
+                    />
+                </View>
+                <View className="flex-row flex-wrap" style={{ gap: 8 }}>
+                    {CAT_FILTER.map((c) => (
+                        <Pressable
+                            key={c}
+                            onPress={() => setCatFilter(c)}
+                            style={{ paddingHorizontal: 12, paddingVertical: 7 }}
+                            className={`rounded-xl ${catFilter === c ? "bg-green-500" : "bg-white border border-gray-200"}`}
+                        >
+                            <Text className={`text-xs font-bold ${catFilter === c ? "text-white" : "text-gray-600"}`}>{c}</Text>
+                        </Pressable>
+                    ))}
                 </View>
             </View>
+        </View>
         ),
         [
             visibleFoods,
@@ -858,12 +809,8 @@ export default function MenuPage() {
             openAdd,
             refreshMsg,
             handleRefreshCosts,
-            exportData,
-            isImporting,
-            handleImportPick,
             error,
             clearError,
-            importError,
             search,
             catFilter,
         ]
@@ -906,11 +853,26 @@ export default function MenuPage() {
                 />
             )}
 
-            {/* ─── Modal thêm / sửa ──────────────────────────────────────────── */}
-            {/* [FIX] Tiêu đề + form + hàng nút giờ nằm chung 1 ScrollView — vuốt
-                bắt đầu từ bất kỳ đâu trên modal đều cuộn được. */}
-            {(modal === "add" || modal === "edit") && (
+            {/* ─── Modal thêm / sửa / chi tiết ───────────────────────────────── */}
+            {/* [FIX] Gộp cả 3 trạng thái (thêm/sửa/chi tiết) vào CHUNG 1
+                <ModalOverlay> — chỉ tráo nội dung bên trong, không mount/
+                unmount Modal native riêng biệt cho từng trạng thái. Trước đây
+                modal Sửa và modal Chi tiết là 2 <Modal> tách biệt: bấm nút
+                Sửa trong modal Chi tiết khiến 1 Modal đóng và 1 Modal khác mở
+                gần như cùng lúc — RN xử lý việc này không đồng bộ nên modal
+                Sửa hiện ra bị trắng/mất nội dung trong thoáng chốc. Dùng 1
+                Modal duy nhất, chỉ đổi nội dung, tránh hẳn lỗi này. */}
+            {(modal === "add" || modal === "edit" || modal === "info") && (
                 <ModalOverlay onClose={closeModal}>
+                    {modal === "info" ? (
+                        <InfoModal
+                            food={infoFood}
+                            onClose={closeModal}
+                            onEdit={openEdit}
+                            onRemove={handleRemove}
+                            onToggleAvailable={handleToggleAvailable}
+                        />
+                    ) : (
                     <View className="bg-white rounded-3xl overflow-hidden" style={{ maxHeight: "90%" }}>
                         <ScrollView contentContainerStyle={{ paddingBottom: 8 }} keyboardShouldPersistTaps="handled">
                             <View className="px-6 pt-6 pb-4 flex-row items-center justify-between border-b border-gray-100">
@@ -1038,56 +1000,7 @@ export default function MenuPage() {
                             </View>
                         </ScrollView>
                     </View>
-                </ModalOverlay>
-            )}
-
-            {/* ─── Modal chi tiết ─────────────────────────────────────────────── */}
-            <InfoModal
-                food={infoFood}
-                open={modal === "info"}
-                onClose={closeModal}
-                onEdit={openEdit}
-                onEditNote={openNoteEdit}
-                onRemove={handleRemove}
-                onToggleAvailable={handleToggleAvailable}
-            />
-
-            {/* ─── Modal sửa ghi chú ─────────────────────────────────────────── */}
-            {/* [FIX] Cũng gộp vào 1 ScrollView cho đồng nhất + phòng trường hợp
-                bàn phím che mất ô nhập trên máy nhỏ vẫn cuộn lên xem được. */}
-            {modal === "note" && (
-                <ModalOverlay onClose={closeModal}>
-                    <View className="bg-white rounded-3xl overflow-hidden" style={{ maxHeight: "90%" }}>
-                        <ScrollView contentContainerStyle={{ paddingBottom: 8 }} keyboardShouldPersistTaps="handled">
-                            <View className="px-6 pt-6 pb-4 border-b border-gray-100">
-                                <Text className="text-base font-black text-green-900" numberOfLines={1}>
-                                    Ghi chú — {noteFood?.foodName ?? ""}
-                                </Text>
-                            </View>
-                            <View style={{ padding: 20 }}>
-                                <Text className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-1.5">Ghi chú</Text>
-                                <TextInput
-                                    autoFocus
-                                    multiline
-                                    value={noteDraft}
-                                    onChangeText={setNoteDraft}
-                                    placeholder="Nhập ghi chú cho món này..."
-                                    placeholderTextColor={colors.gray[300]}
-                                    className="border border-gray-200 rounded-xl px-3.5 py-2.5 text-sm text-gray-800"
-                                    style={{ minHeight: 90, textAlignVertical: "top" }}
-                                />
-                            </View>
-                            <View className="flex-row justify-end gap-2 px-5 pb-5">
-                                <Pressable onPress={closeModal} className="px-4 py-2.5 rounded-xl bg-gray-50 border border-gray-200">
-                                    <Text className="text-sm font-bold text-gray-600">Hủy</Text>
-                                </Pressable>
-                                <Pressable onPress={handleSaveNote} className="flex-row items-center gap-1.5 px-4 py-2.5 rounded-xl bg-green-600">
-                                    <Check size={14} color={colors.white} />
-                                    <Text className="text-sm font-bold text-white">Lưu ghi chú</Text>
-                                </Pressable>
-                            </View>
-                        </ScrollView>
-                    </View>
+                    )}
                 </ModalOverlay>
             )}
         </View>

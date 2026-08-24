@@ -10,6 +10,7 @@ import {
     ActivityIndicator,
     Switch,
     Platform,
+    useWindowDimensions,
 } from "react-native";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -122,6 +123,29 @@ const formatDateVN = (isoOrDate, options = { day: "2-digit", month: "2-digit" })
 const pad2 = (n) => String(n).padStart(2, "0");
 const toISODateLocal = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 
+// Dựng object `form` từ 1 voucher có sẵn (khi mở form SỬA). Tách thành hàm
+// thuần ở module scope để VoucherFormModal dùng làm lazy initializer cho
+// useState — component con được mount MỚI mỗi lần mở form nên không cần
+// useEffect đồng bộ lại, không có nguy cơ "nháy" giá trị rỗng.
+const buildFormFromVoucher = (voucher) => ({
+    name: voucher.name || "",
+    code: voucher.code || "",
+    description: voucher.description || "",
+    discountType: voucher.discountType || "PERCENTAGE",
+    discountValue: String(voucher.discountValue ?? ""),
+    maxDiscountAmount: voucher.maxDiscountAmount != null ? String(voucher.maxDiscountAmount) : "",
+    minOrderValue: voucher.minOrderValue != null ? String(voucher.minOrderValue) : "",
+    applicableChannels: Array.isArray(voucher.applicableChannels) ? voucher.applicableChannels : [],
+    applicableCategoryIds: Array.isArray(voucher.applicableCategoryIds) ? voucher.applicableCategoryIds : [],
+    applicableFoodIds: Array.isArray(voucher.applicableFoodIds) ? voucher.applicableFoodIds : [],
+    applicableCustomerIdsRaw: (voucher.applicableCustomerIds || []).join(", "),
+    startDate: toDateInputValue(voucher.startDate),
+    endDate: toDateInputValue(voucher.endDate),
+    usageLimit: voucher.usageLimit != null ? String(voucher.usageLimit) : "",
+    usageLimitPerCustomer: String(voucher.usageLimitPerCustomer ?? "1"),
+    isActive: !!voucher.isActive,
+});
+
 /* ════════════════════════════════════════════════════════════
    REACT-QUERY: query functions thuần
    Đặt ở module scope, không phụ thuộc bất kỳ closure nào của
@@ -169,45 +193,72 @@ const fetchVouchersList = async ({ queryKey }) => {
    Ghi chú tối ưu: các component thuần "presentational" (chỉ nhận
    props và render) được bọc React.memo để tránh re-render dây
    chuyền khi VoucherPage re-render vì lý do khác (gõ search, mở
-   modal...). ModalOverlay / PickerBody / DateField KHÔNG memo vì
-   luôn chỉ có 1 instance sống tại 1 thời điểm — memo không mang
-   lại lợi ích thực tế ở đây.
+   modal...). ModalOverlay / PickerBody KHÔNG memo vì luôn chỉ có
+   1 instance sống tại 1 thời điểm — memo không mang lại lợi ích
+   thực tế ở đây.
 ════════════════════════════════════════════════════════════ */
 
-/* Overlay dùng chung cho mọi modal — tương đương e.stopPropagation() bên
-   web, đúng pattern ModalOverlay đã dùng ở IngredientsPage.js/Customers.js/
-   StoragePage.js. */
+/* Overlay dùng chung cho mọi modal.
+
+   ❗ ĐÃ VÁ (nguyên nhân gốc của lỗi "vuốt không cuộn được"): bản trước dùng
+   Pressable NGOÀI bọc Pressable TRONG để mô phỏng e.stopPropagation() bên
+   web (Pressable trong onPress={() => {}} — no-op, chỉ để chặn tap lọt
+   xuống backdrop). Vấn đề: Pressable trong giành JS responder NGAY LÚC
+   NGÓN TAY CHẠM XUỐNG (để phân biệt được tap/không-tap) — trong khi
+   ScrollView bên trong `children` cuộn bằng gesture recognizer NATIVE
+   (UIScrollView/native scroll), không đàm phán xin lại responder qua JS
+   responder system theo cách Pressable/PanResponder vẫn làm. Kết quả:
+   Pressable trong giữ nguyên responder suốt cử chỉ vuốt, ScrollView không
+   bao giờ nhận được sự kiện move để cuộn — dù vuốt bắt đầu ở BẤT KỲ đâu
+   trong nội dung modal. Đây là nguyên nhân thật sự đứng sau hiện tượng
+   "modal có chỗ cuộn được chỗ không", đã xác nhận và sửa cùng lỗi này ở
+   MenuPage.js/OrdersPage.js/CustomersPage.js.
+
+   Cách sửa: bỏ hẳn kiểu lồng cha-con, thay bằng 2 LỚP ANH EM (sibling) xếp
+   chồng theo thứ tự JSX — lớp dưới (Pressable, phủ tuyệt đối) chỉ lo
+   nền + tap-outside-to-close; lớp trên (View thường, KHÔNG có touch
+   handler riêng) chỉ chứa nội dung. Nhờ 2 lớp KHÔNG lồng cha-con, RN hit-
+   test theo đúng lớp trên cùng tại điểm chạm — vuốt vào vùng nội dung
+   trúng thẳng View nội dung (và ScrollView bên trong nó), không hề đi
+   qua Pressable nền, nên không còn tranh chấp responder nào cả; vuốt ra
+   ngoài vùng nội dung mới trúng Pressable nền để đóng modal như cũ. */
 function ModalOverlay({ onClose, maxWidth = 460, children }) {
     return (
         <Modal transparent animationType="fade" onRequestClose={onClose}>
-            <Pressable
-                onPress={onClose}
-                style={{
-                    flex: 1,
-                    backgroundColor: "rgba(20,83,45,0.35)",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    padding: 16,
-                }}
-            >
-                <Pressable onPress={() => { }} style={{ width: "100%", maxWidth }}>
+            <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 16 }}>
+                <Pressable
+                    onPress={onClose}
+                    style={{
+                        position: "absolute",
+                        top: 0,
+                        left: 0,
+                        right: 0,
+                        bottom: 0,
+                        backgroundColor: "rgba(20,83,45,0.35)",
+                    }}
+                />
+                <View style={{ width: "100%", maxWidth }}>
                     {children}
-                </Pressable>
-            </Pressable>
+                </View>
+            </View>
         </Modal>
     );
 }
 
+// Hoist ra module scope thay vì tạo lại mỗi lần IconBtn render — không phải
+// fix re-render (IconBtn đã memo, chỉ render khi props đổi) mà là giảm việc
+// thừa BÊN TRONG 1 lần render hợp lệ.
+const ICON_BTN_TONES = {
+    neutral: { box: "bg-gray-50", color: colors.gray[500] },
+    danger: { box: "bg-red-50", color: colors.red[600] },
+    // "Sắp tắt" — thay cho hover:bg-rose-50 bên web, xem ghi chú platform.
+    rose: { box: "bg-rose-50", color: "#e11d48" },
+    // "Sắp bật" — thay cho hover:bg-green-50 bên web.
+    success: { box: "bg-green-50", color: colors.green[600] },
+};
+
 const IconBtn = React.memo(function IconBtn({ icon: Icon, onPress, tone = "neutral" }) {
-    const TONE = {
-        neutral: { box: "bg-gray-50", color: colors.gray[500] },
-        danger: { box: "bg-red-50", color: colors.red[600] },
-        // "Sắp tắt" — thay cho hover:bg-rose-50 bên web, xem ghi chú platform.
-        rose: { box: "bg-rose-50", color: "#e11d48" },
-        // "Sắp bật" — thay cho hover:bg-green-50 bên web.
-        success: { box: "bg-green-50", color: colors.green[600] },
-    };
-    const t = TONE[tone] ?? TONE.neutral;
+    const t = ICON_BTN_TONES[tone] ?? ICON_BTN_TONES.neutral;
     return (
         <Pressable onPress={onPress} className={`w-8 h-8 rounded-lg items-center justify-center ${t.box}`}>
             <Icon size={15} color={t.color} />
@@ -260,8 +311,13 @@ const CheckBox = React.memo(function CheckBox({ checked }) {
 });
 
 /* Ô chọn ngày, thay <input type="date"> — copy nguyên cách StoragePage.js
-   đã dựng (Platform-specific behavior cho Android/iOS). */
-function DateField({ label, value, onChange }) {
+   đã dựng (Platform-specific behavior cho Android/iOS).
+
+   ❗ ĐÃ VÁ: bọc React.memo. Có 2 instance (Bắt đầu/Kết thúc) sống ĐỒNG THỜI
+   trong form — trước đây KHÔNG memo nên mỗi keystroke ở field bất kỳ khác
+   (tên, mã, mô tả...) đều khiến CẢ 2 DateField render lại dù value/onChange
+   của chúng không đổi. */
+const DateField = React.memo(function DateField({ label, value, onChange }) {
     const [show, setShow] = useState(false);
     const dateObj = value ? new Date(`${value}T00:00:00`) : new Date();
 
@@ -309,7 +365,7 @@ function DateField({ label, value, onChange }) {
             )}
         </View>
     );
-}
+});
 
 /* Danh sách chọn nhiều có ô tìm kiếm — thay cho SearchableMultiSelect
    (dropdown lơ lửng) bên web. Hiển thị ngay trong thân modal khi
@@ -397,18 +453,109 @@ const Row = React.memo(function Row({ label, value }) {
 /* Viền phân cách giữa các card — thay cho việc VoucherCard tự tính "có
    phải card cuối" (isLast). FlatList tự động KHÔNG render separator sau
    item cuối, nên renderItem không còn phải phụ thuộc độ dài danh sách
-   nữa — đây chính là nguyên nhân khiến việc đổi status filter trước đây
-   ép toàn bộ card render lại (identity của renderItem đổi theo length). */
+   nữa. */
 const ItemSeparator = React.memo(function ItemSeparator() {
     return <View style={{ height: 1, backgroundColor: colors.gray[50] }} />;
 });
 
+/* Nhóm nút chọn "Loại giảm" — tách riêng + memo, chỉ phụ thuộc
+   form.discountType. Trước đây viết inline trong form nên mỗi keystroke ở
+   field KHÁC (tên, mã, mô tả...) vẫn khiến 2 nút này render lại vô ích. */
+const DiscountTypeSelector = React.memo(function DiscountTypeSelector({ value, onChange }) {
+    return (
+        <View className="flex-row" style={{ gap: 8 }}>
+            {DISCOUNT_TYPE_OPTIONS.map((opt) => (
+                <Pressable
+                    key={opt.value}
+                    onPress={() => onChange(opt.value)}
+                    className={`flex-1 items-center rounded-xl ${value === opt.value ? "bg-green-600" : "bg-white border border-gray-200"}`}
+                    style={{ paddingVertical: 10 }}
+                >
+                    <Text className={`text-xs font-bold ${value === opt.value ? "text-white" : "text-gray-600"}`}>
+                        {opt.label}
+                    </Text>
+                </Pressable>
+            ))}
+        </View>
+    );
+});
+
+/* Nhóm checkbox "Áp dụng cho kênh" — tương tự, chỉ phụ thuộc
+   form.applicableChannels. */
+const ChannelSelector = React.memo(function ChannelSelector({ selected, onToggle }) {
+    return (
+        <View className="flex-row" style={{ gap: 20 }}>
+            {CHANNEL_OPTIONS.map((c) => (
+                <Pressable key={c.value} onPress={() => onToggle(c.value)} className="flex-row items-center" style={{ gap: 7 }}>
+                    <CheckBox checked={selected.includes(c.value)} />
+                    <Text className="text-sm text-gray-600">{c.label}</Text>
+                </Pressable>
+            ))}
+        </View>
+    );
+});
+
+/* Hàng Switch "Kích hoạt ngay" — chỉ phụ thuộc form.isActive. */
+const ActiveToggleRow = React.memo(function ActiveToggleRow({ value, onChange }) {
+    return (
+        <View className="flex-row items-center justify-between" style={{ marginBottom: 8 }}>
+            <Text className="text-sm text-gray-600">Kích hoạt ngay</Text>
+            <Switch
+                value={value}
+                onValueChange={onChange}
+                trackColor={{ false: colors.gray[200], true: colors.green[400] }}
+                thumbColor={colors.white}
+            />
+        </View>
+    );
+});
+
+/* ❗ LỖ HỔNG ĐÃ VÁ: React.memo mặc định so sánh props theo REFERENCE.
+   Mỗi lần refetch (sau khi tạo/sửa/bật-tắt BẤT KỲ voucher nào), react-query
+   trả về 1 mảng HOÀN TOÀN MỚI gồm các object HOÀN TOÀN MỚI — kể cả những
+   voucher không hề thay đổi giá trị (JSON.parse luôn tạo object mới). Nếu
+   dùng React.memo mặc định, prop `voucher` luôn bị coi là "đổi" (reference
+   khác) dù nội dung giống hệt → TOÀN BỘ card trong danh sách re-render lại
+   mỗi khi CHỈ 1 voucher được bật/tắt, dù (N-1) card còn lại không đổi gì.
+   Dùng comparator riêng (voucherCardPropsAreEqual) so theo GIÁ TRỊ các
+   field thực sự được render, để chỉ đúng card có dữ liệu thay đổi mới
+   re-render. */
+function voucherCardPropsAreEqual(prevProps, nextProps) {
+    if (
+        prevProps.onView !== nextProps.onView ||
+        prevProps.onEdit !== nextProps.onEdit ||
+        prevProps.onToggleActive !== nextProps.onToggleActive
+    ) {
+        return false; // callback đổi identity → phải render lại
+    }
+
+    const a = prevProps.voucher;
+    const b = nextProps.voucher;
+    if (a === b) return true;
+    if (!a || !b) return false;
+
+    // Chỉ so sánh đúng những field VoucherCard thực sự render bên dưới —
+    // sau này thêm field mới vào JSX thì nhớ thêm field đó vào đây.
+    return (
+        a._id === b._id &&
+        a.status === b.status &&
+        a.code === b.code &&
+        a.name === b.name &&
+        a.isActive === b.isActive &&
+        a.discountType === b.discountType &&
+        a.discountValue === b.discountValue &&
+        a.minOrderValue === b.minOrderValue &&
+        a.usedCount === b.usedCount &&
+        a.usageLimit === b.usageLimit &&
+        a.startDate === b.startDate &&
+        a.endDate === b.endDate
+    );
+}
+
 /* 1 voucher = 1 card (thay cho 1 hàng <tr> ở bản gốc). KHÔNG bớt field nào
    so với bảng 9 cột gốc — dòng 3 gộp "Loại giảm" + "Giá trị" lại vì cùng
    diễn đạt 1 ý ("Giảm 10%" / "Giảm 20.000₫"). Bọc React.memo vì đây là
-   item của FlatList — tránh re-render mọi card khi chỉ 1 card thay đổi
-   hoặc khi component cha re-render vì lý do khác (gõ search, đổi filter,
-   mở modal...). */
+   item của FlatList. */
 const VoucherCard = React.memo(function VoucherCard({ voucher, onView, onEdit, onToggleActive }) {
     const meta = getStatusMeta(voucher.status);
     return (
@@ -457,14 +604,10 @@ const VoucherCard = React.memo(function VoucherCard({ voucher, onView, onEdit, o
             </View>
         </View>
     );
-});
+}, voucherCardPropsAreEqual);
 
 /* ── Các mảnh của header, tách theo đúng phạm vi state liên quan ────
-   Trước đây toàn bộ header (title, 6 StatCard, ô search, filter chip)
-   nằm trong 1 khối useMemo có statusFilter là dependency → bấm 1 chip
-   filter kéo theo re-render cả 6 StatCard dù chúng không đổi. Tách
-   riêng theo đúng "ai phụ thuộc cái gì" để mỗi phần chỉ re-render khi
-   dữ liệu của chính nó đổi. */
+   Tách riêng để mỗi phần chỉ re-render khi dữ liệu của chính nó đổi. */
 const HeaderTop = React.memo(function HeaderTop({ todayLabel, onCreate }) {
     return (
         <View className="flex-row items-start justify-between" style={{ gap: 12 }}>
@@ -487,6 +630,17 @@ const HeaderTop = React.memo(function HeaderTop({ todayLabel, onCreate }) {
 // Chỉ phụ thuộc dữ liệu THỐNG KÊ — không biết gì về statusFilter/search,
 // nên bấm status filter hay gõ search không làm nó (và 6 StatCard bên
 // trong) re-render.
+//
+// Ghi chú (chưa vá, mức độ thấp): prop `stats` cũng là object đến từ
+// react-query, về lý thuyết có cùng lớp vấn đề với VoucherCard (object mới
+// mỗi lần refetch dù giá trị không đổi). Không áp dụng comparator riêng ở
+// đây vì 2 lý do: (1) chỉ có 6 phần tử cố định, không phải danh sách N
+// phần tử như VoucherCard, chi phí re-render thấp hơn nhiều bậc; (2) React
+// Native mặc định KHÔNG tự bật refetch-on-focus như web trừ khi project tự
+// cấu hình AppState listener cho react-query — nên trong thực tế trường
+// hợp "refetch nền trong lúc màn hình vẫn đang mở" khó xảy ra ở đây. Nếu
+// sau này thấy 6 StatCard vẫn giật khi có polling/refetchInterval, áp dụng
+// cùng kỹ thuật comparator như voucherCardPropsAreEqual ở trên.
 const StatsSection = React.memo(function StatsSection({
     statsRange, onRangeChange, statsError, statsLoading, stats, rangeSubLabel,
 }) {
@@ -574,125 +728,117 @@ const ListToolbar = React.memo(function ListToolbar({
 });
 
 /* ════════════════════════════════════════════════════════════
-   MAIN COMPONENT
+   VOUCHER DETAIL MODAL — tách khỏi VoucherPage + React.memo.
+
+   `voucher` (= viewingVoucher ở component cha) là 1 SNAPSHOT cố định set
+   1 lần khi bấm "Xem" — không bị react-query thay thế bằng object mới như
+   trường hợp danh sách, nên KHÔNG cần comparator riêng, React.memo mặc
+   định (so theo reference) đã đúng và đủ. Lợi ích: nếu VoucherPage
+   re-render vì lý do khác (VD nền: 1 refetch xảy ra) trong lúc modal xem
+   đang mở, modal này không phải tính toán lại.
 ════════════════════════════════════════════════════════════ */
-export default function VoucherPage() {
-    const [statsRange, setStatsRange] = useState("all");
+const VoucherDetailModal = React.memo(function VoucherDetailModal({ voucher, onClose }) {
+    return (
+        <ModalOverlay onClose={onClose}>
+            <View className="bg-white rounded-3xl" style={{ padding: 24, gap: 10 }}>
+                <View className="flex-row items-center justify-between" style={{ marginBottom: 4 }}>
+                    <Text className="font-black text-green-900 text-lg">{voucher.code || "—"}</Text>
+                    <Pressable onPress={onClose} className="w-8 h-8 rounded-full items-center justify-center bg-gray-50">
+                        <X size={18} color={colors.gray[400]} />
+                    </Pressable>
+                </View>
+                <Row label="Tên" value={voucher.name || "—"} />
+                <Row label="Mô tả" value={voucher.description || "—"} />
+                <Row
+                    label="Loại giảm"
+                    value={
+                        voucher.discountType === "PERCENTAGE"
+                            ? `${voucher.discountValue ?? 0}%`
+                            : fmtVND(voucher.discountValue)
+                    }
+                />
+                <Row label="Giảm tối đa" value={voucher.maxDiscountAmount != null ? fmtVND(voucher.maxDiscountAmount) : "Không giới hạn"} />
+                <Row label="Đơn tối thiểu" value={fmtVND(voucher.minOrderValue)} />
+                <Row label="Kênh áp dụng" value={voucher.applicableChannels?.length ? voucher.applicableChannels.join(", ") : "Tất cả"} />
+                <Row label="Lượt dùng" value={`${voucher.usedCount ?? 0}${voucher.usageLimit != null ? `/${voucher.usageLimit}` : " (không giới hạn)"}`} />
+                <Row label="Mỗi khách" value={`${voucher.usageLimitPerCustomer ?? 1} lượt`} />
+                <Row label="Thời gian" value={`${formatDateVN(voucher.startDate, {})} – ${formatDateVN(voucher.endDate, {})}`} />
+                <Row label="Trạng thái" value={getStatusMeta(voucher.status).label} />
+            </View>
+        </ModalOverlay>
+    );
+});
 
-    const [search, setSearch] = useState("");
-    const [debouncedSearch, setDebouncedSearch] = useState("");
-    const [statusFilter, setStatusFilter] = useState("ALL");
+/* ════════════════════════════════════════════════════════════
+   VOUCHER FORM MODAL — tách khỏi VoucherPage + React.memo.
 
-    const [formOpen, setFormOpen] = useState(false);
-    const [editingVoucher, setEditingVoucher] = useState(null); // null = đang tạo mới
-    const [form, setForm] = useState(emptyForm);
+   ❗ LỖ HỔNG LỚN NHẤT ĐÃ VÁ: trước đây form/formErrors/pickerMode là state
+   của CHÍNH VoucherPage — nghĩa là MỖI KEYSTROKE khi gõ form đều khiến
+   TOÀN BỘ hàm VoucherPage chạy lại (dù React.memo đã chặn phần lớn re-
+   render con, bản thân component cha vẫn phải re-chạy). Tách hẳn state
+   này xuống đây: gõ form giờ CHỈ re-render component này, VoucherPage
+   hoàn toàn đứng yên trong suốt lúc gõ.
+
+   Được MOUNT MỚI mỗi lần mở form ({formOpen && <VoucherFormModal .../>}
+   ở component cha) nên dùng lazy initializer cho state form — không nháy
+   giá trị rỗng, không cần useEffect đồng bộ lại.
+
+   Bọc thêm React.memo (dù chỉ có 1 instance tại 1 thời điểm): vì trong
+   lúc form đang MỞ, VoucherPage vẫn có thể re-render vì lý do KHÔNG liên
+   quan (VD: debounce search từ trước khi mở form vừa trigger 1 refetch
+   nền) — khi đó, nếu props của VoucherFormModal (editingVoucher, onClose,
+   onSaved, categoryOptions, foodPickerOptions, optionsLoading) không đổi,
+   React.memo sẽ chặn được việc render lại vô ích.
+
+   ❗ ĐÃ VÁ (lướt/cuộn) — nguyên nhân THẬT SỰ và cách sửa cuối cùng:
+   Từng thử 2 hướng KHÔNG đúng gốc rễ trước khi tìm ra nguyên nhân thật:
+   (1) đưa header vào ScrollView bằng stickyHeaderIndices — không ăn vì
+   header dính bằng animated transform, không nằm trong luồng cử chỉ thật
+   của ScrollView; (2) tự dựng vùng cuộn bằng react-native-gesture-handler
+   + Reanimated, thay hẳn ScrollView — chạy được nhưng phức tạp không cần
+   thiết. Nguyên nhân THẬT SỰ nằm ở `ModalOverlay` (component dùng chung,
+   xem comment tại định nghĩa của nó phía trên): Pressable NGOÀI bọc
+   Pressable TRONG giành JS responder ngay khi chạm xuống, khiến ScrollView
+   bên trong — vốn cuộn bằng gesture recognizer NATIVE, không đàm phán
+   responder theo kiểu JS — không bao giờ nhận được sự kiện move để cuộn,
+   BẤT KỂ vuốt bắt đầu ở đâu trong nội dung modal. Đã sửa `ModalOverlay`
+   (xem comment ở đó); nhờ vậy quay lại dùng ScrollView THƯỜNG, tiêu chuẩn,
+   không cần bất kỳ mẹo nào nữa — miễn TOÀN BỘ nội dung modal (header, các
+   field, thanh nút Huỷ/Lưu) đều nằm bên trong 1 ScrollView duy nhất (thay
+   vì header/footer đứng ngoài làm sibling), vuốt ở bất kỳ đâu trong modal
+   đều cuộn được, và tap vẫn hoạt động bình thường (đóng modal khi chạm
+   ra ngoài, bấm được mọi nút bên trong). */
+function VoucherFormModal({
+    editingVoucher,
+    onClose,
+    onSaved,
+    categoryOptions,
+    foodPickerOptions,
+    optionsLoading,
+}) {
+    // ❗ ĐÃ VÁ (2 lớp):
+    // (1) "maxHeight: '88%'" trước đây không có cơ sở rõ ràng để resolve vì
+    //     cả chuỗi View/Pressable cha trong ModalOverlay đều "co theo nội
+    //     dung" (không có height cụ thể) — đổi sang useWindowDimensions()
+    //     để có số pixel chắc chắn, không phụ thuộc parent.
+    // (2) LỖI THẬT SỰ khiến mất trắng nội dung: ScrollView dùng "flex: 1"
+    //     — flex:1 mặc định kéo theo flexBasis:0%, tức bắt đầu từ kích
+    //     thước 0 rồi "lớn lên chiếm phần còn lại". Nhưng vì View cha chỉ
+    //     có maxHeight (không phải height cố định), Yoga không có "phần
+    //     còn lại" rõ ràng để tính lớn lên từ 0 → ScrollView bị kẹt ở kích
+    //     thước 0. Đã đổi ScrollView sang "flexShrink: 1" (không dùng
+    //     flex:1) — cách này để ScrollView bắt đầu từ kích thước NỘI DUNG
+    //     THẬT của nó, và chỉ co lại khi không đủ chỗ. Đây mới là pattern
+    //     đúng cho container chỉ giới hạn bằng maxHeight (không có height
+    //     cố định).
+    const { height: windowHeight } = useWindowDimensions();
+    const modalMaxHeight = windowHeight * 0.88;
+
+    const [form, setForm] = useState(() =>
+        editingVoucher ? buildFormFromVoucher(editingVoucher) : emptyForm
+    );
     const [formErrors, setFormErrors] = useState({});
     const [pickerMode, setPickerMode] = useState(null); // null | "categories" | "foods"
-
-    const [viewingVoucher, setViewingVoucher] = useState(null);
-
-    // ── Dữ liệu món ăn / danh mục cho phần "áp dụng cho" trong form ──
-    // Vẫn dùng Zustand như bản gốc — đây là store dùng chung nhiều trang
-    // (GLOBAL ARCHITECTURE), không migrate sang react-query trong phạm vi
-    // tối ưu VoucherPage này.
-    const foods = useFoodZustand((s) => s.foods);
-    const foodsLoading = useFoodZustand((s) => s.loading);
-    const getFoods = useFoodZustand((s) => s.getFoods);
-
-    // getFoods() tự bỏ qua nếu đã có dữ liệu (xem useFoodZustand), nên gọi
-    // ngay khi vào trang là an toàn, không lo fetch lặp lại mỗi lần mở form.
-    useEffect(() => {
-        getFoods();
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
-
-    // Bỏ các món đang stage thêm mới nhưng chưa lưu server (id tạm "temp_...")
-    // khỏi danh sách chọn — voucher cần foodId thật để đối chiếu khi áp dụng.
-    const foodOptions = useMemo(
-        () => (Array.isArray(foods) ? foods.filter((f) => f && !f.__isNew) : []),
-        [foods]
-    );
-
-    // ❗ Danh mục lấy trực tiếp từ categoryId có sẵn trên các món đã fetch
-    // (không dùng state "categories" của useFoodZustand — hiện chưa có action
-    // nào gán giá trị cho nó nên luôn rỗng). categoryId trong FoodModel là
-    // String tự do, không populate tên riêng, nên dùng luôn giá trị này làm
-    // cả id lẫn nhãn hiển thị.
-    const categoryOptionsFromFoods = useMemo(() => {
-        const seen = new Set();
-        const opts = [];
-        foodOptions.forEach((f) => {
-            const cid = f?.categoryId;
-            if (cid && !seen.has(cid)) {
-                seen.add(cid);
-                opts.push({ id: cid, label: cid });
-            }
-        });
-        return opts.sort((a, b) => a.label.localeCompare(b.label, "vi"));
-    }, [foodOptions]);
-
-    const foodPickerOptions = useMemo(
-        () => foodOptions.map((f) => ({ id: f._id, label: f.foodName || "(chưa đặt tên)" })),
-        [foodOptions]
-    );
-
-    // ── Debounce ô tìm kiếm — giữ nguyên 350ms như bản gốc. Khác biệt: giờ
-    // chỉ cập nhật debouncedSearch, để nó trở thành 1 phần của queryKey bên
-    // dưới; react-query tự lo phần gọi API + cache + huỷ request cũ khi
-    // key đổi (loại bỏ hoàn toàn race condition tiềm ẩn của cách cũ).
-    useEffect(() => {
-        const timer = setTimeout(() => setDebouncedSearch(search), 350);
-        return () => clearTimeout(timer);
-    }, [search]);
-
-    // ── REACT-QUERY: thống kê voucher ────────────────────────────────
-    // placeholderData giữ số liệu cũ khi đổi statsRange, tránh nháy "…"
-    // đè lên 6 stat card trong lúc chờ số liệu mới — đây chính là 1 phần
-    // nguyên nhân gây cảm giác "khựng" khi thao tác nhanh trên trang này.
-    const {
-        data: stats = {},
-        isLoading: statsLoading,
-        isError: statsIsError,
-    } = useQuery({
-        queryKey: ["voucherStats", statsRange],
-        queryFn: fetchVoucherStats,
-        placeholderData: (prev) => prev,
-    });
-    const statsError = statsIsError ? "Không tải được thống kê voucher" : null;
-
-    // ── REACT-QUERY: danh sách voucher ───────────────────────────────
-    // placeholderData giữ list cũ trong lúc chờ kết quả search mới — list
-    // không còn bị xoá trắng/spinner đè lên mỗi lần gõ, chỉ thay thế êm
-    // khi có dữ liệu mới về.
-    const {
-        data: vouchers = [],
-        isLoading: listLoading,
-        isError: listIsError,
-    } = useQuery({
-        queryKey: ["vouchers", debouncedSearch],
-        queryFn: fetchVouchersList,
-        placeholderData: (prev) => prev,
-    });
-    const listError = listIsError ? "Không tải được danh sách voucher" : null;
-
-    // status là virtual field server trả sẵn trong mỗi voucher — lọc ngay
-    // trên client, không cần thêm query param vì backend chưa hỗ trợ filter
-    // theo status tính toán. Đây vẫn luôn là filter thuần client-side, KHÔNG
-    // đụng tới react-query — chính vì vậy đổi status filter không bao giờ
-    // nên kéo theo network request nào cả.
-    const filteredVouchers = useMemo(() => {
-        const list = Array.isArray(vouchers) ? vouchers.filter(Boolean) : [];
-        if (statusFilter === "ALL") return list;
-        return list.filter((v) => v.status === statusFilter);
-    }, [vouchers, statusFilter]);
-
-    // ── React-query: mutation cho tạo/sửa và bật-tắt ─────────────────
-    const queryClient = useQueryClient();
-
-    const invalidateVoucherQueries = useCallback(() => {
-        queryClient.invalidateQueries({ queryKey: ["vouchers"] });
-        queryClient.invalidateQueries({ queryKey: ["voucherStats"] });
-    }, [queryClient]);
 
     const saveVoucherMutation = useMutation({
         mutationFn: async ({ id, payload }) =>
@@ -700,59 +846,6 @@ export default function VoucherPage() {
                 ? await putData({ url: `/vouchers/${id}`, data: payload })
                 : await postData({ url: "/vouchers", data: payload }),
     });
-
-    const toggleActiveMutation = useMutation({
-        mutationFn: async (voucher) => {
-            const res = await putData({
-                url: `/vouchers/${voucher._id}`,
-                data: { isActive: !voucher.isActive },
-            });
-            if (!res?.success) throw new Error(res?.message || "Toggle voucher failed");
-            return res;
-        },
-        onSuccess: () => invalidateVoucherQueries(),
-        onError: (err) => console.error("Failed to toggle voucher:", err),
-    });
-
-    // ── Mở form ─────────────────────────────────────────────────────
-    const openCreateForm = useCallback(() => {
-        setEditingVoucher(null);
-        setForm(emptyForm);
-        setFormErrors({});
-        setPickerMode(null);
-        setFormOpen(true);
-    }, []);
-
-    const openEditForm = useCallback((voucher) => {
-        if (!voucher) return;
-        setEditingVoucher(voucher);
-        setForm({
-            name: voucher.name || "",
-            code: voucher.code || "",
-            description: voucher.description || "",
-            discountType: voucher.discountType || "PERCENTAGE",
-            discountValue: String(voucher.discountValue ?? ""),
-            maxDiscountAmount: voucher.maxDiscountAmount != null ? String(voucher.maxDiscountAmount) : "",
-            minOrderValue: voucher.minOrderValue != null ? String(voucher.minOrderValue) : "",
-            applicableChannels: Array.isArray(voucher.applicableChannels) ? voucher.applicableChannels : [],
-            applicableCategoryIds: Array.isArray(voucher.applicableCategoryIds) ? voucher.applicableCategoryIds : [],
-            applicableFoodIds: Array.isArray(voucher.applicableFoodIds) ? voucher.applicableFoodIds : [],
-            applicableCustomerIdsRaw: (voucher.applicableCustomerIds || []).join(", "),
-            startDate: toDateInputValue(voucher.startDate),
-            endDate: toDateInputValue(voucher.endDate),
-            usageLimit: voucher.usageLimit != null ? String(voucher.usageLimit) : "",
-            usageLimitPerCustomer: String(voucher.usageLimitPerCustomer ?? "1"),
-            isActive: !!voucher.isActive,
-        });
-        setFormErrors({});
-        setPickerMode(null);
-        setFormOpen(true);
-    }, []);
-
-    const closeForm = useCallback(() => {
-        setFormOpen(false);
-        setPickerMode(null);
-    }, []);
 
     const toggleChannel = useCallback((channel) => {
         setForm((f) => ({
@@ -781,18 +874,28 @@ export default function VoucherPage() {
         }));
     }, []);
 
-    /* ── Handler ổn định cho từng field text của form ────────────────
-       Trước đây mỗi FieldInput nhận 1 arrow function tạo mới ngay
-       trong JSX mỗi lần VoucherPage render → dù FieldInput đã memo,
-       props onChangeText luôn "mới" nên memo vô nghĩa, gõ vào 1 ô
-       kéo theo re-render tất cả field khác trong form. setField tạo
-       ra closure ổn định theo từng "key", chỉ tính 1 lần. */
     const setField = useCallback((key) => (value) => {
         setForm((f) => ({ ...f, [key]: value }));
     }, []);
 
     const handleCodeChange = useCallback((t) => {
         setForm((f) => ({ ...f, code: t.toUpperCase() }));
+    }, []);
+
+    const handleDiscountTypeChange = useCallback((value) => {
+        setForm((f) => ({ ...f, discountType: value }));
+    }, []);
+
+    const handleStartDateChange = useCallback((v) => {
+        setForm((f) => ({ ...f, startDate: v }));
+    }, []);
+
+    const handleEndDateChange = useCallback((v) => {
+        setForm((f) => ({ ...f, endDate: v }));
+    }, []);
+
+    const handleActiveChange = useCallback((v) => {
+        setForm((f) => ({ ...f, isActive: v }));
     }, []);
 
     const fieldHandlers = useMemo(
@@ -809,7 +912,10 @@ export default function VoucherPage() {
         [setField]
     );
 
-    // ── Submit tạo/sửa ──────────────────────────────────────────────
+    const openCategoryPicker = useCallback(() => setPickerMode("categories"), []);
+    const openFoodPicker = useCallback(() => setPickerMode("foods"), []);
+    const closePicker = useCallback(() => setPickerMode(null), []);
+
     const handleSubmit = useCallback(async () => {
         const errors = {};
         if (!form.name.trim()) errors.name = "Vui lòng nhập tên voucher";
@@ -857,17 +963,335 @@ export default function VoucherPage() {
             return;
         }
 
-        closeForm();
-        invalidateVoucherQueries();
-    }, [form, editingVoucher, saveVoucherMutation, closeForm, invalidateVoucherQueries]);
+        onClose();
+        onSaved();
+    }, [form, editingVoucher, saveVoucherMutation, onClose, onSaved]);
+
+    return (
+        <ModalOverlay onClose={onClose}>
+            <View className="bg-white rounded-3xl overflow-hidden" style={{ maxHeight: modalMaxHeight }}>
+                <View className="px-6 pt-6 pb-4 flex-row items-center justify-between border-b border-gray-100">
+                    <Text className="font-black text-green-900 text-lg">
+                        {pickerMode === "categories"
+                            ? "Chọn danh mục áp dụng"
+                            : pickerMode === "foods"
+                                ? "Chọn món ăn áp dụng"
+                                : editingVoucher
+                                    ? "Sửa voucher"
+                                    : "Tạo voucher"}
+                    </Text>
+                    <Pressable onPress={onClose} className="w-8 h-8 rounded-full items-center justify-center bg-gray-50">
+                        <X size={18} color={colors.gray[400]} />
+                    </Pressable>
+                </View>
+
+                <ScrollView
+                    style={{ flexShrink: 1 }}
+                    contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 16, paddingBottom: 4 }}
+                    keyboardShouldPersistTaps="handled"
+                >
+                    {pickerMode === "categories" ? (
+                        <PickerBody
+                            options={categoryOptions}
+                            selectedIds={form.applicableCategoryIds}
+                            onToggle={toggleCategoryId}
+                            onDone={closePicker}
+                            loading={optionsLoading}
+                            emptyText="Chưa có danh mục nào"
+                        />
+                    ) : pickerMode === "foods" ? (
+                        <PickerBody
+                            options={foodPickerOptions}
+                            selectedIds={form.applicableFoodIds}
+                            onToggle={toggleFoodId}
+                            onDone={closePicker}
+                            loading={optionsLoading}
+                            emptyText="Chưa có món ăn nào"
+                        />
+                    ) : (
+                        <>
+                            <FieldInput
+                                label="Mã voucher"
+                                full
+                                error={formErrors.code}
+                                value={form.code}
+                                onChangeText={handleCodeChange}
+                                placeholder="GIAM10"
+                            />
+                            <FieldInput
+                                label="Tên voucher"
+                                full
+                                error={formErrors.name}
+                                value={form.name}
+                                onChangeText={fieldHandlers.name}
+                                placeholder="Giảm 10%"
+                            />
+                            <FieldInput
+                                label="Mô tả"
+                                full
+                                multiline
+                                value={form.description}
+                                onChangeText={fieldHandlers.description}
+                            />
+
+                            <FieldWrap label="Loại giảm">
+                                <DiscountTypeSelector value={form.discountType} onChange={handleDiscountTypeChange} />
+                            </FieldWrap>
+                            <FieldInput
+                                label="Giá trị giảm"
+                                full
+                                keyboardType="decimal-pad"
+                                error={formErrors.discountValue}
+                                value={form.discountValue}
+                                onChangeText={fieldHandlers.discountValue}
+                            />
+
+                            <View className="flex-row flex-wrap justify-between">
+                                <FieldInput
+                                    label="Đơn tối thiểu (đ)"
+                                    keyboardType="decimal-pad"
+                                    value={form.minOrderValue}
+                                    onChangeText={fieldHandlers.minOrderValue}
+                                />
+                                <FieldInput
+                                    label="Giảm tối đa (đ)"
+                                    keyboardType="decimal-pad"
+                                    value={form.maxDiscountAmount}
+                                    onChangeText={fieldHandlers.maxDiscountAmount}
+                                    placeholder="Trống = không giới hạn"
+                                />
+                            </View>
+
+                            <View className="flex-row flex-wrap justify-between">
+                                <FieldInput
+                                    label="Tổng lượt dùng"
+                                    keyboardType="number-pad"
+                                    value={form.usageLimit}
+                                    onChangeText={fieldHandlers.usageLimit}
+                                    placeholder="Trống = không giới hạn"
+                                />
+                                <FieldInput
+                                    label="Lượt / khách"
+                                    keyboardType="number-pad"
+                                    value={form.usageLimitPerCustomer}
+                                    onChangeText={fieldHandlers.usageLimitPerCustomer}
+                                />
+                            </View>
+
+                            <View style={{ marginBottom: 14 }}>
+                                <View className="flex-row flex-wrap" style={{ gap: 10 }}>
+                                    <DateField label="Bắt đầu" value={form.startDate} onChange={handleStartDateChange} />
+                                    <DateField label="Kết thúc" value={form.endDate} onChange={handleEndDateChange} />
+                                </View>
+                                {!!formErrors.endDate && <Text className="text-rose-600 text-xs mt-1">{formErrors.endDate}</Text>}
+                            </View>
+
+                            <FieldWrap label="Áp dụng cho kênh (bỏ trống = tất cả)">
+                                <ChannelSelector selected={form.applicableChannels} onToggle={toggleChannel} />
+                            </FieldWrap>
+
+                            <FieldWrap
+                                label={`Danh mục áp dụng (để trống = tất cả)${form.applicableCategoryIds.length ? ` — đã chọn ${form.applicableCategoryIds.length}` : ""}`}
+                            >
+                                <PickerTrigger
+                                    count={form.applicableCategoryIds.length}
+                                    placeholder="Tất cả danh mục"
+                                    onPress={openCategoryPicker}
+                                />
+                            </FieldWrap>
+
+                            <FieldWrap
+                                label={`Món ăn áp dụng (để trống = tất cả)${form.applicableFoodIds.length ? ` — đã chọn ${form.applicableFoodIds.length}` : ""}`}
+                            >
+                                <PickerTrigger
+                                    count={form.applicableFoodIds.length}
+                                    placeholder="Tất cả món ăn"
+                                    onPress={openFoodPicker}
+                                />
+                            </FieldWrap>
+
+                            <FieldInput
+                                label="Khách hàng cụ thể (customerId/accountId, cách nhau dấu phẩy — để trống = mọi khách)"
+                                full
+                                value={form.applicableCustomerIdsRaw}
+                                onChangeText={fieldHandlers.applicableCustomerIdsRaw}
+                            />
+
+                            <ActiveToggleRow value={form.isActive} onChange={handleActiveChange} />
+
+                            {!!formErrors.submit && <Text className="text-rose-600 text-xs" style={{ marginBottom: 8 }}>{formErrors.submit}</Text>}
+                        </>
+                    )}
+                </ScrollView>
+
+                {!pickerMode && (
+                    <View className="flex-row gap-2 px-5 py-4 border-t border-gray-100">
+                        <Pressable onPress={onClose} className="flex-1 items-center rounded-xl border border-gray-200" style={{ paddingVertical: 12 }}>
+                            <Text className="text-sm font-bold text-gray-600">Huỷ</Text>
+                        </Pressable>
+                        <Pressable
+                            onPress={handleSubmit}
+                            disabled={saveVoucherMutation.isPending}
+                            style={{ opacity: saveVoucherMutation.isPending ? 0.6 : 1, paddingVertical: 12 }}
+                            className="flex-1 items-center rounded-xl bg-green-600"
+                        >
+                            {saveVoucherMutation.isPending ? (
+                                <ActivityIndicator size="small" color={colors.white} />
+                            ) : (
+                                <Text className="text-sm font-bold text-white">{editingVoucher ? "Lưu thay đổi" : "Tạo voucher"}</Text>
+                            )}
+                        </Pressable>
+                    </View>
+                )}
+            </View>
+        </ModalOverlay>
+    );
+}
+
+/* ════════════════════════════════════════════════════════════
+   MAIN COMPONENT
+════════════════════════════════════════════════════════════ */
+export default function VoucherPage() {
+    const [statsRange, setStatsRange] = useState("all");
+
+    const [search, setSearch] = useState("");
+    const [debouncedSearch, setDebouncedSearch] = useState("");
+    const [statusFilter, setStatusFilter] = useState("ALL");
+
+    const [formOpen, setFormOpen] = useState(false);
+    const [editingVoucher, setEditingVoucher] = useState(null); // null = đang tạo mới
+
+    const [viewingVoucher, setViewingVoucher] = useState(null);
+
+    // ── Dữ liệu món ăn / danh mục cho phần "áp dụng cho" trong form ──
+    // Vẫn dùng Zustand như bản gốc — đây là store dùng chung nhiều trang
+    // (GLOBAL ARCHITECTURE), không migrate sang react-query. Subscription
+    // này CỐ Ý vẫn đặt ở VoucherPage (không đẩy xuống VoucherFormModal) để
+    // giữ đúng hành vi gốc: prefetch foods ngay khi vào trang, để lúc mở
+    // form category/food picker đã có sẵn dữ liệu — đẩy xuống form sẽ đổi
+    // UX (chỉ fetch khi mở form lần đầu, có thể thấy loading mà bản gốc
+    // không có).
+    const foods = useFoodZustand((s) => s.foods);
+    const foodsLoading = useFoodZustand((s) => s.loading);
+    const getFoods = useFoodZustand((s) => s.getFoods);
+
+    useEffect(() => {
+        getFoods();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    const foodOptions = useMemo(
+        () => (Array.isArray(foods) ? foods.filter((f) => f && !f.__isNew) : []),
+        [foods]
+    );
+
+    const categoryOptionsFromFoods = useMemo(() => {
+        const seen = new Set();
+        const opts = [];
+        foodOptions.forEach((f) => {
+            const cid = f?.categoryId;
+            if (cid && !seen.has(cid)) {
+                seen.add(cid);
+                opts.push({ id: cid, label: cid });
+            }
+        });
+        return opts.sort((a, b) => a.label.localeCompare(b.label, "vi"));
+    }, [foodOptions]);
+
+    const foodPickerOptions = useMemo(
+        () => foodOptions.map((f) => ({ id: f._id, label: f.foodName || "(chưa đặt tên)" })),
+        [foodOptions]
+    );
+
+    const optionsLoading = foodsLoading && foodOptions.length === 0;
+
+    // ── Debounce ô tìm kiếm — 350ms như bản gốc.
+    useEffect(() => {
+        const timer = setTimeout(() => setDebouncedSearch(search), 350);
+        return () => clearTimeout(timer);
+    }, [search]);
+
+    // ── REACT-QUERY: thống kê voucher ────────────────────────────────
+    const {
+        data: stats = {},
+        isLoading: statsLoading,
+        isError: statsIsError,
+    } = useQuery({
+        queryKey: ["voucherStats", statsRange],
+        queryFn: fetchVoucherStats,
+        placeholderData: (prev) => prev,
+    });
+    const statsError = statsIsError ? "Không tải được thống kê voucher" : null;
+
+    // ── REACT-QUERY: danh sách voucher ───────────────────────────────
+    const {
+        data: vouchers = [],
+        isLoading: listLoading,
+        isError: listIsError,
+    } = useQuery({
+        queryKey: ["vouchers", debouncedSearch],
+        queryFn: fetchVouchersList,
+        placeholderData: (prev) => prev,
+    });
+    const listError = listIsError ? "Không tải được danh sách voucher" : null;
+
+    const filteredVouchers = useMemo(() => {
+        const list = Array.isArray(vouchers) ? vouchers.filter(Boolean) : [];
+        if (statusFilter === "ALL") return list;
+        return list.filter((v) => v.status === statusFilter);
+    }, [vouchers, statusFilter]);
+
+    const queryClient = useQueryClient();
+
+    const invalidateVoucherQueries = useCallback(() => {
+        queryClient.invalidateQueries({ queryKey: ["vouchers"] });
+        queryClient.invalidateQueries({ queryKey: ["voucherStats"] });
+    }, [queryClient]);
+
+    // Chỉ destructure "mutate" — ổn định vĩnh viễn theo đúng thiết kế của
+    // react-query — thay vì giữ nguyên object mutation (object đó đổi
+    // identity mỗi khi trạng thái chuyển, sẽ kéo theo handleToggleActive →
+    // renderVoucherItem đổi identity → FlatList re-render toàn bộ card).
+    const { mutate: toggleActiveVoucher } = useMutation({
+        mutationFn: async (voucher) => {
+            const res = await putData({
+                url: `/vouchers/${voucher._id}`,
+                data: { isActive: !voucher.isActive },
+            });
+            if (!res?.success) throw new Error(res?.message || "Toggle voucher failed");
+            return res;
+        },
+        onSuccess: () => invalidateVoucherQueries(),
+        onError: (err) => console.error("Failed to toggle voucher:", err),
+    });
+
+    // ── Mở/đóng form — giờ CHỈ quyết định mount/unmount VoucherFormModal,
+    // không còn quản lý form/formErrors/pickerMode nữa (đã chuyển hẳn vào
+    // component con). Gõ trong form không còn khiến VoucherPage re-render.
+    const openCreateForm = useCallback(() => {
+        setEditingVoucher(null);
+        setFormOpen(true);
+    }, []);
+
+    const openEditForm = useCallback((voucher) => {
+        if (!voucher) return;
+        setEditingVoucher(voucher);
+        setFormOpen(true);
+    }, []);
+
+    const closeForm = useCallback(() => {
+        setFormOpen(false);
+    }, []);
+
+    const closeViewingVoucher = useCallback(() => setViewingVoucher(null), []);
 
     // ── Tắt / bật nhanh từ danh sách ────────────────────────────────
     const handleToggleActive = useCallback(
         (voucher) => {
             if (!voucher?._id) return;
-            toggleActiveMutation.mutate(voucher);
+            toggleActiveVoucher(voucher);
         },
-        [toggleActiveMutation]
+        [toggleActiveVoucher]
     );
 
     const todayLabel = new Date().toLocaleDateString("vi-VN", {
@@ -880,10 +1304,7 @@ export default function VoucherPage() {
     const rangeSubLabel = RANGE_OPTIONS.find((r) => r.value === statsRange)?.label;
 
     /* ── FlatList: keyExtractor + renderItem ổn định ─────────────────
-       renderVoucherItem KHÔNG còn phụ thuộc filteredVouchers.length
-       (isLast đã chuyển sang ItemSeparatorComponent) — chỉ phụ thuộc
-       2 callback đã ổn định vĩnh viễn nhờ useCallback ở trên. Đây là
-       fix trực tiếp cho hiện tượng giật khi đổi status filter. */
+       renderVoucherItem chỉ phụ thuộc 2 callback đã ổn định vĩnh viễn. */
     const keyExtractor = useCallback((item, index) => item?._id || `voucher-${index}`, []);
 
     const renderVoucherItem = useCallback(
@@ -895,7 +1316,9 @@ export default function VoucherPage() {
                 onToggleActive={handleToggleActive}
             />
         ),
-        [openEditForm, handleToggleActive]
+        // setViewingVoucher là setState setter — React đảm bảo ổn định vĩnh
+        // viễn nên liệt kê ở đây không đổi hành vi, chỉ cho đúng exhaustive-deps.
+        [openEditForm, handleToggleActive, setViewingVoucher]
     );
 
     const listHeader = (
@@ -963,245 +1386,23 @@ export default function VoucherPage() {
                 removeClippedSubviews={Platform.OS === "android"}
             />
 
-            {/* ── Modal xem chi tiết ────────────────────────────────────── */}
+            {/* ── Modal xem chi tiết — tách thành VoucherDetailModal ──── */}
             {!!viewingVoucher && (
-                <ModalOverlay onClose={() => setViewingVoucher(null)}>
-                    <View className="bg-white rounded-3xl" style={{ padding: 24, gap: 10 }}>
-                        <View className="flex-row items-center justify-between" style={{ marginBottom: 4 }}>
-                            <Text className="font-black text-green-900 text-lg">{viewingVoucher.code || "—"}</Text>
-                            <Pressable onPress={() => setViewingVoucher(null)} className="w-8 h-8 rounded-full items-center justify-center bg-gray-50">
-                                <X size={18} color={colors.gray[400]} />
-                            </Pressable>
-                        </View>
-                        <Row label="Tên" value={viewingVoucher.name || "—"} />
-                        <Row label="Mô tả" value={viewingVoucher.description || "—"} />
-                        <Row
-                            label="Loại giảm"
-                            value={
-                                viewingVoucher.discountType === "PERCENTAGE"
-                                    ? `${viewingVoucher.discountValue ?? 0}%`
-                                    : fmtVND(viewingVoucher.discountValue)
-                            }
-                        />
-                        <Row label="Giảm tối đa" value={viewingVoucher.maxDiscountAmount != null ? fmtVND(viewingVoucher.maxDiscountAmount) : "Không giới hạn"} />
-                        <Row label="Đơn tối thiểu" value={fmtVND(viewingVoucher.minOrderValue)} />
-                        <Row label="Kênh áp dụng" value={viewingVoucher.applicableChannels?.length ? viewingVoucher.applicableChannels.join(", ") : "Tất cả"} />
-                        <Row label="Lượt dùng" value={`${viewingVoucher.usedCount ?? 0}${viewingVoucher.usageLimit != null ? `/${viewingVoucher.usageLimit}` : " (không giới hạn)"}`} />
-                        <Row label="Mỗi khách" value={`${viewingVoucher.usageLimitPerCustomer ?? 1} lượt`} />
-                        <Row label="Thời gian" value={`${formatDateVN(viewingVoucher.startDate, {})} – ${formatDateVN(viewingVoucher.endDate, {})}`} />
-                        <Row label="Trạng thái" value={getStatusMeta(viewingVoucher.status).label} />
-                    </View>
-                </ModalOverlay>
+                <VoucherDetailModal voucher={viewingVoucher} onClose={closeViewingVoucher} />
             )}
 
-            {/* ── Modal tạo / sửa ──────────────────────────────────────── */}
+            {/* ── Modal tạo / sửa — tách thành VoucherFormModal. Gõ trong
+                form giờ chỉ re-render component đó, không đụng gì đến
+                VoucherPage/FlatList/6 stat card. ─────────────────────── */}
             {formOpen && (
-                <ModalOverlay onClose={closeForm}>
-                    <View className="bg-white rounded-3xl overflow-hidden" style={{ maxHeight: "88%" }}>
-                        <View className="px-6 pt-6 pb-4 flex-row items-center justify-between border-b border-gray-100">
-                            <Text className="font-black text-green-900 text-lg">
-                                {pickerMode === "categories"
-                                    ? "Chọn danh mục áp dụng"
-                                    : pickerMode === "foods"
-                                        ? "Chọn món ăn áp dụng"
-                                        : editingVoucher
-                                            ? "Sửa voucher"
-                                            : "Tạo voucher"}
-                            </Text>
-                            <Pressable onPress={closeForm} className="w-8 h-8 rounded-full items-center justify-center bg-gray-50">
-                                <X size={18} color={colors.gray[400]} />
-                            </Pressable>
-                        </View>
-
-                        <ScrollView contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 16, paddingBottom: 4 }} keyboardShouldPersistTaps="handled">
-                            {pickerMode === "categories" ? (
-                                <PickerBody
-                                    options={categoryOptionsFromFoods}
-                                    selectedIds={form.applicableCategoryIds}
-                                    onToggle={toggleCategoryId}
-                                    onDone={() => setPickerMode(null)}
-                                    loading={foodsLoading && foodOptions.length === 0}
-                                    emptyText="Chưa có danh mục nào"
-                                />
-                            ) : pickerMode === "foods" ? (
-                                <PickerBody
-                                    options={foodPickerOptions}
-                                    selectedIds={form.applicableFoodIds}
-                                    onToggle={toggleFoodId}
-                                    onDone={() => setPickerMode(null)}
-                                    loading={foodsLoading && foodOptions.length === 0}
-                                    emptyText="Chưa có món ăn nào"
-                                />
-                            ) : (
-                                <>
-                                    <FieldInput
-                                        label="Mã voucher"
-                                        full
-                                        error={formErrors.code}
-                                        value={form.code}
-                                        onChangeText={handleCodeChange}
-                                        placeholder="GIAM10"
-                                    />
-                                    <FieldInput
-                                        label="Tên voucher"
-                                        full
-                                        error={formErrors.name}
-                                        value={form.name}
-                                        onChangeText={fieldHandlers.name}
-                                        placeholder="Giảm 10%"
-                                    />
-                                    <FieldInput
-                                        label="Mô tả"
-                                        full
-                                        multiline
-                                        value={form.description}
-                                        onChangeText={fieldHandlers.description}
-                                    />
-
-                                    <FieldWrap label="Loại giảm">
-                                        <View className="flex-row" style={{ gap: 8 }}>
-                                            {DISCOUNT_TYPE_OPTIONS.map((opt) => (
-                                                <Pressable
-                                                    key={opt.value}
-                                                    onPress={() => setForm((f) => ({ ...f, discountType: opt.value }))}
-                                                    className={`flex-1 items-center rounded-xl ${form.discountType === opt.value ? "bg-green-600" : "bg-white border border-gray-200"}`}
-                                                    style={{ paddingVertical: 10 }}
-                                                >
-                                                    <Text className={`text-xs font-bold ${form.discountType === opt.value ? "text-white" : "text-gray-600"}`}>
-                                                        {opt.label}
-                                                    </Text>
-                                                </Pressable>
-                                            ))}
-                                        </View>
-                                    </FieldWrap>
-                                    <FieldInput
-                                        label="Giá trị giảm"
-                                        full
-                                        keyboardType="decimal-pad"
-                                        error={formErrors.discountValue}
-                                        value={form.discountValue}
-                                        onChangeText={fieldHandlers.discountValue}
-                                    />
-
-                                    <View className="flex-row flex-wrap justify-between">
-                                        <FieldInput
-                                            label="Đơn tối thiểu (đ)"
-                                            keyboardType="decimal-pad"
-                                            value={form.minOrderValue}
-                                            onChangeText={fieldHandlers.minOrderValue}
-                                        />
-                                        <FieldInput
-                                            label="Giảm tối đa (đ)"
-                                            keyboardType="decimal-pad"
-                                            value={form.maxDiscountAmount}
-                                            onChangeText={fieldHandlers.maxDiscountAmount}
-                                            placeholder="Trống = không giới hạn"
-                                        />
-                                    </View>
-
-                                    <View className="flex-row flex-wrap justify-between">
-                                        <FieldInput
-                                            label="Tổng lượt dùng"
-                                            keyboardType="number-pad"
-                                            value={form.usageLimit}
-                                            onChangeText={fieldHandlers.usageLimit}
-                                            placeholder="Trống = không giới hạn"
-                                        />
-                                        <FieldInput
-                                            label="Lượt / khách"
-                                            keyboardType="number-pad"
-                                            value={form.usageLimitPerCustomer}
-                                            onChangeText={fieldHandlers.usageLimitPerCustomer}
-                                        />
-                                    </View>
-
-                                    <View style={{ marginBottom: 14 }}>
-                                        <View className="flex-row flex-wrap" style={{ gap: 10 }}>
-                                            <DateField label="Bắt đầu" value={form.startDate} onChange={(v) => setForm((f) => ({ ...f, startDate: v }))} />
-                                            <DateField label="Kết thúc" value={form.endDate} onChange={(v) => setForm((f) => ({ ...f, endDate: v }))} />
-                                        </View>
-                                        {!!formErrors.endDate && <Text className="text-rose-600 text-xs mt-1">{formErrors.endDate}</Text>}
-                                    </View>
-
-                                    <FieldWrap label="Áp dụng cho kênh (bỏ trống = tất cả)">
-                                        <View className="flex-row" style={{ gap: 20 }}>
-                                            {CHANNEL_OPTIONS.map((c) => (
-                                                <Pressable
-                                                    key={c.value}
-                                                    onPress={() => toggleChannel(c.value)}
-                                                    className="flex-row items-center"
-                                                    style={{ gap: 7 }}
-                                                >
-                                                    <CheckBox checked={form.applicableChannels.includes(c.value)} />
-                                                    <Text className="text-sm text-gray-600">{c.label}</Text>
-                                                </Pressable>
-                                            ))}
-                                        </View>
-                                    </FieldWrap>
-
-                                    <FieldWrap
-                                        label={`Danh mục áp dụng (để trống = tất cả)${form.applicableCategoryIds.length ? ` — đã chọn ${form.applicableCategoryIds.length}` : ""}`}
-                                    >
-                                        <PickerTrigger
-                                            count={form.applicableCategoryIds.length}
-                                            placeholder="Tất cả danh mục"
-                                            onPress={() => setPickerMode("categories")}
-                                        />
-                                    </FieldWrap>
-
-                                    <FieldWrap
-                                        label={`Món ăn áp dụng (để trống = tất cả)${form.applicableFoodIds.length ? ` — đã chọn ${form.applicableFoodIds.length}` : ""}`}
-                                    >
-                                        <PickerTrigger
-                                            count={form.applicableFoodIds.length}
-                                            placeholder="Tất cả món ăn"
-                                            onPress={() => setPickerMode("foods")}
-                                        />
-                                    </FieldWrap>
-
-                                    <FieldInput
-                                        label="Khách hàng cụ thể (customerId/accountId, cách nhau dấu phẩy — để trống = mọi khách)"
-                                        full
-                                        value={form.applicableCustomerIdsRaw}
-                                        onChangeText={fieldHandlers.applicableCustomerIdsRaw}
-                                    />
-
-                                    <View className="flex-row items-center justify-between" style={{ marginBottom: 8 }}>
-                                        <Text className="text-sm text-gray-600">Kích hoạt ngay</Text>
-                                        <Switch
-                                            value={form.isActive}
-                                            onValueChange={(v) => setForm((f) => ({ ...f, isActive: v }))}
-                                            trackColor={{ false: colors.gray[200], true: colors.green[400] }}
-                                            thumbColor={colors.white}
-                                        />
-                                    </View>
-
-                                    {!!formErrors.submit && <Text className="text-rose-600 text-xs" style={{ marginBottom: 8 }}>{formErrors.submit}</Text>}
-                                </>
-                            )}
-                        </ScrollView>
-
-                        {!pickerMode && (
-                            <View className="flex-row gap-2 px-5 py-4 border-t border-gray-100">
-                                <Pressable onPress={closeForm} className="flex-1 items-center rounded-xl border border-gray-200" style={{ paddingVertical: 12 }}>
-                                    <Text className="text-sm font-bold text-gray-600">Huỷ</Text>
-                                </Pressable>
-                                <Pressable
-                                    onPress={handleSubmit}
-                                    disabled={saveVoucherMutation.isPending}
-                                    style={{ opacity: saveVoucherMutation.isPending ? 0.6 : 1, paddingVertical: 12 }}
-                                    className="flex-1 items-center rounded-xl bg-green-600"
-                                >
-                                    {saveVoucherMutation.isPending ? (
-                                        <ActivityIndicator size="small" color={colors.white} />
-                                    ) : (
-                                        <Text className="text-sm font-bold text-white">{editingVoucher ? "Lưu thay đổi" : "Tạo voucher"}</Text>
-                                    )}
-                                </Pressable>
-                            </View>
-                        )}
-                    </View>
-                </ModalOverlay>
+                <VoucherFormModal
+                    editingVoucher={editingVoucher}
+                    onClose={closeForm}
+                    onSaved={invalidateVoucherQueries}
+                    categoryOptions={categoryOptionsFromFoods}
+                    foodPickerOptions={foodPickerOptions}
+                    optionsLoading={optionsLoading}
+                />
             )}
         </View>
     );

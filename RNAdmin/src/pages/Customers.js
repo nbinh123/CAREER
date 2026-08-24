@@ -260,19 +260,47 @@ function StatusBadge({ customer, status }) {
 }
 
 /* ── Overlay dùng chung cho cả 3 modal ────────────────────────────────── */
+/* [FIX] Trước dùng Pressable lồng Pressable (Pressable ngoài đóng modal +
+   Pressable trong onPress={() => {}} chặn tap lọt xuống, tương đương
+   e.stopPropagation() bên web). Cách này ép Pressable trong giành JS
+   responder ngay lúc chạm, ScrollView native bên trong không có cách đàm
+   phán lại responder một cách đáng tin cậy → vuốt để cuộn nội dung dài
+   (lịch sử đơn, nội dung modal xác nhận dài...) trong modal bị "nuốt" mất
+   — đúng lỗi đã gặp và đã sửa ở MenuPage.js/OrdersPage.js bằng cùng 1 kỹ
+   thuật.
+   Thay bằng 2 lớp CHỒNG NHAU kiểu anh em (không lồng cha-con): lớp dưới là
+   Pressable nền phủ kín màn hình lo việc tap-outside-to-close, lớp trên là
+   View nội dung không có touch handler riêng nào — chạm/vuốt vào nội dung
+   sẽ trúng thẳng View đó (và ScrollView bên trong), không đi qua Pressable
+   nền, nên cuộn hoạt động bình thường; chạm ra ngoài nội dung mới trúng
+   Pressable nền và đóng modal (vẫn giữ tap-outside-to-close như cũ).
+
+   [GIU-NGUYEN] maxHeight ở đây vẫn LÀ SỐ PX THẬT (winHeight * 0.85, không
+   phải chuỗi "%") — đây là fix cho 1 lỗi KHÁC, không liên quan gì tới lỗi
+   cuộn ở trên: nếu để "85%" thì nó chỉ resolve đúng khi CHÍNH cha của View
+   này cũng có kích thước xác định, còn để hẳn 1 số cụ thể thì luôn resolve
+   đúng bất kể cha là gì (ở đây cha là 1 View flex:1 canh giữa, không có
+   height xác định). Nhờ vậy các modal con chỉ cần dùng maxHeight:"100%" +
+   ScrollView flexShrink:1 là tự co theo nội dung và cuộn được khi tràn —
+   không cần sửa gì thêm ở ConfirmModal/ResetResultModal/OrdersModal. */
 function ModalOverlay({ onClose, children }) {
+  const { height: winHeight } = useWindowDimensions();
   return (
     <Modal transparent animationType="fade" onRequestClose={onClose}>
-      <Pressable
-        onPress={onClose}
-        style={{ flex: 1, backgroundColor: "rgba(6,78,59,0.35)", alignItems: "center", justifyContent: "center", padding: 20 }}
-      >
-        {/* Pressable no-op: chặn tap trên thẻ lọt xuống overlay bên dưới,
-            tương đương e.stopPropagation() ở bản web. */}
-        <Pressable onPress={() => {}} style={{ width: "100%", maxWidth: 420 }}>
-          {children}
-        </Pressable>
-      </Pressable>
+      <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 20 }}>
+        <Pressable
+          onPress={onClose}
+          style={{
+            position: "absolute",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: "rgba(6,78,59,0.35)",
+          }}
+        />
+        <View style={{ width: "100%", maxWidth: 420, maxHeight: winHeight * 0.85 }}>{children}</View>
+      </View>
     </Modal>
   );
 }
@@ -282,48 +310,53 @@ function ConfirmModal({ tone, icon: Icon, title, sub, message, confirmLabel, loa
   const t = TONE_STYLES[tone];
   return (
     <ModalOverlay onClose={onClose}>
-      <View className="bg-white rounded-3xl overflow-hidden">
-        <View className="px-6 pt-6 pb-4 flex-row items-start justify-between border-b border-gray-100">
-          <View style={{ flex: 1, paddingRight: 12 }}>
-            <Text className="text-base font-black text-emerald-900">{title}</Text>
-            {!!sub && <Text className="text-xs font-semibold text-gray-400 mt-0.5">{sub}</Text>}
-          </View>
-          <Pressable onPress={onClose} className="w-8 h-8 rounded-xl bg-gray-50 items-center justify-center">
-            <X size={16} color={colors.gray[400]} />
-          </Pressable>
-        </View>
-
-        <View className="px-6 pt-6 pb-6 items-center">
-          <View className={`w-14 h-14 rounded-2xl items-center justify-center mb-4 ${t.iconBg}`}>
-            <Icon size={24} color={t.iconColor} />
-          </View>
-          <Text className="text-[13.5px] font-semibold text-gray-500 text-center" style={{ lineHeight: 20 }}>
-            {message}
-          </Text>
-
-          <View className="flex-row gap-2.5 mt-5" style={{ width: "100%" }}>
-            <Pressable
-              onPress={onClose}
-              disabled={loading}
-              style={{ flex: 1, paddingVertical: 13 }}
-              className="bg-gray-50 border-2 border-gray-100 rounded-2xl items-center"
-            >
-              <Text className="text-emerald-800 font-extrabold text-sm">Huỷ</Text>
-            </Pressable>
-            <Pressable
-              onPress={onConfirm}
-              disabled={loading}
-              style={{ flex: 2, paddingVertical: 13, opacity: loading ? 0.6 : 1 }}
-              className={`rounded-2xl items-center justify-center flex-row gap-2 ${t.btnBg}`}
-            >
-              {loading ? (
-                <ActivityIndicator color={colors.white} size="small" />
-              ) : (
-                <Text className="text-white font-black text-sm">{confirmLabel}</Text>
-              )}
+      <View className="bg-white rounded-3xl overflow-hidden" style={{ maxHeight: "100%" }}>
+        <ScrollView
+          style={{ flexShrink: 1 }}
+          showsVerticalScrollIndicator={false}
+        >
+          <View className="px-6 pt-6 pb-4 flex-row items-start justify-between border-b border-gray-100">
+            <View style={{ flex: 1, paddingRight: 12 }}>
+              <Text className="text-base font-black text-emerald-900">{title}</Text>
+              {!!sub && <Text className="text-xs font-semibold text-gray-400 mt-0.5">{sub}</Text>}
+            </View>
+            <Pressable onPress={onClose} className="w-8 h-8 rounded-xl bg-gray-50 items-center justify-center">
+              <X size={16} color={colors.gray[400]} />
             </Pressable>
           </View>
-        </View>
+
+          <View className="px-6 pt-6 pb-6 items-center">
+            <View className={`w-14 h-14 rounded-2xl items-center justify-center mb-4 ${t.iconBg}`}>
+              <Icon size={24} color={t.iconColor} />
+            </View>
+            <Text className="text-[13.5px] font-semibold text-gray-500 text-center" style={{ lineHeight: 20 }}>
+              {message}
+            </Text>
+
+            <View className="flex-row gap-2.5 mt-5" style={{ width: "100%" }}>
+              <Pressable
+                onPress={onClose}
+                disabled={loading}
+                style={{ flex: 1, paddingVertical: 13 }}
+                className="bg-gray-50 border-2 border-gray-100 rounded-2xl items-center"
+              >
+                <Text className="text-emerald-800 font-extrabold text-sm">Huỷ</Text>
+              </Pressable>
+              <Pressable
+                onPress={onConfirm}
+                disabled={loading}
+                style={{ flex: 2, paddingVertical: 13, opacity: loading ? 0.6 : 1 }}
+                className={`rounded-2xl items-center justify-center flex-row gap-2 ${t.btnBg}`}
+              >
+                {loading ? (
+                  <ActivityIndicator color={colors.white} size="small" />
+                ) : (
+                  <Text className="text-white font-black text-sm">{confirmLabel}</Text>
+                )}
+              </Pressable>
+            </View>
+          </View>
+        </ScrollView>
       </View>
     </ModalOverlay>
   );
@@ -347,64 +380,69 @@ function ResetResultModal({ customer, tempPassword, onClose }) {
 
   return (
     <ModalOverlay onClose={onClose}>
-      <View className="bg-white rounded-3xl overflow-hidden">
-        <View className="px-6 pt-6 pb-4 flex-row items-start justify-between border-b border-gray-100">
-          <View style={{ flex: 1, paddingRight: 12 }}>
-            <Text className="text-base font-black text-emerald-900">Đã reset mật khẩu</Text>
-            <Text className="text-xs font-semibold text-gray-400 mt-0.5">{customer.fullName}</Text>
+      <View className="bg-white rounded-3xl overflow-hidden" style={{ maxHeight: "100%" }}>
+        <ScrollView
+          style={{ flexShrink: 1 }}
+          showsVerticalScrollIndicator={false}
+        >
+          <View className="px-6 pt-6 pb-4 flex-row items-start justify-between border-b border-gray-100">
+            <View style={{ flex: 1, paddingRight: 12 }}>
+              <Text className="text-base font-black text-emerald-900">Đã reset mật khẩu</Text>
+              <Text className="text-xs font-semibold text-gray-400 mt-0.5">{customer.fullName}</Text>
+            </View>
+            <Pressable onPress={onClose} className="w-8 h-8 rounded-xl bg-gray-50 items-center justify-center">
+              <X size={16} color={colors.gray[400]} />
+            </Pressable>
           </View>
-          <Pressable onPress={onClose} className="w-8 h-8 rounded-xl bg-gray-50 items-center justify-center">
-            <X size={16} color={colors.gray[400]} />
-          </Pressable>
-        </View>
 
-        <View className="px-6 pt-6 pb-6 items-center">
-          <View className="w-14 h-14 rounded-2xl bg-green-100 items-center justify-center mb-4">
-            <Check size={26} color={colors.green[800]} />
-          </View>
-          <Text className="text-xs font-bold text-gray-400" style={{ letterSpacing: 0.4 }}>MẬT KHẨU TẠM MỚI</Text>
+          <View className="px-6 pt-6 pb-6 items-center">
+            <View className="w-14 h-14 rounded-2xl bg-green-100 items-center justify-center mb-4">
+              <Check size={26} color={colors.green[800]} />
+            </View>
+            <Text className="text-xs font-bold text-gray-400" style={{ letterSpacing: 0.4 }}>MẬT KHẨU TẠM MỚI</Text>
 
-          <View
-            className="flex-row items-center gap-2 bg-gray-50 border border-dashed border-gray-300 rounded-2xl mt-3 mb-4"
-            style={{ width: "100%", padding: 14 }}
-          >
-            <Text
-              className="flex-1 text-center font-black text-emerald-900"
-              style={{ fontSize: 26, letterSpacing: 6 }}
-              numberOfLines={1}
+            <View
+              className="flex-row items-center gap-2 bg-gray-50 border border-dashed border-gray-300 rounded-2xl mt-3 mb-4"
+              style={{ width: "100%", padding: 14 }}
             >
-              {tempPassword || "——————"}
-            </Text>
-            {!!tempPassword && (
-              <Pressable
-                onPress={copy}
-                className={`w-10 h-10 rounded-xl border-2 items-center justify-center ${copied ? "bg-green-50 border-green-300" : "bg-white border-gray-200"}`}
+              <Text
+                className="flex-1 text-center font-black text-emerald-900"
+                style={{ fontSize: 26, letterSpacing: 6 }}
+                numberOfLines={1}
               >
-                {copied ? <Check size={16} color={colors.green[600]} /> : <Copy size={16} color="#065f46" />}
-              </Pressable>
+                {tempPassword || "——————"}
+              </Text>
+              {!!tempPassword && (
+                <Pressable
+                  onPress={copy}
+                  className={`w-10 h-10 rounded-xl border-2 items-center justify-center ${copied ? "bg-green-50 border-green-300" : "bg-white border-gray-200"}`}
+                >
+                  {copied ? <Check size={16} color={colors.green[600]} /> : <Copy size={16} color="#065f46" />}
+                </Pressable>
+              )}
+            </View>
+
+            {copyError && (
+              <Text className="text-xs font-semibold text-red-700 text-center mb-3">
+                Không thể sao chép tự động, vui lòng bôi đen và chép thủ công.
+              </Text>
             )}
-          </View>
 
-          {copyError && (
-            <Text className="text-xs font-semibold text-red-700 text-center mb-3">
-              Không thể sao chép tự động, vui lòng bôi đen và chép thủ công.
+            <Text className="text-xs font-semibold text-gray-400 text-center" style={{ lineHeight: 18 }}>
+              {tempPassword
+                ? "Đọc mã này cho khách qua điện thoại/chat hỗ trợ. Khách sẽ được yêu cầu đổi mật khẩu ở lần đăng nhập kế tiếp."
+                : "Reset thành công nhưng server không trả về mật khẩu tạm — kiểm tra lại field phản hồi của API reset-password."}
             </Text>
-          )}
 
-          <Text className="text-xs font-semibold text-gray-400 text-center" style={{ lineHeight: 18 }}>
-            {tempPassword
-              ? "Đọc mã này cho khách qua điện thoại/chat hỗ trợ. Khách sẽ được yêu cầu đổi mật khẩu ở lần đăng nhập kế tiếp."
-              : "Reset thành công nhưng server không trả về mật khẩu tạm — kiểm tra lại field phản hồi của API reset-password."}
-          </Text>
-
-          <Pressable
-            onPress={onClose}
-            className="bg-emerald-600 rounded-2xl items-center justify-center mt-5"
-            style={{ width: "100%", paddingVertical: 13 }}
-          >
-            <Text className="text-white font-black text-sm">Đã đọc, đóng lại</Text>
-          </Pressable>
-        </View>
+            <Pressable
+              onPress={onClose}
+              className="bg-emerald-600 rounded-2xl items-center justify-center mt-5"
+              style={{ width: "100%", paddingVertical: 13 }}
+            >
+              <Text className="text-white font-black text-sm">Đã đọc, đóng lại</Text>
+            </Pressable>
+          </View>
+        </ScrollView>
       </View>
     </ModalOverlay>
   );
@@ -412,9 +450,9 @@ function ResetResultModal({ customer, tempPassword, onClose }) {
 
 /* ── Lịch sử đơn hàng ────────────────────────────────────────────────────── */
 const ORDERS_PAGE_SIZE = 3;
+const ORDERS_PREFILL_PAGES = 3; // tự động tải trước tối đa 3 trang (9 đơn) khi mở modal
 
 function OrdersModal({ customer, onClose }) {
-  const { height: winHeight } = useWindowDimensions();
   const {
     data,
     isLoading, // true chỉ ở lần tải trang đầu tiên (chưa có cache cho customer này)
@@ -426,9 +464,7 @@ function OrdersModal({ customer, onClose }) {
   } = useCustomerOrdersQuery(customer._id);
 
   const orders = useMemo(() => (data ? data.pages.flatMap((p) => p.orders) : []), [data]);
-
-  const [containerH, setContainerH] = useState(0);
-  const [contentH, setContentH] = useState(0);
+  const loadedPages = data?.pages?.length ?? 0;
 
   const handleLoadMore = useCallback(() => {
     if (isFetchingNextPage || !hasNextPage) return;
@@ -441,115 +477,116 @@ function OrdersModal({ customer, onClose }) {
     if (distanceFromBottom < 80) handleLoadMore();
   }, [handleLoadMore]);
 
-  // limit=3 rất nhỏ -> trang đầu (và có thể vài trang tiếp theo) thường không đủ
-  // cao để tràn khỏi khung nhìn, khiến onScroll không bao giờ bắn. Tự động nạp
-  // thêm cho tới khi nội dung lấp đầy khung (hoặc hết dữ liệu), rồi mới để việc
-  // cuộn tiếp tay đảm nhiệm bình thường.
+  // limit=3 rất nhỏ -> trang đầu thường không đủ cao để tràn khỏi khung nhìn,
+  // khiến onScroll không bao giờ bắn. Bản trước dùng onLayout/onContentSizeChange
+  // để TỰ ĐO xem nội dung đã tràn khung chưa rồi mới quyết định tải thêm — nhưng
+  // việc đo layout dễ lệch timing giữa lúc React render xong và lúc native đo
+  // xong kích thước thật, khiến ScrollView có thể đã đủ nội dung nhưng effect
+  // vẫn tưởng chưa, hoặc ngược lại — kẹt cuộn. Giờ tải trước một số trang CỐ
+  // ĐỊNH (không đo gì cả, dựa thẳng vào số trang đã tải trong data.pages),
+  // sau đó việc cuộn tiếp hoàn toàn do onScroll đảm nhiệm như bình thường.
   useEffect(() => {
     if (
       !isLoading &&
       !isFetchingNextPage &&
       !isFetchNextPageError &&
       hasNextPage &&
-      containerH > 0 &&
-      contentH > 0 &&
-      contentH <= containerH
+      loadedPages < ORDERS_PREFILL_PAGES
     ) {
       handleLoadMore();
     }
-  }, [containerH, contentH, isLoading, isFetchingNextPage, isFetchNextPageError, hasNextPage, handleLoadMore]);
+  }, [isLoading, isFetchingNextPage, isFetchNextPageError, hasNextPage, loadedPages, handleLoadMore]);
 
   return (
     <ModalOverlay onClose={onClose}>
-      <View className="bg-white rounded-3xl overflow-hidden" style={{ maxHeight: winHeight * 0.85 }}>
-        <View className="px-6 pt-6 pb-4 flex-row items-start justify-between border-b border-gray-100">
-          <View style={{ flex: 1, paddingRight: 12 }}>
-            <Text className="text-base font-black text-emerald-900">Lịch sử đơn hàng</Text>
-            <Text className="text-xs font-semibold text-gray-400 mt-0.5">{customer.fullName} · {customer.phone}</Text>
-          </View>
-          <Pressable onPress={onClose} className="w-8 h-8 rounded-xl bg-gray-50 items-center justify-center">
-            <X size={16} color={colors.gray[400]} />
-          </Pressable>
-        </View>
-
+      <View className="bg-white rounded-3xl overflow-hidden" style={{ maxHeight: "100%" }}>
         <ScrollView
           style={{ flexShrink: 1 }}
-          className="px-4"
-          contentContainerStyle={{ paddingVertical: 14, gap: 8 }}
-          onLayout={(e) => setContainerH(e.nativeEvent.layout.height)}
-          onContentSizeChange={(w, h) => setContentH(h)}
+          showsVerticalScrollIndicator={false}
           onScroll={handleScroll}
           scrollEventThrottle={100}
         >
-          {isLoading ? (
-            <View className="items-center py-10">
-              <ActivityIndicator color={colors.gray[400]} />
-              <Text className="text-[13px] font-bold text-gray-400 mt-2">Đang tải đơn hàng…</Text>
+          <View className="px-6 pt-6 pb-4 flex-row items-start justify-between border-b border-gray-100">
+            <View style={{ flex: 1, paddingRight: 12 }}>
+              <Text className="text-base font-black text-emerald-900">Lịch sử đơn hàng</Text>
+              <Text className="text-xs font-semibold text-gray-400 mt-0.5">{customer.fullName} · {customer.phone}</Text>
             </View>
-          ) : isError ? (
-            <View className="items-center py-10">
-              <Text style={{ fontSize: 36 }}>🛠️</Text>
-              <Text className="text-sm font-bold text-gray-300 mt-2 text-center">Chưa lấy được dữ liệu đơn hàng.</Text>
-            </View>
-          ) : orders.length === 0 ? (
-            <View className="items-center py-10">
-              <Text style={{ fontSize: 36 }}>🧾</Text>
-              <Text className="text-sm font-bold text-gray-300 mt-2 text-center">Khách hàng chưa có đơn hàng nào.</Text>
-            </View>
-          ) : (
-            orders.filter(Boolean).map((o, i) => {
-              const meta = orderStatusMeta(o.status);
-              const mc = ORDER_STATUS_COLORS[meta.cls] || ORDER_STATUS_COLORS.default;
-              const itemsLine = orderItemsSummary(o.items);
-              return (
-                <View
-                  key={o._id || i}
-                  className="bg-gray-50 border border-gray-100 rounded-2xl flex-row items-start justify-between"
-                  style={{ padding: 14, gap: 10 }}
-                >
-                  <View style={{ flex: 1 }}>
-                    <View className="flex-row items-center gap-2 mb-0.5" style={{ flexWrap: "wrap" }}>
-                      <Text className="text-[13px] font-black text-emerald-900">
-                        #{o.orderCode || (typeof o._id === "string" ? o._id.slice(-6) : o._id) || i + 1}
-                      </Text>
-                      <View style={{ backgroundColor: mc.bg, paddingHorizontal: 9, paddingVertical: 3, borderRadius: 100 }}>
-                        <Text style={{ color: mc.fg, fontSize: 10, fontWeight: "800" }}>{meta.label.toUpperCase()}</Text>
-                      </View>
-                    </View>
-                    <Text className="text-[11px] font-semibold text-gray-400">
-                      {fmtDateTime(o.createdAt)} · {paymentLabel(o.paymentMethod)}
-                    </Text>
-                    {!!itemsLine && (
-                      <Text className="text-[11px] font-semibold text-gray-500 mt-1" style={{ lineHeight: 15 }}>
-                        {itemsLine}
-                      </Text>
-                    )}
-                    {String(o.status).toLowerCase() === "cancelled" && o.cancelReason && (
-                      <Text className="text-[11px] font-semibold text-red-700 mt-1" style={{ fontStyle: "italic" }}>
-                        Lý do huỷ: {o.cancelReason}
-                      </Text>
-                    )}
-                  </View>
-                  <Text className="text-emerald-700 font-black text-sm" numberOfLines={1}>
-                    {fmtMoney(o.totalAmount ?? o.totalPrice ?? o.total)}
-                  </Text>
-                </View>
-              );
-            })
-          )}
-          {!isLoading && !isError && orders.length > 0 && (
-            isFetchingNextPage ? (
-              <View className="items-center py-4">
-                <ActivityIndicator color={colors.gray[400]} size="small" />
+            <Pressable onPress={onClose} className="w-8 h-8 rounded-xl bg-gray-50 items-center justify-center">
+              <X size={16} color={colors.gray[400]} />
+            </Pressable>
+          </View>
+
+          <View className="px-4" style={{ paddingVertical: 14, gap: 8 }}>
+            {isLoading ? (
+              <View className="items-center py-10">
+                <ActivityIndicator color={colors.gray[400]} />
+                <Text className="text-[13px] font-bold text-gray-400 mt-2">Đang tải đơn hàng…</Text>
               </View>
-            ) : isFetchNextPageError ? (
-              <Text className="text-center text-[11px] font-bold text-red-400 py-2">
-                Không tải được thêm — kéo lại để thử lại
-              </Text>
-            ) : !hasNextPage ? (
-              <Text className="text-center text-[11px] font-bold text-gray-300 py-2">— Đã hết đơn hàng —</Text>
-            ) : null
-          )}
+            ) : isError ? (
+              <View className="items-center py-10">
+                <Text style={{ fontSize: 36 }}>🛠️</Text>
+                <Text className="text-sm font-bold text-gray-300 mt-2 text-center">Chưa lấy được dữ liệu đơn hàng.</Text>
+              </View>
+            ) : orders.length === 0 ? (
+              <View className="items-center py-10">
+                <Text style={{ fontSize: 36 }}>🧾</Text>
+                <Text className="text-sm font-bold text-gray-300 mt-2 text-center">Khách hàng chưa có đơn hàng nào.</Text>
+              </View>
+            ) : (
+              orders.filter(Boolean).map((o, i) => {
+                const meta = orderStatusMeta(o.status);
+                const mc = ORDER_STATUS_COLORS[meta.cls] || ORDER_STATUS_COLORS.default;
+                const itemsLine = orderItemsSummary(o.items);
+                return (
+                  <View
+                    key={o._id || i}
+                    className="bg-gray-50 border border-gray-100 rounded-2xl flex-row items-start justify-between"
+                    style={{ padding: 14, gap: 10 }}
+                  >
+                    <View style={{ flex: 1 }}>
+                      <View className="flex-row items-center gap-2 mb-0.5" style={{ flexWrap: "wrap" }}>
+                        <Text className="text-[13px] font-black text-emerald-900">
+                          #{o.orderCode || (typeof o._id === "string" ? o._id.slice(-6) : o._id) || i + 1}
+                        </Text>
+                        <View style={{ backgroundColor: mc.bg, paddingHorizontal: 9, paddingVertical: 3, borderRadius: 100 }}>
+                          <Text style={{ color: mc.fg, fontSize: 10, fontWeight: "800" }}>{meta.label.toUpperCase()}</Text>
+                        </View>
+                      </View>
+                      <Text className="text-[11px] font-semibold text-gray-400">
+                        {fmtDateTime(o.createdAt)} · {paymentLabel(o.paymentMethod)}
+                      </Text>
+                      {!!itemsLine && (
+                        <Text className="text-[11px] font-semibold text-gray-500 mt-1" style={{ lineHeight: 15 }}>
+                          {itemsLine}
+                        </Text>
+                      )}
+                      {String(o.status).toLowerCase() === "cancelled" && o.cancelReason && (
+                        <Text className="text-[11px] font-semibold text-red-700 mt-1" style={{ fontStyle: "italic" }}>
+                          Lý do huỷ: {o.cancelReason}
+                        </Text>
+                      )}
+                    </View>
+                    <Text className="text-emerald-700 font-black text-sm" numberOfLines={1}>
+                      {fmtMoney(o.totalAmount ?? o.totalPrice ?? o.total)}
+                    </Text>
+                  </View>
+                );
+              })
+            )}
+            {!isLoading && !isError && orders.length > 0 && (
+              isFetchingNextPage ? (
+                <View className="items-center py-4">
+                  <ActivityIndicator color={colors.gray[400]} size="small" />
+                </View>
+              ) : isFetchNextPageError ? (
+                <Text className="text-center text-[11px] font-bold text-red-400 py-2">
+                  Không tải được thêm — kéo lại để thử lại
+                </Text>
+              ) : !hasNextPage ? (
+                <Text className="text-center text-[11px] font-bold text-gray-300 py-2">— Đã hết đơn hàng —</Text>
+              ) : null
+            )}
+          </View>
         </ScrollView>
       </View>
     </ModalOverlay>
