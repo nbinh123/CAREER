@@ -6,11 +6,6 @@
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
-    "splash": {
-      "image": "./assets/splash.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#f0fdf4"
-    },
     "assetBundlePatterns": [
       "**/*"
     ],
@@ -29,13 +24,23 @@
       "favicon": "./assets/favicon.png"
     },
     "extra": {
-      "apiUrl": "https://career-tf7j.onrender.com"
+      "apiUrl": "https://career-tf7j.onrender.com",
+      "eas": {
+        "projectId": "3000a736-c435-43f7-96ad-19514af61ecf"
+      }
     },
     "plugins": [
       "@react-native-community/datetimepicker",
       "expo-font",
       "expo-sharing",
-      "expo-splash-screen",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash.png",
+          "resizeMode": "contain",
+          "backgroundColor": "#f0fdf4"
+        }
+      ],
       "expo-status-bar"
     ]
   }
