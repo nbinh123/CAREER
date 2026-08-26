@@ -16,7 +16,7 @@ const FruitSchema = new Schema(
     {
         fruitName: { type: String, required: true, trim: true, unique: true },
         costPrice: { type: Number, default: 0, min: 0 },
-        originalPrice: { type: Number, required: true, min: 0 },
+        originalPrice: { type: Number, min: 0 },
         isAvailable: { type: Boolean, default: true },
         note: { type: String, default: "" },
         imageUrl: { type: String, default: null },
