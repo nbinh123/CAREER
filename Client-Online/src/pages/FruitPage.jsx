@@ -6,6 +6,13 @@ import FruitPickCard from "../components/fruit/FruitPickCard";
 import ComboSuggestions from "../components/fruit/ComboSuggestions";
 import FruitMixBar from "../components/fruit/FruitMixBar";
 import FlyingFruit from "../components/fruit/FlyingFruit";
+// ❗ MỚI — trước đây "Xem đơn của bạn" chỉ có ở MenuPage, nên sau khi thêm
+// combo trái cây vào giỏ ở trang này, khách không thấy phản hồi gì trừ khi
+// tự bấm qua lại trang Thực đơn hoặc tab "Đơn hàng" dưới Footer. Thêm 2
+// component này để trang trái cây cũng báo ngay + cho xem/sửa giỏ tại chỗ,
+// giống hệt MenuPage.
+import CartFloatingButton from "../components/cart/CartFloatingButton";
+import CartDrawer from "../components/cart/CartDrawer";
 import { useFruits } from "../hooks/useFruits";
 import { useCart } from "../context/CartContext";
 import { useGlobal } from "../context/GlobalContext";
@@ -27,12 +34,13 @@ const FLIGHT_CLEANUP_MS = 500;
 // CartDrawer (kèm tên/SĐT/địa chỉ/ghi chú).
 export default function FruitPage() {
   const { fruits, loading: loadingFruits, error: errorFruits, refetch: refetchFruits } = useFruits();
-  const { addItem } = useCart();
+  const { addItem, totalCount } = useCart();
   const { showToast } = useGlobal();
 
   const [selected, setSelected] = useState([]);
   const [quantity, setQuantity] = useState(1);
   const [flight, setFlight] = useState(null);
+  const [cartOpen, setCartOpen] = useState(false); // ❗ MỚI — mở/đóng CartDrawer từ trang này
 
   const [comboFoods, setComboFoods] = useState([]);
   const [loadingCombos, setLoadingCombos] = useState(true);
@@ -234,7 +242,18 @@ export default function FruitPage() {
 
       <div className="h-56" />
 
-      <div className="fixed inset-x-0 z-30" style={{ bottom: "4rem" }}>
+      {/* ❗ MỚI — bọc chung CartFloatingButton + FruitMixBar trong 1 container
+          `fixed` duy nhất, xếp chồng bằng flex-col + gap thay vì set "bottom"
+          cố định (tính bằng tay) cho từng thanh riêng lẻ. Cách này tự đúng dù
+          sau này FruitMixBar đổi chiều cao (thêm dòng, đổi cỡ chữ...), không
+          cần sửa lại số liệu ở đây. CartFloatingButton dùng floating={false}
+          để bỏ lớp `fixed` riêng của chính nó (xem giải thích trong component). */}
+      <div className="fixed inset-x-0 z-30 flex flex-col gap-2" style={{ bottom: "4rem" }}>
+        {totalCount > 0 && (
+          <div className="px-4 animate-slide-up">
+            <CartFloatingButton onOpen={() => setCartOpen(true)} floating={false} />
+          </div>
+        )}
         <FruitMixBar
           selected={selected}
           onRemove={handleRemove}
@@ -247,6 +266,8 @@ export default function FruitPage() {
           onAddToCart={handleAddToCart}
         />
       </div>
+
+      <CartDrawer open={cartOpen} onClose={() => setCartOpen(false)} />
 
       {flight && <FlyingFruit flight={flight} />}
     </div>

@@ -319,6 +319,128 @@ function getCustomerOrders(customerId) {
         .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 }
 
+// ─── Auto-advance đơn online (SERVER-SIDE) ────────────────────────────────
+// ❗ MỚI — thay cho timer 30s trước đây chạy Ở PHÍA CLIENT ADMIN
+// (OnlineOrdersPage.jsx, AUTO_ADVANCE_DELAY). Cách cũ chỉ hoạt động khi có
+// ít nhất 1 admin đang mở app đúng lúc; nếu không, đơn "kẹt" vĩnh viễn ở
+// confirmed/preparing. Chuyển timer vào server để nó luôn chạy, không phụ
+// thuộc bất kỳ client nào có đang mở hay không.
+//
+// LƯU Ý: đây là setTimeout trong bộ nhớ của 1 tiến trình Node — nếu sau này
+// chạy nhiều instance server (PM2 cluster, nhiều máy sau load balancer...),
+// cách này KHÔNG đủ an toàn (mỗi instance tự lên lịch riêng, dễ chạy đúp).
+// Lúc đó cần một job queue thật sự (BullMQ + Redis, agenda.js...). Với 1
+// tiến trình Node duy nhất (setup hiện tại) thì cách dưới đây an toàn.
+const AUTO_ADVANCE_DELAY_MS = 30000; // phải khớp AUTO_ADVANCE_DELAY (cũ) bên OnlineOrdersPage.jsx
+const AUTO_ADVANCE_NEXT_STATUS = { confirmed: "preparing", preparing: "delivering" };
+const autoAdvanceTimers = new Map(); // orderId(string) -> timeoutId
+
+function clearAutoAdvanceTimer(orderId) {
+    const key = String(orderId);
+    const existing = autoAdvanceTimers.get(key);
+    if (existing) {
+        clearTimeout(existing);
+        autoAdvanceTimers.delete(key);
+    }
+}
+
+// delayMs cho phép truyền riêng — dùng lúc khôi phục timer sau khi server
+// restart (xem reconcileOneOrder bên dưới), để không bắt mỗi đơn đợi đủ lại
+// từ đầu 30s nếu đã trôi qua một phần thời gian trước khi server tắt.
+function scheduleAutoAdvance(io, orderId, fromStatus, delayMs = AUTO_ADVANCE_DELAY_MS) {
+    const nextStatus = AUTO_ADVANCE_NEXT_STATUS[fromStatus];
+    if (!nextStatus) return;
+
+    clearAutoAdvanceTimer(orderId);
+
+    const key = String(orderId);
+    const timeoutId = setTimeout(async () => {
+        autoAdvanceTimers.delete(key);
+        try {
+            // Đọc lại DB tại đúng thời điểm timer chạy, không tin cache — phòng
+            // trường hợp admin đã thao tác thủ công (thanh toán/huỷ) trong lúc chờ.
+            const current = await OnlineOrder.findById(orderId);
+            if (!current || current.status !== fromStatus) return; // đã đổi trạng thái khác rồi, bỏ qua
+
+            await applyOnlineOrderStatusUpdate(io, orderId, nextStatus);
+        } catch (err) {
+            console.error("[socket] auto-advance lỗi:", err.message);
+        }
+    }, delayMs);
+
+    autoAdvanceTimers.set(key, timeoutId);
+}
+
+// Logic cập nhật trạng thái đơn — TÁCH RIÊNG khỏi handler
+// "admin_update_order_status" để dùng chung cho cả thao tác thủ công (admin
+// bấm nút) LẪN tự động (auto-advance timer). Giữ nguyên hành vi cũ (set field
+// mốc thời gian, cancelReason khi huỷ, hoàn voucher khi huỷ, broadcast state...).
+async function applyOnlineOrderStatusUpdate(io, orderId, status, extra = {}) {
+    if (!ONLINE_ORDER_TIMESTAMP_FIELD[status]) return null;
+
+    const update = { status, [ONLINE_ORDER_TIMESTAMP_FIELD[status]]: new Date() };
+    if (status === "cancelled") update.cancelReason = (extra.reason || "").trim();
+    if (status === "completed") {
+        if (extra.paymentMethod) update.paymentMethod = extra.paymentMethod;
+        if (extra.convertedOrderId) update.convertedOrderId = extra.convertedOrderId;
+    }
+
+    const updated = await OnlineOrder.findByIdAndUpdate(orderId, update, { new: true });
+    if (!updated) return null;
+
+    if (status === "cancelled") {
+        await releaseVoucherForOrder({ onlineOrderId: updated._id });
+    }
+
+    clearAutoAdvanceTimer(orderId); // đơn vừa đổi trạng thái — huỷ timer cũ nếu có (tránh chạy đúp)
+
+    const clientOrder = toClientOnlineOrder(updated);
+    upsertOnlineOrderCache(clientOrder);
+
+    io.to("admin_room").emit("online_orders_state", onlineOrdersCache);
+    io.to(`customer:${clientOrder.customerId}`).emit(
+        "customer_orders_state",
+        getCustomerOrders(clientOrder.customerId)
+    );
+
+    // Đơn vừa vào confirmed/preparing → hẹn giờ tự động chuyển bước kế tiếp.
+    if (AUTO_ADVANCE_NEXT_STATUS[status]) {
+        scheduleAutoAdvance(io, updated._id, status);
+    }
+
+    return clientOrder;
+}
+
+// Dùng lúc server vừa khởi động — bắt kịp các đơn đã lỡ hẹn (server bị tắt/
+// deploy đúng lúc timer đang chạy dở). Nếu đã quá hạn 30s thì advance ngay 1
+// bước; nếu chưa, hẹn giờ lại với đúng phần thời gian còn lại. Bước kế tiếp
+// (nếu có) sau đó sẽ tính đủ 30s MỚI kể từ mốc restart này, không cố mô
+// phỏng chính xác tuyệt đối từng bước qua thời gian downtime — đủ dùng cho
+// các lần restart/deploy thông thường (vài giây đến vài phút).
+async function reconcileOneOrder(io, orderId) {
+    const order = await OnlineOrder.findById(orderId);
+    if (!order) return;
+    const nextStatus = AUTO_ADVANCE_NEXT_STATUS[order.status];
+    if (!nextStatus) return;
+
+    const startedAt = order[ONLINE_ORDER_TIMESTAMP_FIELD[order.status]];
+    const elapsedMs = startedAt ? Date.now() - new Date(startedAt).getTime() : AUTO_ADVANCE_DELAY_MS;
+    const remainingMs = AUTO_ADVANCE_DELAY_MS - elapsedMs;
+
+    if (remainingMs <= 0) {
+        await applyOnlineOrderStatusUpdate(io, orderId, nextStatus);
+    } else {
+        scheduleAutoAdvance(io, orderId, order.status, remainingMs);
+    }
+}
+
+async function reconcileStaleAutoAdvances(io) {
+    const orders = await OnlineOrder.find({ status: { $in: Object.keys(AUTO_ADVANCE_NEXT_STATUS) } });
+    for (const order of orders) {
+        await reconcileOneOrder(io, order._id);
+    }
+}
+
 // ─── Socket.IO ──────────────────────────────────────────────────────────────
 function initSocket(server) {
     const io = new Server(server, {
@@ -332,6 +454,7 @@ function initSocket(server) {
             await loadTableCache();
             await loadOnlineOrdersCache();
             await loadChatThreadsCache();
+            await reconcileStaleAutoAdvances(io); // ❗ MỚI — bắt kịp các đơn lỡ hẹn khi server vừa restart
             console.log("[socket] Đã tải dữ liệu bàn + đơn online + chat online từ MongoDB");
         } catch (err) {
             console.error("[socket] Lỗi khởi tạo dữ liệu bàn:", err.message);
@@ -1169,33 +1292,10 @@ function initSocket(server) {
         socket.on("admin_update_order_status", async ({ orderId, status, reason, paymentMethod, convertedOrderId } = {}) => {
             try {
                 if (!orderId || !ONLINE_ORDER_TIMESTAMP_FIELD[status]) return;
-
-                const update = { status, [ONLINE_ORDER_TIMESTAMP_FIELD[status]]: new Date() };
-                if (status === "cancelled") update.cancelReason = (reason || "").trim();
-
-                // paymentMethod/convertedOrderId chỉ có ý nghĩa lúc "completed" —
-                // trang admin gửi kèm sau khi đã POST /api/orders thành công (xem
-                // OnlineOrdersPage.jsx, handleConfirmCheckout).
-                if (status === "completed") {
-                    if (paymentMethod) update.paymentMethod = paymentMethod;
-                    if (convertedOrderId) update.convertedOrderId = convertedOrderId;
-                }
-
-                const updated = await OnlineOrder.findByIdAndUpdate(orderId, update, { new: true });
-                if (!updated) return;
-
-                if (status === "cancelled") { // ❗ MỚI — hoàn lượt voucher nếu đơn có dùng
-                    await releaseVoucherForOrder({ onlineOrderId: updated._id });
-                }
-
-                const clientOrder = toClientOnlineOrder(updated);
-                upsertOnlineOrderCache(clientOrder);
-
-                io.to("admin_room").emit("online_orders_state", onlineOrdersCache);
-                io.to(`customer:${clientOrder.customerId}`).emit(
-                    "customer_orders_state",
-                    getCustomerOrders(clientOrder.customerId)
-                );
+                // ❗ SỬA — logic cập nhật (set field mốc thời gian, cancelReason,
+                // hoàn voucher, broadcast state, hẹn giờ auto-advance kế tiếp nếu
+                // có) giờ dùng CHUNG với timer tự động, xem applyOnlineOrderStatusUpdate.
+                await applyOnlineOrderStatusUpdate(io, orderId, status, { reason, paymentMethod, convertedOrderId });
             } catch (err) {
                 console.error("[socket] admin_update_order_status lỗi:", err.message);
             }

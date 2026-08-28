@@ -41,6 +41,17 @@ const ACTIVE_COLUMNS = [
 const NEXT_STATUS = { pending: "confirmed", confirmed: "preparing", preparing: "delivering", delivering: "completed" };
 const NEXT_LABEL = { pending: "Xác nhận", confirmed: "Bắt đầu làm", preparing: "Giao hàng", delivering: "Hoàn thành" };
 
+// ❗ MỚI — "confirmed" và "preparing" giờ tự động chuyển bước sau 30s (server
+// xử lý, xem socket.js: scheduleAutoAdvance/applyOnlineOrderStatusUpdate),
+// nên 2 trạng thái đó không cần nút bấm nữa. Chỉ còn 2 trạng thái vẫn cần
+// admin thao tác thủ công:
+// - "pending": vẫn giữ nút "Xác nhận" để admin có thể duyệt/đẩy nhanh đơn
+//   ngay, thay vì luôn phải chờ đủ 30s — dù không bấm, server vẫn tự chuyển
+//   sang "confirmed" sau 30s như một lưới an toàn.
+// - "delivering": bắt buộc thủ công vì đây là bước thanh toán, cần admin
+//   xác nhận đã thu tiền thật (không thể tự động hoá).
+const ORDER_CARD_ACTION_STATUSES = new Set(["pending", "delivering"]);
+
 const STATUS_META = {
     pending: { label: "Chờ xác nhận", className: "text-orange-600 bg-orange-100" },
     confirmed: { label: "Đã xác nhận", className: "text-blue-600 bg-blue-100" },
@@ -442,7 +453,9 @@ export default function OnlineOrdersPage() {
     }, []);
 
     // ─── Thẻ đơn hàng dùng chung cho các cột Kanban ────────────────────────────
-    const renderOrderCard = (order) => (
+    const renderOrderCard = (order) => {
+        const showAdvanceButton = ORDER_CARD_ACTION_STATUSES.has(order.status);
+        return (
         <div key={order.id} className="bg-white rounded-2xl border border-gray-100 p-3.5 space-y-2.5">
             <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
@@ -474,12 +487,15 @@ export default function OnlineOrdersPage() {
                     className="w-8 h-8 shrink-0 flex items-center justify-center rounded-lg border border-red-200 text-red-500 hover:bg-red-50 transition-colors">
                     <XCircle size={14} />
                 </button>
-                <Button className="flex-1 justify-center text-xs py-2" onClick={() => advanceStatus(order)}>
-                    {NEXT_LABEL[order.status]}<ArrowRight size={13} />
-                </Button>
+                {showAdvanceButton && (
+                    <Button className="flex-1 justify-center text-xs py-2" onClick={() => advanceStatus(order)}>
+                        {NEXT_LABEL[order.status]}<ArrowRight size={13} />
+                    </Button>
+                )}
             </div>
         </div>
-    );
+        );
+    };
 
     // ─── Render ────────────────────────────────────────────────────────────────
     return (

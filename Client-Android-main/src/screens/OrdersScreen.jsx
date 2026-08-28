@@ -25,11 +25,6 @@ export default function OrdersScreen() {
         keyExtractor={(order) => order.id}
         renderItem={({ item }) => <OrderCard order={item} />}
         contentContainerStyle={{ padding: 16, paddingBottom: 16 + insets.bottom }}
-        ListHeaderComponent={
-          <Text className="text-steel text-xs mb-4">
-            Các đơn bạn đã đặt, cập nhật trạng thái realtime.
-          </Text>
-        }
         ListEmptyComponent={
           <View className="items-center py-20">
             <Receipt size={32} color={COLORS.steelLight} style={{ marginBottom: 12 }} />
