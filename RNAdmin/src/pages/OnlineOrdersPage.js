@@ -40,7 +40,18 @@ const MAX_VISIBLE_ORDER_TOASTS = 3; // đơn mới về liên tiếp — chỉ h
 const NEW_CHAT_TOAST_DURATION = 6000; // toast tin nhắn mới tự ẩn sau 6s
 const ACTION_TOAST_DURATION = 3500; // toast kết quả thao tác (thanh toán...) tự ẩn sau 3.5s
 const HISTORY_SEARCH_DEBOUNCE = 350; // [PERF] trì hoãn filter lịch sử để không chạy lại trên mỗi keystroke
-const AUTO_ADVANCE_DELAY = 30000; // [NGHIỆP VỤ] "Đã xác nhận" và "Đang làm" tự chuyển bước tiếp theo sau 30s, không cần bấm nút
+// [NGHIỆP VỤ] Cơ chế tự động chuyển "Chờ xác nhận" → "Đã xác nhận" → "Đang
+// làm" → "Đang giao" sau mỗi 30s (trước đây là AUTO_ADVANCE_DELAY + timer
+// chạy Ở TRANG NÀY) đã CHUYỂN SANG SERVER — xem socket.js
+// (scheduleAutoAdvance/applyOnlineOrderStatusUpdate). Lý do: timer phía
+// client chỉ chạy khi có admin đang mở trang này; nếu không, đơn kẹt vô thời
+// hạn. Server luôn chạy độc lập với mọi client nên không còn rủi ro đó. Phần
+// timer phía client (autoAdvanceTimersRef, ordersRef, 2 effect liên quan) đã
+// được gỡ bỏ khỏi trang này — trang giờ chỉ còn NHẬN state mới qua
+// "online_orders_state" như mọi cập nhật khác, không cần tự emit gì thêm.
+// ❗ SỬA — pending giờ CŨNG tự động chuyển, không cần admin bấm "Xác nhận"
+// nữa. CHỈ CÒN "Đang giao" → "Hoàn thành" (bước thanh toán) là admin phải
+// thao tác thủ công, vì bước này gắn với việc xác nhận đã thu tiền thật.
 const HISTORY_PAGE_SIZE = 5; // [PHÂN TRANG] mỗi trang lịch sử tải 5 đơn, bấm "Xem thêm" để tải trang kế
 // [PHÂN TRANG] Base queryKey dùng chung giữa useInfiniteQuery (trong
 // OrderHistorySection) và queryClient.invalidateQueries (ở component cha,
@@ -282,11 +293,12 @@ function EmptyState({ icon: Icon, text }) {
 /* [PERF] React.memo: khi danh sách `orders` được cập nhật qua socket, chỉ
    những đơn thực sự đổi nội dung mới nhận object reference mới (nhờ
    mergeOrdersPreservingRefs), nên các card không đổi sẽ bỏ qua re-render. */
-// [NGHIỆP VỤ] "Đã xác nhận" (confirmed) và "Đang làm" (preparing) tự động
-// chuyển bước sau 30s (xem effect tự động chuyển trạng thái ở component
-// cha) nên không cần nút bấm nữa — chỉ còn "Xác nhận" (pending) và
-// "Hoàn thành" (delivering, mở modal thanh toán) là thao tác thủ công.
-const ORDER_CARD_ACTION_STATUSES = new Set(["pending", "delivering"]);
+// [NGHIỆP VỤ] "Chờ xác nhận" (pending), "Đã xác nhận" (confirmed) và "Đang
+// làm" (preparing) giờ đều tự động chuyển bước sau 30s — do SERVER tự xử lý
+// (xem socket.js), không còn effect nào ở trang này nữa — nên không cần nút
+// bấm cho 3 trạng thái đó nữa. CHỈ CÒN "Hoàn thành" (delivering, mở modal
+// thanh toán) là thao tác thủ công, vì cần admin xác nhận đã thu tiền thật.
+const ORDER_CARD_ACTION_STATUSES = new Set(["delivering"]);
 const OrderCard = React.memo(function OrderCard({ order, onCancel, onAdvance }) {
     const showAdvanceButton = ORDER_CARD_ACTION_STATUSES.has(order.status);
     return (
@@ -793,13 +805,6 @@ export default function OnlineOrdersPage() {
     const chatToastTimer = useRef(null);
     const actionToastTimer = useRef(null);
     const activeChatCustomerIdRef = useRef(null);
-    // [NGHIỆP VỤ] orderId -> { timeoutId, status } cho cơ chế tự động chuyển
-    // "Đã xác nhận" → "Đang làm" → "Đang giao" sau 30s không cần bấm nút.
-    const autoAdvanceTimersRef = useRef(new Map());
-    // Bản sao mới nhất của `orders`, đọc trong callback setTimeout để tránh
-    // race: nếu đơn đã bị huỷ / đổi trạng thái khác trước khi timer 30s kịp
-    // chạy, không gửi tín hiệu tự động chuyển bước nữa.
-    const ordersRef = useRef([]);
 
     useEffect(() => {
         activeChatCustomerIdRef.current = activeChatCustomerId;
@@ -910,67 +915,15 @@ export default function OnlineOrdersPage() {
         };
     }, [dismissOrderToast, queryClient]);
 
-    useEffect(() => {
-        ordersRef.current = orders;
-    }, [orders]);
-
     // ─── [NGHIỆP VỤ] Tự động chuyển "Đã xác nhận" → "Đang làm" → "Đang giao"
-    // sau 30s, không cần admin bấm nút — gửi lại ĐÚNG event socket
-    // `admin_update_order_status` mà nút bấm thủ công vẫn dùng, nên không
-    // đổi API/socket contract. Mỗi đơn chỉ có 1 timer tại một thời điểm.
-    //
-    // LƯU Ý QUAN TRỌNG (GLOBAL): đây là timer chạy Ở PHÍA CLIENT, chỉ hoạt
-    // động khi trang này đang mở trên ít nhất một thiết bị admin có kết nối
-    // socket. Nếu tất cả admin đều thoát app / mất mạng đúng lúc, đơn sẽ
-    // "kẹt" ở confirmed/preparing cho đến khi có ai mở lại trang. Muốn đảm
-    // bảo 100% (kể cả khi không ai mở app) cần dời lịch hẹn giờ này sang
-    // backend (cron/queue) — việc đó ngoài phạm vi 1 page nên tôi không tự
-    // ý sửa, chỉ báo để bạn cân nhắc.
-    useEffect(() => {
-        const timers = autoAdvanceTimersRef.current;
-        const relevantIds = new Set();
-
-        orders.forEach((order) => {
-            if (order.status !== "confirmed" && order.status !== "preparing") return;
-            relevantIds.add(order.id);
-
-            const existing = timers.get(order.id);
-            if (existing && existing.status === order.status) return; // đã có timer đúng trạng thái, giữ nguyên đếm ngược
-
-            if (existing) clearTimeout(existing.timeoutId);
-
-            const statusAtSchedule = order.status;
-            const nextStatus = NEXT_STATUS[statusAtSchedule];
-            const timeoutId = setTimeout(() => {
-                timers.delete(order.id);
-                // Kiểm tra lại trạng thái mới nhất trước khi bắn tín hiệu — tránh
-                // trường hợp đơn đã bị huỷ hoặc đổi trạng thái khác ngay trước khi
-                // timer chạy tới.
-                const current = ordersRef.current.find((o) => o.id === order.id);
-                if (current && current.status === statusAtSchedule) {
-                    socketRef.current?.emit("admin_update_order_status", { orderId: order.id, status: nextStatus });
-                }
-            }, AUTO_ADVANCE_DELAY);
-            timers.set(order.id, { timeoutId, status: statusAtSchedule });
-        });
-
-        // Dọn timer cho đơn không còn ở confirmed/preparing nữa (đã tự chuyển,
-        // bị huỷ, hoặc bị đổi trạng thái theo cách khác).
-        timers.forEach((info, orderId) => {
-            if (!relevantIds.has(orderId)) {
-                clearTimeout(info.timeoutId);
-                timers.delete(orderId);
-            }
-        });
-    }, [orders]);
-
-    useEffect(
-        () => () => {
-            autoAdvanceTimersRef.current.forEach((info) => clearTimeout(info.timeoutId));
-            autoAdvanceTimersRef.current.clear();
-        },
-        []
-    );
+    // sau 30s KHÔNG còn được xử lý ở trang này nữa — đã chuyển hẳn sang
+    // server (xem socket.js: scheduleAutoAdvance/applyOnlineOrderStatusUpdate/
+    // reconcileStaleAutoAdvances). Trang này giờ chỉ cần NHẬN lại
+    // "online_orders_state" như bình thường khi server tự đổi trạng thái —
+    // không cần tự đặt setTimeout, không cần đọc lại `orders` trong callback
+    // để tránh race nữa (server đã tự kiểm tra trạng thái hiện tại trước khi
+    // advance). Đã gỡ: hằng số AUTO_ADVANCE_DELAY, các ref
+    // autoAdvanceTimersRef/ordersRef, và 2 effect từng quản lý timer ở đây.
 
     // ─── Derived values [GIU-NGUYEN] ────────────────────────────────────────
     const activeByStatus = useMemo(() => {
@@ -1054,7 +1007,7 @@ export default function OnlineOrdersPage() {
         const payload = {
             items: target.items.map((i) => ({
                 foodId: i.foodId,
-                quantity: i.quantity,
+                quantity: i.qty,
                 note: target.note || "",
                 channel: "ONLINE",
                 customerName: target.customerName,
